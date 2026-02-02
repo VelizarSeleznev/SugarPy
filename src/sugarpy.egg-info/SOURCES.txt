@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/sugarpy/__init__.py
+src/sugarpy/chem.py
+src/sugarpy/library.py
+src/sugarpy/math_cell.py
+src/sugarpy/startup.py
+src/sugarpy/user_library.py
+src/sugarpy/widgets.py
+src/sugarpy.egg-info/PKG-INFO
+src/sugarpy.egg-info/SOURCES.txt
+src/sugarpy.egg-info/dependency_links.txt
+src/sugarpy.egg-info/requires.txt
+src/sugarpy.egg-info/top_level.txt
+src/sugarpy/data/functions.json

@@ -1,0 +1,38 @@
+[
+  {
+    "id": "math.hypotenuse",
+    "title": "Hypotenuse",
+    "subject": "math",
+    "tags": ["triangle", "pythagoras"],
+    "description": "Compute hypotenuse from legs a and b.",
+    "signature": "find_hypotenuse(a, b)",
+    "snippet": "def find_hypotenuse(a, b):\n    return (a**2 + b**2) ** 0.5\n\nfind_hypotenuse(3, 4)"
+  },
+  {
+    "id": "math.quadratic",
+    "title": "Quadratic roots",
+    "subject": "math",
+    "tags": ["algebra", "roots"],
+    "description": "Solve ax^2 + bx + c = 0.",
+    "signature": "quadratic_roots(a, b, c)",
+    "snippet": "import math\n\ndef quadratic_roots(a, b, c):\n    d = b**2 - 4*a*c\n    if d < 0:\n        return None\n    return ((-b + math.sqrt(d)) / (2*a), (-b - math.sqrt(d)) / (2*a))\n\nquadratic_roots(1, -3, 2)"
+  },
+  {
+    "id": "physics.kinematics",
+    "title": "Distance by velocity",
+    "subject": "physics",
+    "tags": ["motion", "s=vt"],
+    "description": "Compute distance: s = v * t.",
+    "signature": "distance(v, t)",
+    "snippet": "def distance(v, t):\n    return v * t\n\ndistance(12, 3)"
+  },
+  {
+    "id": "chem.balance",
+    "title": "Balance reaction",
+    "subject": "chemistry",
+    "tags": ["reaction", "balance"],
+    "description": "Balance a chemical equation.",
+    "signature": "balance_equation(reaction)",
+    "snippet": "from sugarpy.chem import balance_equation\n\nbalance_equation('H2 + O2 -> H2O')"
+  }
+]

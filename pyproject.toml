@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sugarpy"
+version = "0.1.0"
+description = "Student-friendly Jupyter helpers: math functions + chemistry balancer widgets."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "SugarPy" }]
+
+dependencies = [
+  "sympy>=1.12",
+  "ipywidgets>=8.1",
+]
+
+[project.optional-dependencies]
+lab = [
+  "jupyterlab>=4.0",
+  "ipykernel>=6.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"sugarpy.data" = ["functions.json"]
