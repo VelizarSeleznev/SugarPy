@@ -78,6 +78,55 @@ const fromLines = (source: string[] | string) => {
   return source ?? '';
 };
 
+const formatSig = (value?: number | null) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '';
+  if (value === 0) return '0';
+  const formatted = Number(value).toPrecision(4);
+  return formatted.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+};
+
+const formatCoeffLabel = (value?: number | null) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '';
+  if (Math.abs(value - 1) < 1e-9) return '';
+  if (Math.abs(value - Math.round(value)) < 1e-9) return String(Math.round(value));
+  return formatSig(value);
+};
+
+const stoichToMarkdown = (cell: CellModel) => {
+  const output = cell.stoichOutput;
+  const reaction = output?.balanced ?? cell.stoichState?.reaction ?? '';
+  const lines = ['### Stoichiometry Table', '', reaction, ''];
+  if (!output?.species?.length) {
+    lines.push('_No data._');
+    return lines.join('\n');
+  }
+  const headers = output.species.map(
+    (row) => `${formatCoeffLabel(row.coeff)}${row.name}`
+  );
+  const separator = headers.map(() => '---');
+  const pickValue = (input?: number | null, calc?: number | null) =>
+    input !== null && input !== undefined ? input : calc;
+
+  lines.push(`|  | ${headers.join(' | ')} |`);
+  lines.push(`| --- | ${separator.join(' | ')} |`);
+  lines.push(
+    `| m (g) | ${output.species
+      .map((row) => formatSig(pickValue(row.input_m ?? null, row.calc_m ?? null)))
+      .join(' | ')} |`
+  );
+  lines.push(
+    `| M (g/mol) | ${output.species
+      .map((row) => formatSig(row.molar_mass ?? null))
+      .join(' | ')} |`
+  );
+  lines.push(
+    `| n (mol) | ${output.species
+      .map((row) => formatSig(pickValue(row.input_n ?? null, row.calc_n ?? null)))
+      .join(' | ')} |`
+  );
+  return lines.join('\n');
+};
+
 export const serializeIpynb = (params: {
   id: string;
   name: string;
@@ -85,6 +134,19 @@ export const serializeIpynb = (params: {
   cells: CellModel[];
 }) => {
   const cells = params.cells.map((cell) => {
+    if (cell.type === 'stoich') {
+      return {
+        cell_type: 'markdown',
+        metadata: {
+          sugarpy: {
+            type: 'stoich',
+            stoichState: cell.stoichState ?? null,
+            stoichOutput: cell.stoichOutput ?? null
+          }
+        },
+        source: toLines(stoichToMarkdown(cell))
+      };
+    }
     if (cell.type === 'markdown') {
       return {
         cell_type: 'markdown',
@@ -141,6 +203,16 @@ export const deserializeIpynb = (data: any) => {
   const metadata = data?.metadata?.sugarpy ?? {};
   const cells: CellModel[] = (data?.cells ?? []).map((cell: any, idx: number) => {
     const sugarpy = cell?.metadata?.sugarpy;
+    if (sugarpy?.type === 'stoich') {
+      return {
+        id: `cell-${Date.now()}-${idx}`,
+        source: fromLines(cell?.source ?? ''),
+        type: 'stoich',
+        stoichState: sugarpy.stoichState ?? { reaction: '', inputs: {} },
+        stoichOutput: sugarpy.stoichOutput ?? undefined,
+        isRunning: false
+      };
+    }
     if (sugarpy?.type === 'math') {
       return {
         id: `cell-${Date.now()}-${idx}`,

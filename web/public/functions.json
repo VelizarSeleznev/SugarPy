@@ -34,5 +34,14 @@
     "description": "Balance a chemical equation.",
     "signature": "balance_equation(reaction)",
     "snippet": "from sugarpy.chem import balance_equation\n\nbalance_equation('H2 + O2 -> H2O')"
+  },
+  {
+    "id": "chem.stoichiometry_table",
+    "title": "Stoichiometry table",
+    "subject": "chemistry",
+    "tags": ["reaction", "stoichiometry", "table"],
+    "description": "Interactive stoichiometry table with auto calculations.",
+    "signature": "stoichiometry_table(reaction, inputs)",
+    "snippet": "# Insert Stoichiometry Table in the notebook\n# Use the UI cell to edit reaction + inputs"
   }
 ]

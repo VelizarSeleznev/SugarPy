@@ -3,11 +3,11 @@ import { ContentsManager, KernelManager, ServerConnection } from '@jupyterlab/se
 
 import { useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
-import { ChemBalance } from './components/ChemBalance';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
 import { insertCellAbove, insertCellBelow, moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
+import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   createNotebookId,
   deserializeIpynb,
@@ -25,7 +25,7 @@ export type CellModel = {
   id: string;
   source: string;
   output?: string;
-  type?: 'code' | 'markdown' | 'math';
+  type?: 'code' | 'markdown' | 'math' | 'stoich';
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -34,6 +34,8 @@ export type CellModel = {
     error?: string;
     mode: 'deg' | 'rad';
   };
+  stoichState?: StoichState;
+  stoichOutput?: StoichOutput;
 };
 
 const defaultCell: CellModel = {
@@ -41,6 +43,11 @@ const defaultCell: CellModel = {
   source: '# Try: find_hypotenuse(3, 4)\n',
   type: 'code'
 };
+
+const createStoichState = (reaction = 'H2 + O2 -> H2O'): StoichState => ({
+  reaction,
+  inputs: {}
+});
 
 function App() {
   const [serverUrl, setServerUrl] = useState(import.meta.env.VITE_JUPYTER_URL || 'http://localhost:8888');
@@ -246,22 +253,83 @@ function App() {
     });
   };
 
-  const addCell = (source = '', type: 'code' | 'markdown' | 'math' = 'code') => {
-    setCells((prev) => [
-      ...prev,
-      {
-        id: `cell-${prev.length + 1}-${Date.now()}`,
-        source,
-        type
+  const runStoichCell = async (cellId: string, state: StoichState) => {
+    if (!activeKernel) return;
+    const payload = JSON.stringify({ reaction: state.reaction, inputs: state.inputs });
+    const code = [
+      'import json',
+      'from sugarpy.stoichiometry import render_stoichiometry',
+      `_payload = json.loads(${JSON.stringify(payload)})`,
+      "_result = render_stoichiometry(_payload.get('reaction', ''), _payload.get('inputs'))",
+      "print('__SUGARPY_STOICH__' + json.dumps(_result))"
+    ].join('\n');
+
+    setCells((prev) =>
+      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true } : c))
+    );
+
+    const future = activeKernel.requestExecute({ code, stop_on_error: true });
+    const marker = '__SUGARPY_STOICH__';
+    let buffer = '';
+
+    future.onIOPub = (msg) => {
+      if (msg.header.msg_type === 'stream') {
+        // @ts-ignore
+        buffer += msg.content.text ?? '';
       }
-    ]);
+      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
+        // @ts-ignore
+        buffer += msg.content.data?.['text/plain'] ?? '';
+      }
+    };
+
+    await future.done;
+    let parsed: StoichOutput | null = null;
+    const idx = buffer.lastIndexOf(marker);
+    if (idx !== -1) {
+      const raw = buffer.slice(idx + marker.length).trim();
+      try {
+        parsed = JSON.parse(raw) as StoichOutput;
+      } catch {
+        parsed = { ok: false, error: 'Failed to parse stoichiometry output.', species: [] };
+      }
+    } else if (buffer.trim()) {
+      parsed = { ok: false, error: buffer.trim(), species: [] };
+    } else {
+      parsed = { ok: false, error: 'No output received.', species: [] };
+    }
+
+    setCells((prev) =>
+      prev.map((c) =>
+        c.id === cellId ? { ...c, stoichOutput: parsed ?? undefined, isRunning: false } : c
+      )
+    );
   };
 
-  const createCell = (type: 'code' | 'markdown' | 'math'): CellModel => ({
-    id: `cell-${Date.now()}`,
-    source: '',
-    type
-  });
+  const addCell = (source = '', type: 'code' | 'markdown' | 'math' | 'stoich' = 'code') => {
+    setCells((prev) => [...prev, createCell(type, source, prev.length + 1)]);
+  };
+
+  const createCell = (
+    type: 'code' | 'markdown' | 'math' | 'stoich',
+    source = '',
+    indexSeed?: number
+  ): CellModel => {
+    const idSuffix = indexSeed ? `${indexSeed}-${Date.now()}` : `${Date.now()}`;
+    if (type === 'stoich') {
+      return {
+        id: `cell-${idSuffix}`,
+        source,
+        type,
+        stoichState: createStoichState()
+      };
+    }
+    return {
+      id: `cell-${idSuffix}`,
+      source,
+      type
+    };
+  };
 
   const createInitialCell = () => createCell('code');
 
@@ -276,13 +344,16 @@ function App() {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, source } : c)));
   };
 
+  const updateStoichState = (cellId: string, state: StoichState) => {
+    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
+  };
+
   const insertFunction = (snippet: string) => {
     addCell(snippet);
   };
 
-  const insertAndRun = async (snippet: string) => {
-    const cellId = `cell-${Date.now()}`;
-    await runCell(cellId, snippet);
+  const insertStoichCell = () => {
+    addCell('', 'stoich');
   };
 
   useEffect(() => {
@@ -509,7 +580,16 @@ function App() {
                 </span>
               ))}
             </div>
-            <button className="button secondary" onClick={() => insertFunction(fn.snippet)}>
+            <button
+              className="button secondary"
+              onClick={() => {
+                if (fn.id === 'chem.stoichiometry_table') {
+                  insertStoichCell();
+                } else {
+                  insertFunction(fn.snippet);
+                }
+              }}
+            >
               Insert
             </button>
           </div>
@@ -612,6 +692,8 @@ function App() {
                   onChange={(value) => updateCell(cell.id, value)}
                   onRun={(value) => runCell(cell.id, value)}
                   onRunMath={(value) => runMathCell(cell.id, value)}
+                  onRunStoich={(state) => runStoichCell(cell.id, state)}
+                  onChangeStoich={(state) => updateStoichState(cell.id, state)}
                   onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
                   onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
                   onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}
@@ -621,6 +703,7 @@ function App() {
                   ]}
                   mathSuggestions={mathSuggestions}
                   trigMode={trigMode}
+                  kernelReady={!!activeKernel}
                 />
                 <div className="cell-insert-divider">
                   <div className="cell-insert-pop" role="group" aria-label="Insert cell">
@@ -662,9 +745,6 @@ function App() {
         </div>
       </main>
 
-      <section className="panel">
-        <ChemBalance onRun={insertAndRun} kernelReady={!!activeKernel} />
-      </section>
     </div>
     </ErrorBoundary>
   );

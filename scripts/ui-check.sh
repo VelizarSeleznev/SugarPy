@@ -29,7 +29,7 @@ fi
 
 cd "$ROOT_DIR/web"
 if [ ! -d node_modules ]; then
-  npm install
+  npm ci
 fi
 
 HEADED=${HEADED:-0}

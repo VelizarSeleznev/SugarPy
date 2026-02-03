@@ -4,18 +4,23 @@ import { CodeEditor } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
 import { CellHeader } from './CellHeader';
+import { StoichiometryCell } from './StoichiometryCell';
+import { StoichState } from '../utils/stoichTypes';
 
 type Props = {
   cell: CellModel;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
   onRunMath: (value: string) => void;
+  onRunStoich: (state: StoichState) => void;
+  onChangeStoich: (state: StoichState) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
   suggestions: { label: string; detail?: string }[];
   mathSuggestions: { label: string; detail?: string }[];
   trigMode: 'deg' | 'rad';
+  kernelReady: boolean;
 };
 
 export function NotebookCell({
@@ -23,17 +28,20 @@ export function NotebookCell({
   onChange,
   onRun,
   onRunMath,
+  onRunStoich,
+  onChangeStoich,
   onMoveUp,
   onMoveDown,
   onDelete,
   suggestions,
   mathSuggestions,
-  trigMode
+  trigMode,
+  kernelReady
 }: Props) {
   return (
     <div className="cell-row">
       <div className="cell-gutter">
-        {cell.type !== 'markdown' ? (
+        {cell.type !== 'markdown' && cell.type !== 'stoich' ? (
           <CellHeader
             execCount={cell.execCount}
             isRunning={cell.isRunning}
@@ -57,6 +65,15 @@ export function NotebookCell({
         </div>
         {cell.type === 'markdown' ? (
           <MarkdownEditor value={cell.source} onChange={onChange} />
+        ) : cell.type === 'stoich' ? (
+          <StoichiometryCell
+            state={cell.stoichState ?? { reaction: '', inputs: {} }}
+            output={cell.stoichOutput}
+            isRunning={cell.isRunning}
+            onChange={onChangeStoich}
+            onCompute={onRunStoich}
+            kernelReady={kernelReady}
+          />
         ) : cell.type === 'math' ? (
           <MathEditor
             value={cell.source}

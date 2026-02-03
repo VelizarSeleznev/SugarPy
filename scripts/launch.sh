@@ -10,13 +10,14 @@ cat > "$STARTUP_DIR/00-sugarpy.py" <<'PY'
 from sugarpy.startup import *
 PY
 
-if [ ! -d "$ROOT_DIR/.venv" ]; then
-  python3 -m venv "$ROOT_DIR/.venv"
+# Ensure uv exists for deterministic Python deps
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required but not installed. Install from https://astral.sh/uv"
+  exit 1
 fi
-source "$ROOT_DIR/.venv/bin/activate"
 
-pip install -U pip
-pip install -e "$ROOT_DIR[lab]"
+UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --frozen
+source "$ROOT_DIR/.venv/bin/activate"
 
 JUPYTER_TOKEN=sugarpy
 

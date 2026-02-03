@@ -7,10 +7,9 @@ A minimal, student-friendly Jupyter toolkit with:
 ## Quick start
 
 ```bash
-python -m venv .venv
+# Requires uv (https://astral.sh/uv)
+UV_PROJECT_ENVIRONMENT=.venv uv sync --extra lab --frozen
 source .venv/bin/activate
-pip install -U pip
-pip install -e ".[lab]"
 ```
 
 Run Jupyter server (kernel backend):
@@ -40,6 +39,8 @@ Run full checks (includes UI console checks):
 ```bash
 ./scripts/test-all.sh
 ```
+
+`./scripts/test-all.sh` uses `uv` for Python deps and `npm ci` for the web app.
 
 UI checks use `agent-browser` in headless mode by default.
 

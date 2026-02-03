@@ -3,21 +3,21 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+# Ensure uv exists for deterministic Python deps
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required but not installed. Install from https://astral.sh/uv"
+  exit 1
+fi
+
 # Ensure port is free
 if lsof -i tcp:8888 -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Port 8888 is already in use. Stop the existing process and try again."
   exit 1
 fi
 
-# Ensure python exists via venv
-if [ ! -d "$ROOT_DIR/.venv" ]; then
-  python3 -m venv "$ROOT_DIR/.venv"
-fi
-
+# Ensure python deps are synced via uv
+UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --frozen
 source "$ROOT_DIR/.venv/bin/activate"
-
-pip install -U pip
-pip install -e "$ROOT_DIR[lab]"
 
 "$ROOT_DIR/scripts/sync-functions.sh"
 
