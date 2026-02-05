@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef } from 'react';
-import katex from 'katex';
+import React, { useEffect, useRef } from 'react';
 import { StoichOutput, StoichState } from '../utils/stoichTypes';
+import { ReactionInput } from './ReactionInput';
+import { looksLikeLatex, reactionToLatex, reactionToPlain } from '../utils/reactionFormat';
 
 const DEBOUNCE_MS = 500;
 
@@ -17,10 +18,11 @@ const COEFF_RE = /^\s*\d+(?:\.\d+)?\s*/;
 const STATE_RE = /\((aq|s|l|g)\)\s*$/i;
 
 const parseSpecies = (reaction: string): string[] => {
-  if (!reaction) return [];
-  const arrow = reaction.includes('->') ? '->' : reaction.includes('=') ? '=' : null;
+  const plain = reactionToPlain(reaction);
+  if (!plain) return [];
+  const arrow = plain.includes('->') ? '->' : plain.includes('=') ? '=' : null;
   if (!arrow) return [];
-  const [left, right] = reaction.split(arrow, 2);
+  const [left, right] = plain.split(arrow, 2);
   const parts = [...left.split('+'), ...right.split('+')]
     .map((p) => p.trim())
     .filter(Boolean)
@@ -48,6 +50,7 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
   const reaction = state.reaction ?? '';
   const computeTimer = useRef<number | null>(null);
   const pendingState = useRef<StoichState | null>(null);
+  const applyBalanceOnBlur = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -58,8 +61,9 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
   }, []);
 
   const scheduleCompute = (nextState: StoichState) => {
-    pendingState.current = nextState;
-    if (!kernelReady || !nextState.reaction.trim()) {
+    const normalizedState = { ...nextState, reaction: reactionToPlain(nextState.reaction) };
+    pendingState.current = normalizedState;
+    if (!kernelReady || !normalizedState.reaction.trim()) {
       if (computeTimer.current) {
         window.clearTimeout(computeTimer.current);
         computeTimer.current = null;
@@ -86,17 +90,31 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
     }
   };
 
-  const equationHtml = useMemo(() => {
-    if (!output?.equation_latex) return null;
-    try {
-      return katex.renderToString(output.equation_latex, { throwOnError: false, displayMode: true });
-    } catch (_err) {
-      return null;
-    }
-  }, [output?.equation_latex]);
-
   const species = output?.species ?? [];
   const hasError = output && output.ok === false;
+
+  const applyBalancedOutput = (currentReaction: string, currentOutput?: StoichOutput) => {
+    if (!currentOutput?.ok) return false;
+    const wantsLatex = looksLikeLatex(currentReaction);
+    let nextReaction = '';
+    if (wantsLatex) {
+      if (currentOutput.equation_latex) {
+        nextReaction = reactionToLatex(currentOutput.equation_latex);
+      } else if (currentOutput.balanced) {
+        nextReaction = reactionToLatex(currentOutput.balanced);
+      }
+    } else {
+      if (currentOutput.balanced) {
+        nextReaction = currentOutput.balanced;
+      } else if (currentOutput.equation_latex) {
+        nextReaction = reactionToPlain(currentOutput.equation_latex);
+      }
+    }
+    if (!nextReaction) return false;
+    if (nextReaction.trim() === currentReaction.trim()) return false;
+    updateReaction(nextReaction);
+    return true;
+  };
 
   const updateReaction = (nextReaction: string) => {
     const known = parseSpecies(nextReaction);
@@ -113,6 +131,14 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
     onChange(nextState);
     scheduleCompute(nextState);
   };
+
+  useEffect(() => {
+    if (!applyBalanceOnBlur.current) return;
+    if (isRunning) return;
+    if (applyBalancedOutput(reaction, output)) {
+      applyBalanceOnBlur.current = false;
+    }
+  }, [output?.balanced, output?.equation_latex, output?.ok, reaction, isRunning]);
 
   const updateInput = (name: string, field: 'n' | 'm', value: string) => {
     const nextState = {
@@ -141,40 +167,35 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
 
   return (
     <div className="stoich-cell">
-      <div className="stoich-header">
-        <div>
-          <div className="stoich-title">Stoichiometry Table</div>
-          <div className="subtitle">Введите реакцию и количества — всё пересчитается автоматически.</div>
-        </div>
-        {isRunning ? <span className="stoich-running">calculating…</span> : null}
-      </div>
-
-      <div className="stoich-reaction">
-        <label className="stoich-label">Reaction</label>
-        <input
-          className="input"
+      <div className="stoich-reaction-row">
+        <ReactionInput
           value={reaction}
-          onChange={(e) => updateReaction(e.target.value)}
-          onBlur={flushCompute}
+          onChange={updateReaction}
+          onBlur={() => {
+            if (!isRunning && applyBalancedOutput(reaction, output)) {
+              applyBalanceOnBlur.current = false;
+            } else {
+              applyBalanceOnBlur.current = true;
+            }
+            flushCompute();
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.currentTarget.blur();
             }
           }}
           placeholder="H2 + O2 -> H2O"
+          className="stoich-reaction-input"
         />
+        <div className="stoich-actions">
+          {isRunning ? <span className="stoich-running">calculating…</span> : null}
+        </div>
       </div>
 
       {!kernelReady ? (
         <div className="output">Kernel not connected. Connect kernel to compute.</div>
       ) : hasError ? (
         <div className="stoich-error">{output?.error || 'Failed to compute.'}</div>
-      ) : null}
-
-      {equationHtml ? (
-        <div className="stoich-equation" dangerouslySetInnerHTML={{ __html: equationHtml }} />
-      ) : output?.balanced ? (
-        <div className="stoich-equation text">{output.balanced}</div>
       ) : null}
 
       {species.length > 0 ? (
@@ -200,6 +221,7 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
                 {species.map((row) => {
                   const { value, auto } = getDisplayValue(row, 'm');
                   const mismatch = row.status === 'mismatch';
+                  const title = auto ? 'Auto-calculated from limiting reagent.' : undefined;
                   return (
                     <td key={`m-${row.name}`} className={mismatch ? 'stoich-mismatch' : undefined}>
                       <input
@@ -207,6 +229,7 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
                         value={value}
                         onChange={(e) => updateInput(row.name, 'm', e.target.value)}
                         onBlur={flushCompute}
+                        title={title}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.currentTarget.blur();
@@ -237,6 +260,7 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
                 {species.map((row) => {
                   const { value, auto } = getDisplayValue(row, 'n');
                   const mismatch = row.status === 'mismatch';
+                  const title = auto ? 'Auto-calculated from limiting reagent.' : undefined;
                   return (
                     <td key={`n-${row.name}`} className={mismatch ? 'stoich-mismatch' : undefined}>
                       <input
@@ -244,6 +268,7 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
                         value={value}
                         onChange={(e) => updateInput(row.name, 'n', e.target.value)}
                         onBlur={flushCompute}
+                        title={title}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.currentTarget.blur();
@@ -260,11 +285,8 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
               </tr>
             </tbody>
           </table>
-          <div className="stoich-footnote">Auto-calculated using limiting reagent (min n/ν).</div>
         </div>
-      ) : (
-        <div className="stoich-empty">Введите реакцию, чтобы увидеть таблицу.</div>
-      )}
+      ) : null}
     </div>
   );
 }

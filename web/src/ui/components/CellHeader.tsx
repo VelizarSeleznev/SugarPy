@@ -14,7 +14,8 @@ export function CellHeader({ execCount, isRunning, onRun }: Props) {
       className="button"
       onClick={onRun}
       style={{
-        padding: '4px 8px',
+        padding: '2px 6px',
+        fontSize: '12px',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace'
       }}
       title="Run (Shift+Enter)"

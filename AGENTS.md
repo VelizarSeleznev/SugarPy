@@ -25,3 +25,15 @@ SugarPy is a student-friendly notebook experience with a custom web UI (React + 
 - User functions are stored in `~/.sugarpy/user_functions.py` and auto-loaded on kernel startup.
 - **UI verification**: for any UI change, always check placement/visuals in the browser using `agent-browser` and report the result (screenshot or observation) before declaring work complete.
 - **Quality gate**: before declaring work complete, run the maximum practical test set for this repo (including `./scripts/test-all.sh`), and do not claim completion if any errors remain in the UI or logs. Prefer spending extra time to ensure all parts work together.
+
+## Language policy
+- Default language is English.
+- Do not mix languages in the project (code, UI, docs, tests, logs).
+- If another language is introduced, it must be a full, end-to-end translation offered via a language selector; otherwise remove it or convert it to English.
+
+## UI density
+- Default UI is compact.
+- Remove redundant titles/subtitles in cells and panels.
+- Use placeholders instead of helper text.
+- No default sample content in inputs.
+- Extra explanations go into Markdown cells, not component chrome.

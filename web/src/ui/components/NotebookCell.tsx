@@ -18,6 +18,8 @@ type Props = {
   onMoveDown: () => void;
   onDelete: () => void;
   suggestions: { label: string; detail?: string }[];
+  slashCommands: { label: string; detail?: string }[];
+  onSlashCommand: (command: string) => boolean;
   mathSuggestions: { label: string; detail?: string }[];
   trigMode: 'deg' | 'rad';
   kernelReady: boolean;
@@ -34,6 +36,8 @@ export function NotebookCell({
   onMoveDown,
   onDelete,
   suggestions,
+  slashCommands,
+  onSlashCommand,
   mathSuggestions,
   trigMode,
   kernelReady
@@ -91,6 +95,8 @@ export function NotebookCell({
               onChange={onChange}
               onRun={onRun}
               completions={suggestions}
+              slashCommands={slashCommands}
+              onSlashCommand={onSlashCommand}
               placeholderText="Type code..."
             />
             {cell.output ? <div className="output">{cell.output}</div> : null}

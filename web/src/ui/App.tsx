@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ContentsManager, KernelManager, ServerConnection } from '@jupyterlab/services';
 
-import { useFunctionLibrary } from './hooks/useFunctionLibrary';
+import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
@@ -44,10 +44,26 @@ const defaultCell: CellModel = {
   type: 'code'
 };
 
-const createStoichState = (reaction = 'H2 + O2 -> H2O'): StoichState => ({
+const createStoichState = (reaction = ''): StoichState => ({
   reaction,
   inputs: {}
 });
+
+const slugifyCommand = (value: string) => {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+};
+
+const getCommandName = (fn: FunctionEntry) => {
+  if (fn.signature) {
+    const base = fn.signature.split('(')[0]?.trim();
+    if (base) return base;
+  }
+  return slugifyCommand(fn.title || '');
+};
 
 function App() {
   const [serverUrl, setServerUrl] = useState(import.meta.env.VITE_JUPYTER_URL || 'http://localhost:8888');
@@ -56,7 +72,7 @@ function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [kernel, setKernel] = useState<any>(null);
   const [cells, setCells] = useState<CellModel[]>([defaultCell]);
-  const { functions, subjects, search, setSearch, subject, setSubject } = useFunctionLibrary();
+  const { functions, allFunctions, subjects, search, setSearch, subject, setSubject } = useFunctionLibrary();
   const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
   const [execCounter, setExecCounter] = useState(0);
@@ -65,26 +81,49 @@ function App() {
   const [notebookName, setNotebookName] = useState('Untitled');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
-  const mathSuggestions = [
-    { label: 'sqrt', detail: 'square root' },
-    { label: 'sin', detail: 'sine' },
-    { label: 'cos', detail: 'cosine' },
-    { label: 'tan', detail: 'tangent' },
-    { label: 'asin', detail: 'inverse sine' },
-    { label: 'acos', detail: 'inverse cosine' },
-    { label: 'atan', detail: 'inverse tangent' },
-    { label: 'log', detail: 'logarithm (base e by default)' },
-    { label: 'ln', detail: 'natural log' },
-    { label: 'exp', detail: 'exponential' },
-    { label: 'abs', detail: 'absolute value' },
-    { label: 'pi', detail: 'pi constant' },
-    { label: 'e', detail: 'Euler constant' },
-  ];
+  const mathSuggestions = useMemo(
+    () => [
+      { label: 'sqrt', detail: 'square root' },
+      { label: 'sin', detail: 'sine' },
+      { label: 'cos', detail: 'cosine' },
+      { label: 'tan', detail: 'tangent' },
+      { label: 'asin', detail: 'inverse sine' },
+      { label: 'acos', detail: 'inverse cosine' },
+      { label: 'atan', detail: 'inverse tangent' },
+      { label: 'log', detail: 'logarithm (base e by default)' },
+      { label: 'ln', detail: 'natural log' },
+      { label: 'exp', detail: 'exponential' },
+      { label: 'abs', detail: 'absolute value' },
+      { label: 'pi', detail: 'pi constant' },
+      { label: 'e', detail: 'Euler constant' },
+    ],
+    []
+  );
   const connectOnce = useRef(false);
   const autosaveTimer = useRef<number | undefined>(undefined);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const slashData = useMemo(() => {
+    const map = new Map<string, FunctionEntry>();
+    const list: { label: string; detail?: string }[] = [];
+    allFunctions.forEach((fn) => {
+      const name = getCommandName(fn);
+      if (!name || map.has(name)) return;
+      map.set(name, fn);
+      list.push({ label: name, detail: fn.signature ?? fn.description });
+    });
+    return { map, list };
+  }, [allFunctions]);
+  const slashCommands = slashData.list;
+  const slashCommandMap = slashData.map;
+  const codeSuggestions = useMemo(
+    () => [
+      ...buildSuggestions(functions),
+      ...userFunctions.map((name) => ({ label: name, detail: 'user function' }))
+    ],
+    [functions, userFunctions]
+  );
 
   const connectKernel = async () => {
     if (status === 'connecting' || status === 'connected') return;
@@ -348,6 +387,41 @@ function App() {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
   };
 
+  const handleSlashCommand = (cellId: string, command: string) => {
+    const entry = slashCommandMap.get(command);
+    if (!entry) return false;
+    setCells((prev) =>
+      prev.map((cell) => {
+        if (cell.id !== cellId) return cell;
+        if (entry.id === 'chem.stoichiometry_table') {
+          return {
+            ...cell,
+            type: 'stoich',
+            source: '',
+            output: undefined,
+            execCount: undefined,
+            isRunning: false,
+            mathOutput: undefined,
+            stoichOutput: undefined,
+            stoichState: createStoichState()
+          };
+        }
+        return {
+          ...cell,
+          type: 'code',
+          source: entry.snippet,
+          output: undefined,
+          execCount: undefined,
+          isRunning: false,
+          mathOutput: undefined,
+          stoichOutput: undefined,
+          stoichState: undefined
+        };
+      })
+    );
+    return true;
+  };
+
   const insertFunction = (snippet: string) => {
     addCell(snippet);
   };
@@ -530,20 +604,19 @@ function App() {
     <div className="app">
       <aside className="panel">
         <h1 className="brand">SugarPy</h1>
-        <p className="subtitle">Student notebook, simplified.</p>
 
         <div className="section-title">Connection</div>
-        <div className="subtitle">
-          Status: {status}
-        </div>
         <input className="input" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
         <details>
           <summary className="subtitle">Advanced</summary>
           <input className="input" value={token} onChange={(e) => setToken(e.target.value)} />
         </details>
-        <button className="button" onClick={connectKernel} disabled={status === 'connecting'}>
-          {activeKernel ? 'Kernel Connected' : 'Connect Kernel'}
-        </button>
+        <div className="connection-row">
+          <button className="button" onClick={connectKernel} disabled={status === 'connecting'}>
+            {activeKernel ? 'Kernel Connected' : 'Connect Kernel'}
+          </button>
+          <span className={`status-pill status-${status}`}>{status}</span>
+        </div>
         {status === 'error' ? (
           <div className="output">
             {errorMsg}
@@ -571,7 +644,7 @@ function App() {
         {functions.map((fn) => (
           <div className="function-card" key={fn.id}>
             <h4>{fn.title}</h4>
-            <div className="subtitle">{fn.description}</div>
+            <div className="subtitle function-desc">{fn.description}</div>
             <div className="badges">
               <span className="badge">{fn.subject}</span>
               {fn.tags.map((tag) => (
@@ -628,11 +701,13 @@ function App() {
             className="file-input"
           />
         </div>
-        <div className="subtitle">Trig mode</div>
-        <select className="select" value={trigMode} onChange={(e) => setTrigMode(e.target.value as 'deg' | 'rad')}>
-          <option value="deg">Degrees</option>
-          <option value="rad">Radians</option>
-        </select>
+        <div className="trig-row">
+          <span className="label-muted">Trig</span>
+          <select className="select" value={trigMode} onChange={(e) => setTrigMode(e.target.value as 'deg' | 'rad')}>
+            <option value="deg">Degrees</option>
+            <option value="rad">Radians</option>
+          </select>
+        </div>
         <div className="notebook-stack">
             {cells.length > 0 ? (
               <div className="cell-insert-divider">
@@ -697,10 +772,9 @@ function App() {
                   onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
                   onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
                   onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}
-                  suggestions={[
-                    ...buildSuggestions(functions),
-                    ...userFunctions.map((name) => ({ label: name, detail: 'user function' }))
-                  ]}
+                  suggestions={codeSuggestions}
+                  slashCommands={slashCommands}
+                  onSlashCommand={(command) => handleSlashCommand(cell.id, command)}
                   mathSuggestions={mathSuggestions}
                   trigMode={trigMode}
                   kernelReady={!!activeKernel}

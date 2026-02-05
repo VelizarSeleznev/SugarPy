@@ -61,7 +61,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
             ))}
           </div>
         ) : (
-          <div className="math-empty">Click to edit and run.</div>
+          <div className="math-empty">Click to edit.</div>
         )}
       </div>
     );
@@ -80,7 +80,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
   };
 
   return (
-    <div>
+    <div className="math-editor">
       <div
         onBlur={() => {
           if (dirty) {
@@ -105,12 +105,8 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
           }}
           completions={completions ?? []}
           placeholderText="Type math..."
+          autoFocus
         />
-      </div>
-      <div className="math-actions">
-        <button className="button" onClick={runNow}>
-          Render
-        </button>
       </div>
     </div>
   );

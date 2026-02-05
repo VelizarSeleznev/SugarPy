@@ -1,30 +1,48 @@
 import React, { useEffect, useRef } from 'react';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { python } from '@codemirror/lang-python';
 import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
 
-import { buildCompletionSource } from '../utils/completion';
+import { buildCompletionSource, buildSlashCompletionSource } from '../utils/completion';
 
 type Props = {
   value: string;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
   completions: { label: string; detail?: string }[];
+  slashCommands?: { label: string; detail?: string }[];
+  onSlashCommand?: (command: string) => boolean;
   language?: any;
   placeholderText?: string;
+  autoFocus?: boolean;
 };
 
-export function CodeEditor({ value, onChange, onRun, completions, language, placeholderText }: Props) {
+export function CodeEditor({
+  value,
+  onChange,
+  onRun,
+  completions,
+  slashCommands = [],
+  onSlashCommand,
+  language,
+  placeholderText,
+  autoFocus
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const completionCompartment = useRef(new Compartment());
   const onRunRef = useRef(onRun);
+  const onSlashCommandRef = useRef(onSlashCommand);
 
   useEffect(() => {
     onRunRef.current = onRun;
   }, [onRun]);
+
+  useEffect(() => {
+    onSlashCommandRef.current = onSlashCommand;
+  }, [onSlashCommand]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -42,14 +60,25 @@ export function CodeEditor({ value, onChange, onRun, completions, language, plac
             return false;
           }
         }),
-        keymap.of([
-          {
-            key: 'Enter',
-            run: acceptCompletion
-          },
-          ...defaultKeymap,
-          indentWithTab,
-        ]),
+        Prec.high(
+          keymap.of([
+            {
+              key: 'Enter',
+              run: (view) => {
+                const accepted = acceptCompletion(view);
+                const doc = view.state.doc.toString();
+                const match = doc.trim().match(/^\/([A-Za-z0-9_]+)$/);
+                if (match && onSlashCommandRef.current) {
+                  if (onSlashCommandRef.current(match[1])) {
+                    return true;
+                  }
+                }
+                return accepted;
+              }
+            }
+          ])
+        ),
+        keymap.of([...defaultKeymap, indentWithTab]),
         (language || python()),
         EditorView.lineWrapping,
         EditorView.theme({
@@ -58,7 +87,10 @@ export function CodeEditor({ value, onChange, onRun, completions, language, plac
         }),
         completionCompartment.current.of(
           autocompletion({
-            override: [buildCompletionSource(completions)]
+            override: [
+              ...(slashCommands.length > 0 ? [buildSlashCompletionSource(slashCommands)] : []),
+              buildCompletionSource(completions)
+            ]
           })
         ),
         placeholder(placeholderText || ''),
@@ -83,6 +115,12 @@ export function CodeEditor({ value, onChange, onRun, completions, language, plac
   }, []);
 
   useEffect(() => {
+    if (autoFocus && viewRef.current) {
+      viewRef.current.focus();
+    }
+  }, [autoFocus]);
+
+  useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
@@ -99,11 +137,14 @@ export function CodeEditor({ value, onChange, onRun, completions, language, plac
     view.dispatch({
       effects: completionCompartment.current.reconfigure(
         autocompletion({
-          override: [buildCompletionSource(completions)]
+          override: [
+            ...(slashCommands.length > 0 ? [buildSlashCompletionSource(slashCommands)] : []),
+            buildCompletionSource(completions)
+          ]
         })
       )
     });
-  }, [completions]);
+  }, [completions, slashCommands]);
 
   return <div ref={containerRef} />;
 }

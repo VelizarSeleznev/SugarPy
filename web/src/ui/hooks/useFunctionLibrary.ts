@@ -39,5 +39,5 @@ export function useFunctionLibrary() {
     });
   }, [all, search, subject]);
 
-  return { functions, subjects, search, setSearch, subject, setSubject };
+  return { functions, allFunctions: all, subjects, search, setSearch, subject, setSubject };
 }

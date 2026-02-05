@@ -3,7 +3,7 @@ import MarkdownIt from 'markdown-it';
 import { markdown } from '@codemirror/lang-markdown';
 import { CodeEditor } from './CodeEditor';
 
-const md = new MarkdownIt();
+const md = new MarkdownIt({ breaks: true });
 
 type Props = {
   value: string;
@@ -25,7 +25,7 @@ export function MarkdownEditor({ value, onChange }: Props) {
   }
 
   return (
-    <div>
+    <div className="markdown-editor">
       <div onBlur={() => setEditing(false)}>
         <CodeEditor
           value={value}
@@ -34,11 +34,9 @@ export function MarkdownEditor({ value, onChange }: Props) {
           completions={[]}
           language={markdown()}
           placeholderText="Type text..."
+          autoFocus
         />
       </div>
-      <button className="button" onClick={() => setEditing(false)} style={{ marginTop: 8 }}>
-        Render
-      </button>
     </div>
   );
 }

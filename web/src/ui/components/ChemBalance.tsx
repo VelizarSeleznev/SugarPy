@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { ReactionInput } from './ReactionInput';
+import { reactionToPlain } from '../utils/reactionFormat';
 
 const DEFAULT_CODE = (reaction: string) =>
   `from sugarpy.chem import balance_equation\nprint(balance_equation('${reaction}'))`;
@@ -9,27 +11,33 @@ type Props = {
 };
 
 export function ChemBalance({ onRun, kernelReady }: Props) {
-  const [reaction, setReaction] = useState('H2 + O2 -> H2O');
+  const [reaction, setReaction] = useState('');
   const [lastResult, setLastResult] = useState('');
 
   const runBalance = async () => {
-    await onRun(DEFAULT_CODE(reaction.replace(/'/g, "\\'")));
+    const normalized = reactionToPlain(reaction);
+    await onRun(DEFAULT_CODE(normalized.replace(/'/g, "\\'")));
     setLastResult('Balanced equation inserted into a new cell.');
   };
 
   return (
-    <div>
-      <h3 className="brand" style={{ fontSize: 20 }}>Chem Balance</h3>
-      <p className="subtitle">Paste a reaction without coefficients.</p>
-      <input
-        className="input"
+    <div className="chem-balance">
+      <ReactionInput
         value={reaction}
-        onChange={(e) => setReaction(e.target.value)}
+        onChange={setReaction}
+        placeholder="H2 + O2 -> H2O"
+        ariaLabel="Reaction"
       />
-      <button className="button" onClick={runBalance} disabled={!kernelReady}>
-        Balance Reaction
-      </button>
-      {lastResult ? <div className="output">{lastResult}</div> : null}
+      <div className="chem-actions">
+        <button
+          className="button"
+          onClick={runBalance}
+          disabled={!kernelReady || !reaction.trim()}
+        >
+          Balance
+        </button>
+        {lastResult ? <span className="chem-result">{lastResult}</span> : null}
+      </div>
     </div>
   );
 }
