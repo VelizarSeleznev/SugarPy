@@ -1,4 +1,4 @@
-import { CellModel } from '../App';
+import { CellModel, CellOutput } from '../App';
 
 export type SugarPyNotebookV1 = {
   version: 1;
@@ -14,6 +14,32 @@ const LAST_OPEN_KEY = 'sugarpy:last-open';
 
 const normalizeCells = (cells: CellModel[]): Array<Omit<CellModel, 'isRunning'>> =>
   cells.map(({ isRunning, ...rest }) => rest);
+
+const asText = (value: unknown) => {
+  if (Array.isArray(value)) return value.join('');
+  if (value === null || value === undefined) return '';
+  return String(value);
+};
+
+const normalizeOutput = (output: unknown): CellOutput | undefined => {
+  if (!output) return undefined;
+  if (typeof output === 'string') {
+    return { type: 'mime', data: { 'text/plain': output } };
+  }
+  if (typeof output !== 'object') return undefined;
+  const raw = output as any;
+  if (raw.type === 'error') {
+    return {
+      type: 'error',
+      ename: String(raw.ename ?? 'Error'),
+      evalue: String(raw.evalue ?? ''),
+    };
+  }
+  if (raw.type === 'mime' && raw.data && typeof raw.data === 'object') {
+    return { type: 'mime', data: raw.data as Record<string, unknown> };
+  }
+  return undefined;
+};
 
 export const createNotebookId = () => `nb-${Date.now()}`;
 
@@ -47,7 +73,11 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   id: data.id,
   name: data.name,
   trigMode: data.trigMode,
-  cells: data.cells.map((cell) => ({ ...cell, isRunning: false }))
+  cells: data.cells.map((cell) => ({
+    ...cell,
+    output: normalizeOutput((cell as any).output),
+    isRunning: false
+  }))
 });
 
 export const saveToLocalStorage = (notebook: SugarPyNotebookV1) => {
@@ -166,15 +196,26 @@ export const serializeIpynb = (params: {
         source: toLines(cell.source)
       };
     }
-    const outputs = cell.output
-      ? [
+    const outputs = (() => {
+      if (!cell.output) return [];
+      if (cell.output.type === 'error') {
+        return [
           {
-            name: 'stdout',
-            output_type: 'stream',
-            text: toLines(cell.output)
+            output_type: 'error',
+            ename: cell.output.ename,
+            evalue: cell.output.evalue,
+            traceback: []
           }
-        ]
-      : [];
+        ];
+      }
+      return [
+        {
+          output_type: 'display_data',
+          data: cell.output.data,
+          metadata: {}
+        }
+      ];
+    })();
     return {
       cell_type: 'code',
       metadata: {},
@@ -231,18 +272,41 @@ export const deserializeIpynb = (data: any) => {
       };
     }
     const outputs = cell?.outputs ?? [];
-    const textOutput = outputs
-      .map((out: any) => {
-        if (out?.output_type === 'stream') return fromLines(out.text ?? '');
-        if (out?.data?.['text/plain']) return fromLines(out.data['text/plain']);
-        return '';
-      })
-      .join('');
+    let parsedOutput: CellOutput | undefined = undefined;
+    const mimeData: Record<string, unknown> = {};
+    for (const out of outputs) {
+      if (out?.output_type === 'error') {
+        parsedOutput = {
+          type: 'error',
+          ename: String(out?.ename ?? 'Error'),
+          evalue: String(out?.evalue ?? '')
+        };
+        break;
+      }
+      if (out?.output_type === 'stream') {
+        const existing = asText(mimeData['text/plain']);
+        mimeData['text/plain'] = `${existing}${fromLines(out.text ?? '')}`;
+      }
+      if (out?.output_type === 'display_data' || out?.output_type === 'execute_result') {
+        const data = out?.data ?? {};
+        Object.entries(data).forEach(([mime, value]) => {
+          if (mime === 'text/plain') {
+            const existing = asText(mimeData['text/plain']);
+            mimeData['text/plain'] = `${existing}${asText(value)}`;
+          } else {
+            mimeData[mime] = value as unknown;
+          }
+        });
+      }
+    }
+    if (!parsedOutput && Object.keys(mimeData).length > 0) {
+      parsedOutput = { type: 'mime', data: mimeData };
+    }
     return {
       id: `cell-${Date.now()}-${idx}`,
       source: fromLines(cell?.source ?? ''),
       type: 'code',
-      output: textOutput || undefined,
+      output: parsedOutput,
       execCount: cell?.execution_count ?? undefined,
       isRunning: false
     };

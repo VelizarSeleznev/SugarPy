@@ -3,17 +3,39 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+stop_port_listener() {
+  local port="$1"
+  local pids
+  pids=$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)
+  if [ -z "$pids" ]; then
+    return
+  fi
+
+  echo "Port ${port} is in use. Stopping existing process(es): ${pids}"
+  kill $pids 2>/dev/null || true
+
+  for _ in {1..20}; do
+    sleep 0.2
+    if ! lsof -ti "tcp:${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "Port ${port} is now free."
+      return
+    fi
+  done
+
+  echo "Port ${port} is still busy. Forcing stop."
+  kill -9 $pids 2>/dev/null || true
+  sleep 0.2
+}
+
 # Ensure uv exists for deterministic Python deps
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv is required but not installed. Install from https://astral.sh/uv"
   exit 1
 fi
 
-# Ensure port is free
-if lsof -i tcp:8888 -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Port 8888 is already in use. Stop the existing process and try again."
-  exit 1
-fi
+# Ensure ports are free by stopping stale processes.
+stop_port_listener 8888
+stop_port_listener 5173
 
 # Ensure python deps are synced via uv
 UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --frozen

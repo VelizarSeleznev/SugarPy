@@ -24,7 +24,7 @@ import {
 export type CellModel = {
   id: string;
   source: string;
-  output?: string;
+  output?: CellOutput;
   type?: 'code' | 'markdown' | 'math' | 'stoich';
   execCount?: number;
   isRunning?: boolean;
@@ -37,6 +37,17 @@ export type CellModel = {
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
 };
+
+export type CellOutput =
+  | {
+      type: 'mime';
+      data: Record<string, unknown>;
+    }
+  | {
+      type: 'error';
+      ename: string;
+      evalue: string;
+    };
 
 const defaultCell: CellModel = {
   id: 'cell-1',
@@ -63,6 +74,12 @@ const getCommandName = (fn: FunctionEntry) => {
     if (base) return base;
   }
   return slugifyCommand(fn.title || '');
+};
+
+const asText = (value: unknown) => {
+  if (Array.isArray(value)) return value.join('');
+  if (value === null || value === undefined) return '';
+  return String(value);
 };
 
 function App() {
@@ -193,26 +210,79 @@ function App() {
       });
     }
     const future = activeKernel.requestExecute({ code, stop_on_error: true });
-    let output = '';
-    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, isRunning: true } : c)));
+    let streamText = '';
+    let mimeData: Record<string, unknown> = {};
+    setCells((prev) =>
+      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true, output: undefined } : c))
+    );
     future.onIOPub = (msg) => {
       if (msg.header.msg_type === 'stream') {
         // @ts-ignore
-        output += msg.content.text ?? '';
+        streamText += msg.content.text ?? '';
+        mimeData = { ...mimeData, 'text/plain': streamText };
       }
       if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
         // @ts-ignore
-        output += msg.content.data?.['text/plain'] ?? '';
+        const data = msg.content.data ?? {};
+        const merged: Record<string, unknown> = { ...mimeData };
+        Object.entries(data).forEach(([mime, value]) => {
+          if (mime === 'text/plain') {
+            const existing = asText(merged['text/plain']);
+            merged['text/plain'] = `${existing}${asText(value)}`;
+          } else {
+            merged[mime] = value as unknown;
+          }
+        });
+        mimeData = merged;
       }
       if (msg.header.msg_type === 'error') {
-        // @ts-ignore
-        output += (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '') + '\n';
+        const ename = (msg.content as any).ename ?? 'Error';
+        const evalue = (msg.content as any).evalue ?? '';
+        if (showOutput) {
+          setCells((prev) =>
+            prev.map((c) =>
+              c.id === cellId
+                ? {
+                    ...c,
+                    output: { type: 'error', ename, evalue }
+                  }
+                : c
+            )
+          );
+        }
+        return;
       }
       if (showOutput) {
-        setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, output } : c)));
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId
+              ? {
+                  ...c,
+                  output: { type: 'mime', data: mimeData }
+                }
+              : c
+          )
+        );
       }
     };
-    await future.done;
+    const reply = await future.done;
+    if (showOutput) {
+      const content = (reply as any)?.content;
+      if (content?.status === 'error') {
+        const ename = content.ename ?? 'Error';
+        const evalue = content.evalue ?? '';
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId
+              ? {
+                  ...c,
+                  output: { type: 'error', ename, evalue }
+                }
+              : c
+          )
+        );
+      }
+    }
     if (showOutput) {
       const defs = extractFunctionNames(code);
       if (defs.length > 0) {

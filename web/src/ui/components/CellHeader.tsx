@@ -11,6 +11,7 @@ export function CellHeader({ execCount, isRunning, onRun }: Props) {
   const display = `[${label}]`;
   return (
     <button
+      data-testid="run-cell"
       className="button"
       onClick={onRun}
       style={{

@@ -297,6 +297,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-bottom: 40vh;
+}
+
+.notebook-stack::after {
+  content: "";
+  display: block;
+  height: 1px;
 }
 
 .notebook-item {
@@ -539,8 +546,22 @@ body {
   padding: 6px;
   background: #f6f1e9;
   border-radius: 8px;
+}
+
+.output-plain {
   font-family: ui-monospace, monospace;
   white-space: pre-wrap;
+}
+
+.output-rich {
+  white-space: normal;
+  overflow-x: auto;
+}
+
+.cell-error {
+  color: #8b1d1d;
+  border: 1px solid #e5baba;
+  background: #fff1f0;
 }
 
 .math-render {
