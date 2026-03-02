@@ -20,6 +20,7 @@ body {
   font-family: var(--mono);
   color: var(--ink);
   background: radial-gradient(circle at 20% 10%, #fff, var(--bg));
+  overflow-x: hidden;
 }
 
 .app {
@@ -28,6 +29,7 @@ body {
   gap: 12px;
   min-height: 100vh;
   padding: 12px;
+  overflow-x: hidden;
 }
 
 .panel {
@@ -42,6 +44,11 @@ body {
   font-family: var(--serif);
   font-size: 24px;
   margin: 0 0 8px 0;
+}
+
+.wiki-link {
+  display: inline-flex;
+  margin-bottom: 8px;
 }
 
 .subtitle {
@@ -598,6 +605,29 @@ body {
   gap: 4px;
 }
 
+.math-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.math-trace-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.math-trace-source {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .math-step {
   overflow-x: auto;
 }
@@ -721,40 +751,173 @@ body {
   font-weight: 600;
 }
 
+.wiki-page {
+  max-width: 960px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 20px 16px 40px;
+}
+
+.wiki-header {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 20px 40px var(--shadow);
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.wiki-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 34px;
+}
+
+.wiki-subtitle {
+  margin: 8px 0 12px;
+  color: var(--muted);
+}
+
+.wiki-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 10px 26px var(--shadow);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.wiki-section h2 {
+  margin: 0 0 8px;
+  font-family: var(--serif);
+  font-size: 26px;
+}
+
+.wiki-section p {
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.wiki-section ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.wiki-section li {
+  margin-bottom: 4px;
+}
+
+.wiki-pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #f6f1e9;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
 @media (max-width: 1100px) {
   .app {
     grid-template-columns: 1fr;
   }
+
+  .wiki-title {
+    font-size: 30px;
+  }
 }
 
 @media print {
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+
+  html,
   body {
     background: #fff;
+    overflow: visible !important;
   }
 
   .app {
+    display: block !important;
     grid-template-columns: 1fr;
     padding: 0;
+    min-height: auto;
+    overflow: visible !important;
   }
 
   aside.panel,
   section.panel,
   .notebook-actions,
   .cell-menu,
-  .cell-insert-divider {
+  .cell-insert-divider,
+  .cell-gutter {
     display: none !important;
   }
 
   .workspace,
-  .notebook-panel {
+  .notebook-panel,
+  .notebook-stack,
+  .notebook-item,
+  .cell-row,
+  .cell-main {
     margin: 0;
     padding: 0;
+    width: 100%;
+    max-width: none;
+    overflow: visible !important;
     box-shadow: none;
     border: none;
+  }
+
+  .cell-row,
+  .notebook-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .notebook-stack {
+    padding-bottom: 0;
   }
 
   .panel {
     border: none;
     box-shadow: none;
   }
+}
+
+/* Runtime print fallback: applied right before window.print() opens preview. */
+body.print-mode {
+  overflow: visible !important;
+}
+
+body.print-mode .app {
+  display: block !important;
+  padding: 0 !important;
+  min-height: auto;
+  overflow: visible !important;
+}
+
+body.print-mode aside.panel,
+body.print-mode section.panel,
+body.print-mode .notebook-actions,
+body.print-mode .cell-menu,
+body.print-mode .cell-insert-divider,
+body.print-mode .cell-gutter {
+  display: none !important;
+}
+
+body.print-mode .workspace,
+body.print-mode .notebook-panel,
+body.print-mode .notebook-stack,
+body.print-mode .notebook-item,
+body.print-mode .cell-row,
+body.print-mode .cell-main {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  max-width: none !important;
+  overflow: visible !important;
+  border: none !important;
+  box-shadow: none !important;
 }

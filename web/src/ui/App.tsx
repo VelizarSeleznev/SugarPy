@@ -29,10 +29,24 @@ export type CellModel = {
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
+    kind: 'expression' | 'equation' | 'assignment';
     steps: string[];
     value?: string;
     error?: string;
+    warnings?: string[];
+    normalized_source?: string;
+    equation_latex?: string | null;
+    assigned?: string | null;
     mode: 'deg' | 'rad';
+    plotly_figure?: unknown;
+    trace?: Array<{
+      line_start: number;
+      source: string;
+      kind: 'expression' | 'equation' | 'assignment';
+      steps: string[];
+      value?: string | null;
+      plotly_figure?: unknown;
+    }>;
   };
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
@@ -316,41 +330,94 @@ function App() {
     ].join('\n');
 
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true, mathOutput: undefined } : c))
+      prev.map((c) =>
+        c.id === cellId ? { ...c, isRunning: true, mathOutput: undefined, output: undefined } : c
+      )
     );
     const future = activeKernel.requestExecute({ code, stop_on_error: true });
     const marker = '__SUGARPY_MATH__';
-    let buffer = '';
-    let parsed: CellModel['mathOutput'] | null = null;
+    let streamBuffer = '';
+    let streamText = '';
+    let mimeData: Record<string, unknown> = {};
+    let parsed: (CellModel['mathOutput'] & { plotly_figure?: unknown }) | null = null;
+
+    const setMimeOutput = () => {
+      // Hide the internal marker payload from the visible plain output.
+      const idx = streamText.lastIndexOf(marker);
+      const visiblePlain = idx >= 0 ? streamText.slice(0, idx) : streamText;
+      const nextData = { ...mimeData };
+      const cleanedPlain = visiblePlain.trimEnd();
+      if (cleanedPlain) {
+        nextData['text/plain'] = cleanedPlain;
+      } else {
+        delete nextData['text/plain'];
+      }
+      if (Object.keys(nextData).length === 0) return;
+      setCells((prev) =>
+        prev.map((c) => (c.id === cellId ? { ...c, output: { type: 'mime', data: nextData } } : c))
+      );
+    };
 
     future.onIOPub = (msg) => {
       if (msg.header.msg_type === 'stream') {
         // @ts-ignore
-        buffer += msg.content.text ?? '';
+        const text = msg.content.text ?? '';
+        streamBuffer += text;
+        streamText += text;
+        mimeData = { ...mimeData, 'text/plain': streamText };
+        setMimeOutput();
       }
       if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
         // @ts-ignore
-        buffer += msg.content.data?.['text/plain'] ?? '';
+        const data = msg.content.data ?? {};
+        const merged: Record<string, unknown> = { ...mimeData };
+        Object.entries(data).forEach(([mime, value]) => {
+          if (mime === 'text/plain') {
+            const existing = asText(merged['text/plain']);
+            merged['text/plain'] = `${existing}${asText(value)}`;
+          } else {
+            merged[mime] = value as unknown;
+          }
+        });
+        mimeData = merged;
+        setMimeOutput();
       }
       if (msg.header.msg_type === 'error') {
         // @ts-ignore
         const err = (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '');
-        parsed = { steps: [], error: err, mode: trigMode };
+        parsed = { kind: 'expression', steps: [], error: err, mode: trigMode, warnings: [] };
       }
-      const idx = buffer.lastIndexOf(marker);
+      const idx = streamBuffer.lastIndexOf(marker);
       if (idx >= 0) {
-        const jsonText = buffer.slice(idx + marker.length).trim();
+        const jsonText = streamBuffer.slice(idx + marker.length).trim();
         try {
           parsed = JSON.parse(jsonText);
         } catch (err) {
-          parsed = { steps: [], error: 'Failed to parse math output.', mode: trigMode };
+          parsed = {
+            kind: 'expression',
+            steps: [],
+            error: 'Failed to parse math output.',
+            mode: trigMode,
+            warnings: []
+          };
         }
       }
       if (parsed) {
-        setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, mathOutput: parsed } : c)));
+        setCells((prev) =>
+          prev.map((c) => {
+            if (c.id !== cellId) return c;
+            const next: any = { ...c, mathOutput: parsed };
+            const fig = (parsed as any)?.plotly_figure;
+            if (fig && typeof fig === 'object') {
+              next.output = { type: 'mime', data: { 'application/vnd.plotly.v1+json': fig } };
+            }
+            return next;
+          })
+        );
       }
     };
     await future.done;
+    setMimeOutput();
     setExecCounter((prev) => {
       const next = prev + 1;
       setCells((cellsPrev) =>
@@ -573,7 +640,9 @@ function App() {
       trigMode,
       cells
     });
-    const filename = `${notebookName || 'Untitled'}.sugarpy.json`;
+    const rawName = (notebookName || 'Untitled').trim();
+    const normalizedName = rawName.replace(/\.sugarpy(?:\.json)?$/i, '');
+    const filename = `${normalizedName}.sugarpy`;
     downloadBlob(filename, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
   };
 
@@ -666,7 +735,20 @@ function App() {
   };
 
   const handleExportPdf = () => {
-    window.print();
+    const body = document.body;
+    body.classList.add('print-mode');
+
+    const cleanup = () => {
+      body.classList.remove('print-mode');
+      window.removeEventListener('afterprint', cleanup);
+    };
+
+    window.addEventListener('afterprint', cleanup, { once: true });
+
+    // Let layout settle before opening print preview so print CSS is applied consistently.
+    window.setTimeout(() => {
+      window.print();
+    }, 50);
   };
 
   return (
@@ -674,6 +756,9 @@ function App() {
     <div className="app">
       <aside className="panel">
         <h1 className="brand">SugarPy</h1>
+        <a className="button secondary wiki-link" href="/wiki" target="_blank" rel="noreferrer">
+          Open Wiki
+        </a>
 
         <div className="section-title">Connection</div>
         <input className="input" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
@@ -757,7 +842,7 @@ function App() {
           </div>
           <div className="notebook-buttons">
             <button className="button secondary" onClick={handleNewNotebook}>New</button>
-            <button className="button" onClick={handleDownloadSugarPy}>Download .sugarpy.json</button>
+            <button className="button" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
             <button className="button" onClick={handleDownloadIpynb}>Download .ipynb</button>
             <button className="button" onClick={handleSaveToServer}>Save to Server</button>
             <button className="button secondary" onClick={handleImportClick}>Import</button>
@@ -766,7 +851,7 @@ function App() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".ipynb,.sugarpy.json"
+            accept=".ipynb,.sugarpy,.sugarpy.json,application/json"
             onChange={handleImportFile}
             className="file-input"
           />
