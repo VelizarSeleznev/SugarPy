@@ -9,3 +9,4 @@ dist/
 artifacts/
 *.egg-info/
 web/test-results/
+notebooks/
