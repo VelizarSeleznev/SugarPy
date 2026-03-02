@@ -15,6 +15,31 @@ What it does:
 - Starts Jupyter Server on `http://localhost:8888`.
 - Starts Vite dev server for the UI (`http://localhost:5173`).
 
+## Notebook persistence (autosave + recovery)
+- The UI now keeps a local autosave in browser `localStorage` for crash/reload recovery.
+- The UI also writes a server autosave (`.sugarpy`) to:
+  `notebooks/.sugarpy-autosave/<notebook-id>.sugarpy`
+- On startup, SugarPy restores the newest version between local autosave and server autosave.
+- Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
+
+## Open the standalone wiki page
+- Open `http://localhost:5173/wiki`
+- This page is static and does not require a kernel connection.
+
+## Open the demo notebook
+- Open `notebooks/CoreFeaturesDemo.ipynb` in Jupyter and run top-to-bottom.
+- The notebook demonstrates the core Math + Code flow and optional chemistry helpers.
+- For the native SugarPy experience (with Text/Code/Math/Stoich cells), import:
+  `notebooks/CoreFeaturesDemo.sugarpy` from the SugarPy UI.
+- Legacy files with `.sugarpy.json` are still supported on import.
+- CAS-first circle intersection demo (2 Math cells + plot):
+ - CAS-first circle intersection demo (2 Math cells + plot):
+  `notebooks/CircleIntersections_CAS.sugarpy`
+
+## Authoring guidelines for large tasks
+See `docs/ASSIGNMENT_GUIDELINES.md` for the recommended structure and conventions
+for multi-step CAS-first assignments.
+
 ## Start backend only
 ```bash
 ./scripts/launch.sh
@@ -26,14 +51,20 @@ What it does:
 ```
 
 What it covers:
-- Python smoke checks (`chem`, catalog loader, math/stoichiometry helpers).
 - Frontend install/build/audit.
-- UI headless console check with `agent-browser`.
+- Backend pytest suite (`tests/backend/`).
+- Playwright E2E suite (`web/e2e/`) including smoke checks.
+- Testing standards and maintenance rules are defined in `docs/TESTING_PRINCIPLES.md`.
+
+## Manual visual QA (Pinchtab)
+After UI or rendering changes, perform a manual Pinchtab pass using the checklist in
+`docs/TESTING_PRINCIPLES.md`.
 
 ## UI-only console check
 ```bash
 ./scripts/ui-check.sh
 ```
+This runs Playwright smoke tests (`--grep @smoke`) without screenshot assertions.
 
 ## E2E notebook checks
 ```bash
@@ -45,6 +76,7 @@ What it covers:
 - SymPy LaTeX rendering in code cells.
 - Plotly MIME rendering from kernel `display_data`.
 - Runtime error rendering (`ename: evalue`) without React crash.
+- Math cell equation rendering and Code->Math namespace sharing flow.
 
 ## Common failures
 - `uv is required but not installed`:

@@ -8,10 +8,23 @@ type Props = {
   onRun: (value: string) => void;
   completions?: { label: string; detail?: string }[];
   output?: {
+    kind: 'expression' | 'equation' | 'assignment';
     steps: string[];
     value?: string;
     error?: string;
+    warnings?: string[];
+    normalized_source?: string;
+    equation_latex?: string | null;
+    assigned?: string | null;
     mode: 'deg' | 'rad';
+    trace?: Array<{
+      line_start: number;
+      source: string;
+      kind: 'expression' | 'equation' | 'assignment';
+      steps: string[];
+      value?: string | null;
+      plotly_figure?: unknown;
+    }>;
   };
   isRunning?: boolean;
   trigMode: 'deg' | 'rad';
@@ -30,32 +43,77 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
     setDirty(false);
   }, [value]);
 
-  const renderedSteps = useMemo(() => {
-    if (!output?.steps?.length) return [];
-    return output.steps.map((step) => {
+  const withBreakHints = (latex: string) => {
+    // Help KaTeX break very long lines at readable separators.
+    return latex
+      .replace(/,/g, ",\\allowbreak ")
+      .replace(/=/g, "=\\allowbreak ");
+  };
+
+  const renderLatexSteps = (steps: string[]) => {
+    return steps.map((step) => {
+      const safeStep = String(step ?? '');
       try {
-        return katex.renderToString(step, { throwOnError: false, displayMode: true });
-      } catch (err) {
-        return `<span class="math-error">${step}</span>`;
+        return katex.renderToString(withBreakHints(safeStep), { throwOnError: false, displayMode: true });
+      } catch (_err) {
+        return `<span class="math-error">${safeStep}</span>`;
       }
     });
-  }, [output]);
+  };
+
+  const renderedSteps = useMemo(() => {
+    if (!output?.steps?.length) return [];
+    return renderLatexSteps(output.steps);
+  }, [output?.steps]);
+
+  const renderedTrace = useMemo(() => {
+    if (!output?.trace?.length) return null;
+    return output.trace.map((item, idx) => {
+      const steps = item.steps ?? [];
+      const rendered = steps.length ? renderLatexSteps(steps) : [];
+      return { idx, item, rendered };
+    });
+  }, [output?.trace]);
 
   if (!editing) {
     return (
-      <div className="math-render" onClick={() => setEditing(true)}>
+      <div className="math-render" onClick={() => setEditing(true)} data-testid="math-output">
         <div className="math-meta">
           <span className="math-badge">{displayMode === 'deg' ? 'Degrees' : 'Radians'}</span>
+          {output?.kind ? <span className="math-badge">{output.kind}</span> : null}
           {isRunning ? <span className="math-running">running…</span> : null}
         </div>
         {output?.error ? (
-          <div className="math-error">{output.error}</div>
+          <div className="math-error" data-testid="math-error">{output.error}</div>
+        ) : renderedTrace ? (
+          <div className="math-trace">
+            {renderedTrace.map(({ idx, item, rendered }) => (
+              <div className="math-trace-item" key={`trace-${idx}`}>
+                <pre className="math-trace-source">
+                  <code>{item.source}</code>
+                </pre>
+                {rendered.length ? (
+                  <div className="math-steps">
+                    {rendered.map((html, stepIdx) => (
+                      <div
+                        className="math-step"
+                        key={`trace-${idx}-step-${stepIdx}`}
+                        data-testid="math-latex"
+                        dangerouslySetInnerHTML={{ __html: html }}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
         ) : renderedSteps.length > 0 ? (
           <div className="math-steps">
             {renderedSteps.map((html, idx) => (
               <div
                 className="math-step"
                 key={`step-${idx}`}
+                data-testid="math-latex"
                 dangerouslySetInnerHTML={{ __html: html }}
               />
             ))}
@@ -63,6 +121,9 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
         ) : (
           <div className="math-empty">Click to edit.</div>
         )}
+        {output?.warnings?.length ? (
+          <div className="math-error" data-testid="math-warning">{output.warnings.join(' ')}</div>
+        ) : null}
       </div>
     );
   }
@@ -108,6 +169,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
           autoFocus
         />
       </div>
+      <div className="subtitle">Examples: x^2 + 2x + 1, x^2 = 2, a := 5</div>
     </div>
   );
 }

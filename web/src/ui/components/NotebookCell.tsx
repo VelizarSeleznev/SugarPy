@@ -166,15 +166,18 @@ export function NotebookCell({
             kernelReady={kernelReady}
           />
         ) : cell.type === 'math' ? (
-          <MathEditor
-            value={cell.source}
-            onChange={onChange}
-            onRun={onRunMath}
-            completions={mathSuggestions}
-            output={cell.mathOutput}
-            isRunning={cell.isRunning}
-            trigMode={trigMode}
-          />
+          <>
+            <MathEditor
+              value={cell.source}
+              onChange={onChange}
+              onRun={onRunMath}
+              completions={mathSuggestions}
+              output={cell.mathOutput}
+              isRunning={cell.isRunning}
+              trigMode={trigMode}
+            />
+            <div data-testid="cell-output">{renderOutput(cell)}</div>
+          </>
         ) : (
           <>
             <CodeEditor

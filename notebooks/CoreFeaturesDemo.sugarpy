@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "id": "nb-core-features-demo",
+  "name": "Core Features Demo (SugarPy)",
+  "trigMode": "deg",
+  "updatedAt": "2026-02-28T14:46:52.573548Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# SugarPy Core Features Demo\n\nThis is a native SugarPy notebook (`.sugarpy.json`) with all main cell types: Text, Code, Math, Stoichiometry.\n\nRun cells top-to-bottom."
+    },
+    {
+      "id": "cell-2",
+      "type": "code",
+      "source": "from sugarpy import balance_equation, render_stoichiometry\nfrom sugarpy.math_cell import render_math_cell\n\nprint('SugarPy runtime ready')"
+    },
+    {
+      "id": "cell-3",
+      "type": "markdown",
+      "source": "## Math cells\n\nMath cells support CAS-style syntax directly: `^`, implicit multiplication, equation `=`, assignment `:=`."
+    },
+    {
+      "id": "cell-4",
+      "type": "math",
+      "source": "2 + 2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-5",
+      "type": "math",
+      "source": "x^2 = 2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-6",
+      "type": "code",
+      "source": "def f(x):\n    return x**2\n\na = 5\nprint('f and a are defined in Code cell')"
+    },
+    {
+      "id": "cell-7",
+      "type": "math",
+      "source": "f(3) + 2a",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-8",
+      "type": "markdown",
+      "source": "## Multi-step geometry problem (circle intersections)\n\nTask:\n- `(x - 5)^2 + (y -5)^2 = 36`\n- `(x +1)^2 + (y -2)^2 = 36`\n\nFind the intersection points using CAS steps in Math cells."
+    },
+    {
+      "id": "cell-9",
+      "type": "math",
+      "source": "c1 := (x - 5)^2 + (y - 5)^2 - 36",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-10",
+      "type": "math",
+      "source": "c2 := (x + 1)^2 + (y - 2)^2 - 36",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-11",
+      "type": "math",
+      "source": "line := expand(c1 - c2)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-12",
+      "type": "math",
+      "source": "solve(Eq(line, 0), y)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-13",
+      "type": "math",
+      "source": "solve((Eq(c1, 0), Eq(c2, 0)), (x, y))",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-14",
+      "type": "markdown",
+      "source": "Expected exact points:\n\n- `(2 - 3*sqrt(55)/10, 7/2 + 3*sqrt(55)/5)`\n- `(2 + 3*sqrt(55)/10, 7/2 - 3*sqrt(55)/5)`"
+    },
+    {
+      "id": "cell-15",
+      "type": "markdown",
+      "source": "### Visual check (graph)\n\nThis code cell draws both circles. The intersections are where the curves cross."
+    },
+    {
+      "id": "cell-16",
+      "type": "code",
+      "source": "from sympy import Eq, N, solve, sqrt, symbols\nx, y = symbols('x y', real=True)\nif 'plot' not in globals():\n    from sugarpy.startup import plot\n\nc1 = (x - 5)**2 + (y - 5)**2 - 36\nc2 = (x + 1)**2 + (y - 2)**2 - 36\npts = solve((Eq(c1, 0), Eq(c2, 0)), (x, y))\nprint('Intersections (exact):', pts)\nprint('Intersections (decimal):', [(N(px), N(py)) for px, py in pts])\n\nplot(\n    5 + sqrt(36 - (x - 5)**2),\n    5 - sqrt(36 - (x - 5)**2),\n    2 + sqrt(36 - (x + 1)**2),\n    2 - sqrt(36 - (x + 1)**2),\n    xmin=-2,\n    xmax=8,\n    title='Circle intersections: visual confirmation'\n)"
+    },
+    {
+      "id": "cell-17",
+      "type": "markdown",
+      "source": "## Stoichiometry cell\n\nThis is an interactive chemistry table cell, not a plain Python output block."
+    },
+    {
+      "id": "cell-18",
+      "type": "stoich",
+      "source": "",
+      "stoichState": {
+        "reaction": "H2 + O2 -> H2O",
+        "inputs": {
+          "H2": {
+            "n": "2"
+          }
+        }
+      },
+      "stoichOutput": null
+    },
+    {
+      "id": "cell-19",
+      "type": "markdown",
+      "source": "## Why this is not just plain Python\n\n- Math cells give symbolic classroom notation directly.\n- Stoichiometry cell gives an interactive table UI.\n- Code, Math, and Stoich share one notebook flow for lessons."
+    },
+    {
+      "id": "cell-20",
+      "type": "code",
+      "source": "print(balance_equation('Fe + O2 -> Fe2O3'))\nprint(render_stoichiometry('H2 + O2 -> H2O', {'H2': {'n': 2}})['balanced'])"
+    }
+  ]
+}

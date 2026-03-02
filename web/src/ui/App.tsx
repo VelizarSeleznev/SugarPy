@@ -112,6 +112,7 @@ function App() {
   const [notebookName, setNotebookName] = useState('Untitled');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string>('');
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -132,8 +133,10 @@ function App() {
   );
   const connectOnce = useRef(false);
   const autosaveTimer = useRef<number | undefined>(undefined);
+  const autosaveServerTimer = useRef<number | undefined>(undefined);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
+  const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
@@ -180,6 +183,16 @@ function App() {
 
   const activeKernel = kernel;
 
+  const getServerSettings = () =>
+    ServerConnection.makeSettings({
+      baseUrl: serverUrl,
+      token,
+      wsUrl: serverUrl.replace(/^http/, 'ws'),
+      appendToken: true
+    });
+
+  const getAutosavePath = (id: string) => `notebooks/.sugarpy-autosave/${id}.sugarpy`;
+
   const buildSnapshot = (nextCells: CellModel[], nextTrigMode: 'deg' | 'rad', nextName: string, nextId: string) =>
     JSON.stringify({
       id: nextId,
@@ -187,6 +200,79 @@ function App() {
       trigMode: nextTrigMode,
       cells: nextCells.map(({ isRunning, ...rest }) => rest)
     });
+
+  const ensureContents = () => {
+    if (!contentsRef.current) {
+      contentsRef.current = new ContentsManager({ serverSettings: getServerSettings() });
+    }
+    return contentsRef.current;
+  };
+
+  const ensureServerDir = async (path: string) => {
+    const contents = ensureContents();
+    const parts = path.split('/').filter(Boolean);
+    let current = '';
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      try {
+        await contents.get(current, { content: false });
+      } catch (_err) {
+        await contents.save(current, { type: 'directory' as any });
+      }
+    }
+  };
+
+  const loadServerAutosave = async (id: string) => {
+    const contents = ensureContents();
+    const path = getAutosavePath(id);
+    try {
+      const model = await contents.get(path, { content: true });
+      const raw = typeof model.content === 'string' ? model.content : '';
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed?.version !== 1) return null;
+      return parsed;
+    } catch (_err) {
+      return null;
+    }
+  };
+
+  const saveServerAutosave = async (params: {
+    id: string;
+    name: string;
+    trigMode: 'deg' | 'rad';
+    cells: CellModel[];
+    silent?: boolean;
+  }) => {
+    try {
+      if (!params.silent) {
+        setSyncMessage('Saving to server...');
+      }
+      await ensureServerDir('notebooks/.sugarpy-autosave');
+      const payload = serializeSugarPy({
+        id: params.id,
+        name: params.name,
+        trigMode: params.trigMode,
+        cells: params.cells
+      });
+      await ensureContents().save(getAutosavePath(params.id), {
+        type: 'file' as any,
+        format: 'text' as any,
+        content: JSON.stringify(payload, null, 2)
+      });
+      if (!params.silent) {
+        setSyncMessage('Saved to server autosave.');
+      }
+      return payload;
+    } catch (err) {
+      setSyncMessage('Server autosave failed.');
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    contentsRef.current = null;
+  }, [serverUrl, token]);
 
   useEffect(() => {
     if (connectOnce.current) return;
@@ -197,22 +283,49 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const lastId = loadLastOpenId();
-    if (lastId) {
-      const stored = loadFromLocalStorage(lastId);
-      if (stored) {
-        const decoded = deserializeSugarPy(stored);
-        const nextCells = decoded.cells.length > 0 ? decoded.cells : [defaultCell];
-        setNotebookId(decoded.id);
-        setNotebookName(decoded.name);
-        setTrigMode(decoded.trigMode);
-        setCells(nextCells);
-        setLastSavedAt(stored.updatedAt ?? null);
-        lastSnapshot.current = buildSnapshot(nextCells, decoded.trigMode, decoded.name, decoded.id);
+    let cancelled = false;
+    const hydrate = async () => {
+      const lastId = loadLastOpenId();
+      if (!lastId) {
+        hydrated.current = true;
+        return;
       }
-    }
-    hydrated.current = true;
-  }, []);
+      const localStored = loadFromLocalStorage(lastId);
+      const serverStored = await loadServerAutosave(lastId);
+
+      const pickNewest = () => {
+        if (localStored && serverStored) {
+          const localTs = Date.parse(localStored.updatedAt ?? '') || 0;
+          const serverTs = Date.parse(serverStored.updatedAt ?? '') || 0;
+          return serverTs > localTs ? serverStored : localStored;
+        }
+        return serverStored ?? localStored ?? null;
+      };
+
+      const selected = pickNewest();
+      if (!selected || cancelled) {
+        hydrated.current = true;
+        return;
+      }
+
+      const decoded = deserializeSugarPy(selected);
+      const nextCells = decoded.cells.length > 0 ? decoded.cells : [defaultCell];
+      setNotebookId(decoded.id);
+      setNotebookName(decoded.name);
+      setTrigMode(decoded.trigMode);
+      setCells(nextCells);
+      setLastSavedAt(selected.updatedAt ?? null);
+      lastSnapshot.current = buildSnapshot(nextCells, decoded.trigMode, decoded.name, decoded.id);
+      hydrated.current = true;
+    };
+
+    hydrate().catch(() => {
+      hydrated.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverUrl, token]);
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
     if (!activeKernel) return;
@@ -613,6 +726,52 @@ function App() {
       lastSnapshot.current = snapshot;
       setDirty(false);
     }, 800);
+
+    if (autosaveServerTimer.current) {
+      window.clearTimeout(autosaveServerTimer.current);
+    }
+    autosaveServerTimer.current = window.setTimeout(() => {
+      saveServerAutosave({
+        id: notebookId,
+        name: notebookName,
+        trigMode,
+        cells,
+        silent: true
+      }).then((saved) => {
+        if (!saved) return;
+        setLastSavedAt(saved.updatedAt);
+      });
+    }, 1500);
+  }, [cells, trigMode, notebookName, notebookId]);
+
+  useEffect(() => {
+    const flush = () => {
+      if (!hydrated.current) return;
+      const payload = serializeSugarPy({
+        id: notebookId,
+        name: notebookName,
+        trigMode,
+        cells
+      });
+      saveToLocalStorage(payload);
+      setLastSavedAt(payload.updatedAt);
+      saveServerAutosave({
+        id: notebookId,
+        name: notebookName,
+        trigMode,
+        cells,
+        silent: true
+      }).then(() => undefined);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [cells, trigMode, notebookName, notebookId]);
 
   const confirmDiscard = () => {
@@ -679,6 +838,13 @@ function App() {
         type: 'notebook',
         format: 'json',
         content: payload
+      });
+      await saveServerAutosave({
+        id: notebookId,
+        name: notebookName,
+        trigMode,
+        cells,
+        silent: true
       });
       const snapshot = buildSnapshot(cells, trigMode, notebookName, notebookId);
       lastSnapshot.current = snapshot;
@@ -838,6 +1004,7 @@ function App() {
             <div className="subtitle">
               {lastSavedAt ? `Autosaved ${new Date(lastSavedAt).toLocaleTimeString()}` : 'Not saved yet'}
               {dirty ? ' · editing…' : ''}
+              {syncMessage ? ` · ${syncMessage}` : ''}
             </div>
           </div>
           <div className="notebook-buttons">

@@ -2,247 +2,314 @@
 
 from __future__ import annotations
 
-import ast
 import json
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 
 import sympy as sp
 from IPython import get_ipython
-from sympy.parsing.sympy_parser import (
-    implicit_multiplication_application,
-    standard_transformations,
-    parse_expr,
-)
+from collections.abc import Mapping
+
+from .math_parser import MathParseError, parse_math_input, parse_sympy_expression
 
 
-_TRANSFORMS = standard_transformations + (implicit_multiplication_application,)
-_ALLOWED_MATH_NAMES = {
-    "sqrt",
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "log",
-    "ln",
-    "exp",
-    "pow",
-    "abs",
-    "pi",
-    "e",
-    "math",
-}
+def _as_latex(value: Any) -> str:
+    try:
+        return sp.latex(value)
+    except Exception:
+        return str(value)
 
 
-def _collect_names(node: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+def _finalize_value(value: Any) -> Any:
+    """Simplify SymPy-native values while preserving container results from CAS calls."""
+    if isinstance(value, sp.Basic):
+        return sp.simplify(value)
+    if isinstance(value, list):
+        return [_finalize_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_finalize_value(item) for item in value)
+    if isinstance(value, dict):
+        return {_finalize_value(k): _finalize_value(v) for k, v in value.items()}
+    return value
 
 
-def _sympy_locals(names: Iterable[str]) -> Dict[str, Any]:
-    mapping: Dict[str, Any] = {
-        "sqrt": sp.sqrt,
-        "sin": sp.sin,
-        "cos": sp.cos,
-        "tan": sp.tan,
-        "asin": sp.asin,
-        "acos": sp.acos,
-        "atan": sp.atan,
-        "log": sp.log,
-        "ln": sp.log,
-        "exp": sp.exp,
-        "pow": sp.Pow,
-        "abs": sp.Abs,
-        "pi": sp.pi,
-        "e": sp.E,
-        "math": sp,
+def _error_payload(source: str, mode: str, error: str, kind: str = "expression") -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "kind": kind,
+        "steps": [],
+        "value": None,
+        "assigned": None,
+        "mode": mode,
+        "error": error,
+        "warnings": [],
+        "normalized_source": (source or "").strip(),
+        "equation_latex": None,
+        "plotly_figure": None,
+        "trace": [],
     }
-    for name in names:
-        mapping.setdefault(name, sp.Symbol(name))
-    return mapping
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float, complex, sp.Number))
+def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        parsed = parse_math_input(source)
+    except MathParseError as exc:
+        return _error_payload(source, mode, str(exc))
 
-
-def _sympy_locals_with_mode(names: Iterable[str], mode: str) -> Dict[str, Any]:
-    mapping = _sympy_locals(names)
-    if mode == "deg":
-        def sind(x: Any, **_kwargs: Any) -> Any:
-            return sp.sin(x * sp.pi / 180)
-
-        def cosd(x: Any, **_kwargs: Any) -> Any:
-            return sp.cos(x * sp.pi / 180)
-
-        def tand(x: Any, **_kwargs: Any) -> Any:
-            return sp.tan(x * sp.pi / 180)
-
-        mapping.update({"sin": sind, "cos": cosd, "tan": tand})
-    return mapping
-
-
-def render_math_cell(source: str, mode: str = "deg") -> Dict[str, Any]:
-    """Render a single math expression and compute its value."""
-    src = (source or "").strip()
-    if not src:
-        return {"ok": False, "steps": [], "value": None, "assigned": None, "mode": mode, "error": "Empty cell."}
+    warnings = list(parsed.warnings)
 
     try:
-        tree = ast.parse(src, mode="exec")
-    except SyntaxError as exc:
-        return {
-            "ok": False,
-            "steps": [],
-            "value": None,
-            "assigned": None,
-            "mode": mode,
-            "error": f"Syntax error: {exc.msg}",
-        }
+        if parsed.kind == "assignment":
+            target = parsed.assigned_name or ""
+            rhs_source = parsed.rhs_source or ""
+            rhs_parsed = parse_math_input(rhs_source)
+            if rhs_parsed.kind == "assignment":
+                raise MathParseError("Right side of ':=' cannot contain another ':=' assignment.")
 
-    if len(tree.body) != 1:
-        return {
-            "ok": False,
-            "steps": [],
-            "value": None,
-            "assigned": None,
-            "mode": mode,
-            "error": "Use a single expression or assignment.",
-        }
-
-    stmt = tree.body[0]
-    assigned = None
-    expr_node = None
-    if isinstance(stmt, ast.Assign):
-        if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+            if rhs_parsed.kind == "equation":
+                lhs_expr = parse_sympy_expression(rhs_parsed.lhs_source or "", mode=mode, user_ns=user_ns)
+                rhs_expr = parse_sympy_expression(rhs_parsed.rhs_source or "", mode=mode, user_ns=user_ns)
+                equation = sp.Eq(lhs_expr, rhs_expr, evaluate=False)
+                value_expr = sp.simplify(lhs_expr - rhs_expr)
+                warnings.append("Equation assignments are stored in '=0' expression form for solve compatibility.")
+                steps = [
+                    f"{sp.latex(sp.Symbol(target))} = {_as_latex(equation)}",
+                    f"{sp.latex(sp.Symbol(target))} = {_as_latex(value_expr)}",
+                ]
+            else:
+                value_expr = parse_sympy_expression(rhs_source, mode=mode, user_ns=user_ns)
+                steps = [f"{sp.latex(sp.Symbol(target))} = {_as_latex(value_expr)}"]
+            value_expr = _finalize_value(value_expr)
+            user_ns[target] = value_expr
+            value_latex = _as_latex(value_expr)
+            final_step = f"{sp.latex(sp.Symbol(target))} = {value_latex}"
+            if steps[-1] != final_step:
+                steps.append(final_step)
             return {
-                "ok": False,
+                "ok": True,
+                "kind": "assignment",
+                "steps": steps,
+                "value": value_latex,
+                "assigned": target,
+                "mode": mode,
+                "error": None,
+                "warnings": warnings,
+                "normalized_source": parsed.normalized_source,
+                "equation_latex": None,
+                "plotly_figure": None,
+                "trace": [],
+            }
+
+        if parsed.kind == "equation":
+            lhs_expr = parse_sympy_expression(parsed.lhs_source or "", mode=mode, user_ns=user_ns)
+            rhs_expr = parse_sympy_expression(parsed.rhs_source or "", mode=mode, user_ns=user_ns)
+            equation = sp.Eq(lhs_expr, rhs_expr, evaluate=False)
+            equation_latex = _as_latex(equation)
+            return {
+                "ok": True,
+                "kind": "equation",
+                "steps": [equation_latex],
+                "value": equation_latex,
+                "assigned": None,
+                "mode": mode,
+                "error": None,
+                "warnings": warnings,
+                "normalized_source": parsed.normalized_source,
+                "equation_latex": equation_latex,
+                "plotly_figure": None,
+                "trace": [],
+            }
+
+        expr = parse_sympy_expression(parsed.source, mode=mode, user_ns=user_ns)
+        if isinstance(expr, Mapping) and "data" in expr and "layout" in expr:
+            # plot(...) returns a Plotly-compatible figure dict and also emits MIME output.
+            # Do not feed the dict into KaTeX as a math step; instead attach it for the UI.
+            figure = dict(expr) if not isinstance(expr, dict) else expr
+            return {
+                "ok": True,
+                "kind": "expression",
                 "steps": [],
                 "value": None,
                 "assigned": None,
                 "mode": mode,
-                "error": "Only simple assignments like `b = ...` are supported.",
+                "error": None,
+                "warnings": warnings,
+                "normalized_source": parsed.normalized_source,
+                "equation_latex": None,
+                "plotly_figure": figure,
+                "trace": [],
             }
-        assigned = stmt.targets[0].id
-        expr_node = stmt.value
-    elif isinstance(stmt, ast.Expr):
-        expr_node = stmt.value
-    else:
+        base = _as_latex(expr)
+        steps = [base]
+        if isinstance(expr, sp.Basic) and getattr(expr, "free_symbols", None):
+            return {
+                "ok": True,
+                "kind": "expression",
+                "steps": steps,
+                "value": None,
+                "assigned": None,
+                "mode": mode,
+                "error": None,
+                "warnings": warnings,
+                "normalized_source": parsed.normalized_source,
+                "equation_latex": None,
+                "plotly_figure": None,
+                "trace": [],
+            }
+        value_expr = _finalize_value(expr)
+        value_latex = _as_latex(value_expr)
+        if steps[-1] != value_latex:
+            steps.append(value_latex)
         return {
-            "ok": False,
-            "steps": [],
-            "value": None,
+            "ok": True,
+            "kind": "expression",
+            "steps": steps,
+            "value": value_latex,
             "assigned": None,
             "mode": mode,
-            "error": "Only expressions or assignments are supported.",
+            "error": None,
+            "warnings": warnings,
+            "normalized_source": parsed.normalized_source,
+            "equation_latex": None,
+            "plotly_figure": None,
+            "trace": [],
         }
+    except MathParseError as exc:
+        return _error_payload(source, mode, str(exc), kind=parsed.kind)
+    except Exception as exc:
+        return _error_payload(source, mode, f"{type(exc).__name__}: {exc}", kind=parsed.kind)
 
-    expr_code = ast.unparse(expr_node)
-    names = _collect_names(expr_node)
 
+def _split_math_statements(source: str) -> list[tuple[int, str]]:
+    """Split a Math cell into top-level statements.
+
+    Rules:
+    - New statement starts on newline only when not inside quotes and bracket depth is 0.
+    - Preserves 1-based starting line number for each statement.
+    """
+    statements: list[tuple[int, str]] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    line_no = 1
+    stmt_start_line = 1
+
+    def flush(next_start_line: int) -> None:
+        nonlocal stmt_start_line
+        text = "".join(buf).strip()
+        buf.clear()
+        if text:
+            statements.append((stmt_start_line, text))
+        stmt_start_line = next_start_line
+
+    for ch in source:
+        if ch == "\n":
+            if quote is None and depth == 0:
+                flush(line_no + 1)
+            else:
+                buf.append(ch)
+            line_no += 1
+            continue
+
+        if quote is not None:
+            buf.append(ch)
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == quote:
+                quote = None
+            continue
+
+        if ch in {"'", '"'}:
+            quote = ch
+            buf.append(ch)
+            continue
+
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch in ")]}":
+            depth -= 1
+            buf.append(ch)
+            continue
+
+        buf.append(ch)
+
+    flush(line_no)
+    return statements
+
+
+def render_math_cell(source: str, mode: str = "deg") -> Dict[str, Any]:
+    """Render CAS-style input and compute its value."""
     ip = get_ipython()
     user_ns: Dict[str, Any] = ip.user_ns if ip is not None else {}
 
-    steps: list[str] = []
-    sym_expr = None
-    base = None
-    try:
-        sym_expr = parse_expr(
-            expr_code,
-            local_dict=_sympy_locals_with_mode(names, mode),
-            transformations=_TRANSFORMS,
-            evaluate=False,
+    raw = (source or "")
+    trimmed = raw.strip()
+    if not raw:
+        return _error_payload(source, mode, "Empty cell.")
+
+    statements = _split_math_statements(trimmed)
+    if not statements:
+        return _error_payload(source, mode, "Empty cell.")
+
+    merged_steps: list[str] = []
+    merged_warnings: list[str] = []
+    normalized_sources: list[str] = []
+    plotly_figure: Any | None = None
+    last_result: Dict[str, Any] | None = None
+    trace: list[Dict[str, Any]] = []
+
+    for line_start, statement in statements:
+        result = _render_single_math(statement, mode, user_ns)
+        if not result.get("ok"):
+            err = result.get("error") or "Unknown error"
+            payload = _error_payload(source, mode, f"Line {line_start}: {err}", kind=result.get("kind") or "expression")
+            payload["trace"] = trace
+            payload["steps"] = merged_steps
+            payload["warnings"] = merged_warnings
+            payload["plotly_figure"] = plotly_figure
+            return payload
+
+        trace.append(
+            {
+                "line_start": line_start,
+                "source": statement,
+                "kind": result.get("kind"),
+                "steps": result.get("steps") or [],
+                "value": result.get("value"),
+                "plotly_figure": result.get("plotly_figure"),
+            }
         )
-        base = sp.latex(sym_expr)
-    except Exception:
-        base = expr_code
+        merged_steps.extend(str(step) for step in (result.get("steps") or []))
+        merged_warnings.extend(str(w) for w in (result.get("warnings") or []))
+        if result.get("plotly_figure") is not None:
+            plotly_figure = result.get("plotly_figure")
+        normalized = result.get("normalized_source")
+        if normalized:
+            normalized_sources.append(str(normalized))
+        last_result = result
 
-    if assigned:
-        steps.append(f"{sp.latex(sp.Symbol(assigned))} = {base}")
-    else:
-        steps.append(base)
-
-    subs: Dict[Any, Any] = {}
-    sub_expr = sym_expr
-    if sym_expr is not None:
-        for name in names:
-            if name in user_ns and _is_number(user_ns[name]):
-                subs[sp.Symbol(name)] = user_ns[name]
-        if subs:
-            sub_expr = sym_expr.subs(subs)
-            sub_latex = sp.latex(sub_expr)
-            if sub_latex != base:
-                if assigned:
-                    steps.append(f"{sp.latex(sp.Symbol(assigned))} = {sub_latex}")
-                else:
-                    steps.append(sub_latex)
-
-    unknown_names = {name for name in names if name not in user_ns and name not in _ALLOWED_MATH_NAMES}
-    if unknown_names:
-        return {
-            "ok": True,
-            "steps": steps,
-            "value": None,
-            "assigned": assigned,
-            "mode": mode,
-            "error": None,
-        }
-
-    if sub_expr is None:
-        return {
-            "ok": False,
-            "steps": steps,
-            "value": None,
-            "assigned": assigned,
-            "mode": mode,
-            "error": "Unable to parse expression.",
-        }
-
-    if sub_expr.free_symbols:
-        return {
-            "ok": True,
-            "steps": steps,
-            "value": None,
-            "assigned": assigned,
-            "mode": mode,
-            "error": None,
-        }
-
-    try:
-        value_expr = sp.simplify(sub_expr)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "steps": steps,
-            "value": None,
-            "assigned": assigned,
-            "mode": mode,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-
-    if assigned and ip is not None:
-        ip.user_ns[assigned] = value_expr
-
-    try:
-        value_latex = sp.latex(value_expr)
-    except Exception:
-        value_latex = str(value_expr)
-
-    if assigned:
-        final_step = f"{sp.latex(sp.Symbol(assigned))} = {value_latex}"
-    else:
-        final_step = value_latex
-
-    if not steps or steps[-1] != final_step:
-        steps.append(final_step)
+    if last_result is None:
+        return _error_payload(source, mode, "Empty cell.")
 
     return {
         "ok": True,
-        "steps": steps,
-        "value": value_latex,
-        "assigned": assigned,
+        "kind": last_result.get("kind", "expression"),
+        "steps": merged_steps,
+        "value": last_result.get("value"),
+        "assigned": last_result.get("assigned"),
         "mode": mode,
         "error": None,
+        "warnings": merged_warnings,
+        "normalized_source": "\n".join(normalized_sources) if normalized_sources else raw,
+        "equation_latex": last_result.get("equation_latex"),
+        "plotly_figure": plotly_figure,
+        "trace": trace,
     }
 
 

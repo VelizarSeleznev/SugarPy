@@ -8,3 +8,4 @@ dist/
 .ipython/
 artifacts/
 *.egg-info/
+web/test-results/

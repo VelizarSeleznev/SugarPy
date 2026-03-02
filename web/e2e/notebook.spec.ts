@@ -12,31 +12,120 @@ const setCodeInFirstCell = async (page: any, code: string) => {
   await firstCell.locator('[data-testid="run-cell"]').click();
 };
 
-const expectNoGlobalErrors = async (page: any) => {
+const addMathCellAfterFirstCode = async (page: any) => {
+  const firstNotebookItem = page.locator('.notebook-item').first();
+  const insertPop = firstNotebookItem.locator('.cell-insert-pop').first();
+  await insertPop.hover();
+  await insertPop.getByRole('button', { name: '+ Math' }).click();
+  await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
+};
+
+const setMathInLastCell = async (page: any, source: string) => {
+  const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+  const editor = mathCell.locator('.cm-content').first();
+  await editor.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type(source);
+  await mathCell.locator('[data-testid="run-cell"]').click();
+};
+
+const attachBrowserErrorGuards = (page: any) => {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error: Error) => {
+    pageErrors.push(error.message);
+  });
+  page.on('console', (msg: any) => {
+    if (msg.type() === 'error') {
+      consoleErrors.push(msg.text());
+    }
+  });
+  return { pageErrors, consoleErrors };
+};
+
+const expectNoGlobalErrors = async (
+  page: any,
+  guards: { pageErrors: string[]; consoleErrors: string[] }
+) => {
+  expect(guards.pageErrors).toEqual([]);
+  expect(guards.consoleErrors).toEqual([]);
   const errors = await page.evaluate(() => (window as any).__sugarpy_errors || []);
   expect(errors).toEqual([]);
 };
 
 test.describe('Notebook CAS outputs', () => {
-  test('Math Test: renders SymPy formula via KaTeX', async ({ page }) => {
+  test('@smoke Math Test: renders SymPy formula via KaTeX', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await setCodeInFirstCell(page, 'Integral(x**2, x)');
     await expect(page.getByTestId('katex-formula')).toBeVisible();
-    await expectNoGlobalErrors(page);
+    await expectNoGlobalErrors(page, guards);
   });
 
-  test('Plot Test: renders Plotly graph', async ({ page }) => {
+  test('@smoke Plot Test: renders Plotly graph', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await setCodeInFirstCell(page, 'plot(sin(x))');
     await expect(page.getByTestId('plotly-graph')).toBeVisible();
-    await expectNoGlobalErrors(page);
+    await expect(page.locator('[data-testid="plotly-graph"] .js-plotly-plot')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
   });
 
-  test('Error Test: renders concise runtime error', async ({ page }) => {
+  test('Math plot: plot(sin(x)) renders Plotly graph under Math cell', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(page, 'plot(sin(x))');
+    await expect(page.getByTestId('plotly-graph')).toBeVisible();
+    await expect(page.locator('[data-testid="plotly-graph"] .js-plotly-plot')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Math multiline plot: plot(\\n ...) renders Plotly graph', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(
+      page,
+      `plot(
+  sin(x),
+  xmin=-2,
+  xmax=2,
+  title='demo'
+)`
+    );
+    await expect(page.getByTestId('plotly-graph')).toBeVisible();
+    await expect(page.locator('[data-testid=\"plotly-graph\"] .js-plotly-plot')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('@smoke Error Test: renders concise runtime error without app crash', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await setCodeInFirstCell(page, '1/0');
     const errorOutput = page.getByTestId('cell-error');
     await expect(errorOutput).toBeVisible();
     await expect(errorOutput).toContainText('ZeroDivisionError: division by zero');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Math equation: x^2 = 2 renders in Math cell', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(page, 'x^2 = 2');
+    await expect(page.getByTestId('math-output').last()).toBeVisible();
+    await expect(page.getByTestId('math-latex').last()).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Critical flow: Code function is callable from Math cell', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setCodeInFirstCell(page, 'def f(x):\n    return x + 1');
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(page, 'f(3)');
+    await expect(page.getByTestId('math-output').last()).toContainText('4');
+    await expectNoGlobalErrors(page, guards);
   });
 });

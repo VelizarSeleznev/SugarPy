@@ -347,6 +347,7 @@ body {
 
 .cell-main {
   flex: 1;
+  min-width: 0;
 }
 
 .cell-menu {
@@ -615,6 +616,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .math-trace-source {
@@ -629,7 +631,21 @@ body {
 }
 
 .math-step {
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.math-step .katex-display {
+  margin: 0.4em 0;
+  overflow: hidden;
+}
+
+.math-step .katex-display > .katex {
+  white-space: normal;
+}
+
+.math-step .katex-display > .katex > .base {
+  margin: 0.2em 0;
 }
 
 .math-error {

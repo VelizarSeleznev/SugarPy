@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "id": "nb-projektopgaver-rundkoersel-cas",
+  "name": "Projektopgaver Rundkoersel (CAS-first, extra-guided)",
+  "trigMode": "deg",
+  "updatedAt": "2026-03-02T12:50:00.000000Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# Projektopgaver: Rundkorsel - Step-by-step CAS notebook\n\nThis notebook is intentionally very explicit.\nEvery new variable is explained before it is used.\n\nHow to work with it:\n1. Run one math cell.\n2. Read the result.\n3. Only then go to the next cell.\n\nTrig mode is degrees (`trigMode = deg`)."
+    },
+    {
+      "id": "cell-2",
+      "type": "markdown",
+      "source": "## Original task (quoted)\n\n> Projektopgaver: Rundkørsel\n> Bestem cirklens ligning for vejbanens inderste cirkel, hvis koordinatsystemet anbringes i rundkørslens midte.\n> Bestem cirklens ligning for den yderste cirkel, der går igennem punkterne A (3,38) og B (26,25) i det indlagte koordinatsystem.\n> Hvor lang tid vil det tage at køre en hel tur midt i rundkørslen med en anbefalet max hastighed på 30 km/t?\n> Bestem koordinaterne til punkterne C og D, når det gives, at Kalundborgvej møder rundkørslen symmetrisk fra B til D. Vinklen imellem de to veje er 91 grader.\n> Bestem herefter vinklen imellem de to tangenter til cirklen i punkterne A og C samt B og D.\n> Bestem den korteste afstand imellem en bilist midt på vejbanen i rundkørslen og den ventende blå bils midtpunkt P (43,30).\n> Du skal nu projektere en ny vej, hvis linjeføring skal \"ramme\" rundkørslen fra nordøstlig retning."
+    },
+    {
+      "id": "cell-3",
+      "type": "markdown",
+      "source": "## Data from the map\n\nKnown points:\n- `A = (3,38)`\n- `B = (26,25)`\n- `P = (43,30)`\n\nKnown radii:\n- inner radius `rin = 15`\n- outer radius `rout = 25`\n- middle-lane radius `rmid = 20`\n\nKnown angle:\n- `AOC = 91 deg`"
+    },
+    {
+      "id": "cell-4",
+      "type": "math",
+      "source": "Ax := 3\nAy := 38\nBx := 26\nBy := 25\nPx := 43\nPy := 30\n\nrin := 15\nrout := 25\nrmid := 20",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-5",
+      "type": "markdown",
+      "source": "## Mini dictionary of symbols (used later)\n\nCenter and coordinates:\n- `O = (h0,k0)` = center of the roundabout in embedded `(x,y)` coordinates.\n- `(u,v)` = local coordinates when center is moved to origin.\n\nSegment AB helper values:\n- `dx, dy` = vector components from A to B.\n- `Dab` = distance from A to B.\n- `mx, my` = midpoint of segment AB.\n- `a` = half of chord length AB (`a = Dab/2`).\n- `ux, uy` = unit vector perpendicular to AB.\n- `halfChordToCenter` = distance from chord midpoint to circle center.\n\nPoints built later:\n- `C` from rotating vector `OA` by 91 deg.\n- `D` from reflection of `B` across axis `OC`."
+    },
+    {
+      "id": "cell-6",
+      "type": "markdown",
+      "source": "## 1) Inner circle equation in centered coordinates\n\nIf center is origin `(u,v)=(0,0)`, circle equation is `u^2 + v^2 = r^2`."
+    },
+    {
+      "id": "cell-7",
+      "type": "math",
+      "source": "u^2 + v^2 = rin^2\nu^2 + v^2 = rout^2\nu^2 + v^2 = rmid^2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-8",
+      "type": "markdown",
+      "source": "Task 1 answer:\n\n`u^2 + v^2 = 225`"
+    },
+    {
+      "id": "cell-9",
+      "type": "markdown",
+      "source": "## 2) Outer circle through A and B (very explicit)\n\nGoal: find center `O=(h0,k0)` of the outer circle with radius `rout=25`.\n\nPlan:\n1. Build geometric helpers for segment AB.\n2. Compute two possible centers.\n3. Pick the one consistent with the picture (higher y-value)."
+    },
+    {
+      "id": "cell-10",
+      "type": "markdown",
+      "source": "### 2.1 Compute vector AB and its length\n\nVariables introduced now:\n- `dx = Bx-Ax`: horizontal move from A to B.\n- `dy = By-Ay`: vertical move from A to B.\n- `Dab = sqrt(dx^2+dy^2)`: distance AB."
+    },
+    {
+      "id": "cell-11",
+      "type": "math",
+      "source": "dx := Bx - Ax\ndy := By - Ay\nDab := sqrt(dx^2 + dy^2)\n\ndx\ndy\nN(Dab)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-12",
+      "type": "markdown",
+      "source": "### 2.2 Midpoint of AB and half-chord length\n\nVariables:\n- `mx,my`: midpoint of AB.\n- `a = Dab/2`: half of the chord length."
+    },
+    {
+      "id": "cell-13",
+      "type": "math",
+      "source": "mx := (Ax + Bx)/2\nmy := (Ay + By)/2\na := Dab/2\n\nmx\nmy\nN(a)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-14",
+      "type": "markdown",
+      "source": "### 2.3 Perpendicular unit direction and center offset\n\nWhy this works:\n- Any circle center through A and B lies on the perpendicular bisector of AB.\n\nVariables:\n- `ux,uy`: unit vector perpendicular to AB.\n- `halfChordToCenter = sqrt(rout^2 - a^2)`: distance from midpoint to center."
+    },
+    {
+      "id": "cell-15",
+      "type": "math",
+      "source": "ux := -dy / Dab\nuy := dx / Dab\nhalfChordToCenter := sqrt(rout^2 - a^2)\n\nN(ux)\nN(uy)\nN(halfChordToCenter)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-16",
+      "type": "markdown",
+      "source": "### 2.4 Two center candidates\n\n`(h1,k1)` and `(h2,k2)` are symmetric around midpoint `(mx,my)`."
+    },
+    {
+      "id": "cell-17",
+      "type": "math",
+      "source": "h1 := mx + ux*halfChordToCenter\nk1 := my + uy*halfChordToCenter\nh2 := mx - ux*halfChordToCenter\nk2 := my - uy*halfChordToCenter\n\nN(h1)\nN(k1)\nN(h2)\nN(k2)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-18",
+      "type": "markdown",
+      "source": "### 2.5 Choose the map-consistent center\n\nOn the image, center is above A and B, so we choose the candidate with bigger y-value."
+    },
+    {
+      "id": "cell-19",
+      "type": "math",
+      "source": "h0 := h1\nk0 := k1\n\nN(h0)\nN(k0)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-20",
+      "type": "markdown",
+      "source": "### 2.6 Outer circle equation in embedded coordinates"
+    },
+    {
+      "id": "cell-21",
+      "type": "math",
+      "source": "(x - h0)^2 + (y - k0)^2 = rout^2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-22",
+      "type": "markdown",
+      "source": "## 3) Time for one full lap on the middle lane\n\nVariables:\n- `L`: lap length `2*pi*rmid`.\n- `speed`: 30 km/h converted to m/s.\n- `T`: travel time `L/speed`."
+    },
+    {
+      "id": "cell-23",
+      "type": "math",
+      "source": "L := 2*pi*rmid\nspeed := 30000/3600\nT := L / speed\n\nN(L)\nN(T)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-24",
+      "type": "markdown",
+      "source": "## 4) Point C and point D\n\n### 4.1 Build vector from center to A: `vA = OA`"
+    },
+    {
+      "id": "cell-25",
+      "type": "math",
+      "source": "vAx := Ax - h0\nvAy := Ay - k0\n\nN(vAx)\nN(vAy)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-26",
+      "type": "markdown",
+      "source": "### 4.2 Rotate OA by +91 and -91 degrees to get two C-candidates"
+    },
+    {
+      "id": "cell-27",
+      "type": "math",
+      "source": "vCpx := vAx*cos(91) - vAy*sin(91)\nvCpy := vAx*sin(91) + vAy*cos(91)\nvCmx := vAx*cos(91) + vAy*sin(91)\nvCmy := -vAx*sin(91) + vAy*cos(91)\n\nCplusx := h0 + vCpx\nCplusy := k0 + vCpy\nCminusx := h0 + vCmx\nCminusy := k0 + vCmy\n\nN(Cplusx)\nN(Cplusy)\nN(Cminusx)\nN(Cminusy)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-28",
+      "type": "markdown",
+      "source": "Choose `C = Cplus` because it matches the point placement on the map."
+    },
+    {
+      "id": "cell-29",
+      "type": "math",
+      "source": "Cx := Cplusx\nCy := Cplusy\nN(Cx)\nN(Cy)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-30",
+      "type": "markdown",
+      "source": "### 4.3 Compute D by reflecting B around axis OC\n\nVariables:\n- `vB`: vector OB.\n- `(dxC,dyC)`: vector OC.\n- `projx, projy`: projection of OB on OC.\n- `vD`: reflected vector OD."
+    },
+    {
+      "id": "cell-31",
+      "type": "math",
+      "source": "vBx := Bx - h0\nvBy := By - k0\ndxC := Cx - h0\ndyC := Cy - k0\n\ndotBC := vBx*dxC + vBy*dyC\ndotCC := dxC^2 + dyC^2\nprojx := (dotBC/dotCC)*dxC\nprojy := (dotBC/dotCC)*dyC\n\nvDx := 2*projx - vBx\nvDy := 2*projy - vBy\nDx := h0 + vDx\nDy := k0 + vDy\n\nN(Dx)\nN(Dy)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-32",
+      "type": "markdown",
+      "source": "### 4.4 Check C and D are on outer circle"
+    },
+    {
+      "id": "cell-33",
+      "type": "math",
+      "source": "checkC := simplify((Cx - h0)^2 + (Cy - k0)^2 - rout^2)\ncheckD := simplify((Dx - h0)^2 + (Dy - k0)^2 - rout^2)\n\ncheckC\ncheckD\n\ncheckCnum := abs(N(checkC, 16))\ncheckDnum := abs(N(checkD, 16))\ncheckCnum < 10^(-10)\ncheckDnum < 10^(-10)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-34",
+      "type": "markdown",
+      "source": "### 4.5 Angles between tangents\n\nRule:\n- tangent angle = `180 - central angle`.\n\nSo:\n- `phiAC = 180 - 91`\n- `phiBD = 180 - thetaBD`, where `thetaBD = angle(BOD)` from dot product."
+    },
+    {
+      "id": "cell-35",
+      "type": "math",
+      "source": "phiAC := 180 - 91\nthetaBD := (180/pi) * acos((vBx*vDx + vBy*vDy)/rout^2)\nphiBD := 180 - thetaBD\n\nphiAC\nN(thetaBD)\nN(phiBD)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-36",
+      "type": "markdown",
+      "source": "## 5) Shortest distance from mid-lane driver to P\n\nIf driver is on circle radius `rmid` around O, shortest distance to point P is radial:\n\n`dmin = abs(OP - rmid)`"
+    },
+    {
+      "id": "cell-37",
+      "type": "math",
+      "source": "OP := sqrt((Px - h0)^2 + (Py - k0)^2)\ndmin := abs(OP - rmid)\n\nN(OP)\nN(dmin)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-38",
+      "type": "markdown",
+      "source": "## 6) New road from northeast\n\nAssumption used (same as before):\n- centerline direction is 45 deg,\n- approach width matches Kalundborgvej."
+    },
+    {
+      "id": "cell-39",
+      "type": "markdown",
+      "source": "### 6.1 Centerline equation\n\nVariables:\n- `(uNEx,uNEy) = (cos45,sin45)` direction unit vector.\n- `mNE = tan45 = 1` slope.\n- `bNE = k0 - mNE*h0` intercept, so line is `y = x + bNE`."
+    },
+    {
+      "id": "cell-40",
+      "type": "math",
+      "source": "uNEx := cos(45)\nuNEy := sin(45)\nmNE := tan(45)\nbNE := k0 - mNE*h0\n\nN(mNE)\nN(bNE)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-41",
+      "type": "markdown",
+      "source": "### 6.2 Centerline hit point on outer circle"
+    },
+    {
+      "id": "cell-42",
+      "type": "math",
+      "source": "Ex := h0 + rout*uNEx\nEy := k0 + rout*uNEy\n\nN(Ex)\nN(Ey)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-43",
+      "type": "markdown",
+      "source": "### 6.3 Approach half-angle alpha from Kalundborg side\n\n`alpha = angle(BOC)`."
+    },
+    {
+      "id": "cell-44",
+      "type": "math",
+      "source": "alphaN := N((180/pi) * acos((vBx*(Cx - h0) + vBy*(Cy - k0))/rout^2), 8)\nalphaN",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-45",
+      "type": "markdown",
+      "source": "### 6.4 Two edge contact points E1 and E2\n\nRotate the 45-degree direction by `+alpha` and `-alpha`."
+    },
+    {
+      "id": "cell-46",
+      "type": "math",
+      "source": "u1x := uNEx*cos(alphaN) - uNEy*sin(alphaN)\nu1y := uNEx*sin(alphaN) + uNEy*cos(alphaN)\nu2x := uNEx*cos(alphaN) + uNEy*sin(alphaN)\nu2y := -uNEx*sin(alphaN) + uNEy*cos(alphaN)\n\nE1x := h0 + rout*u1x\nE1y := k0 + rout*u1y\nE2x := h0 + rout*u2x\nE2y := k0 + rout*u2y\n\nN(E1x)\nN(E1y)\nN(E2x)\nN(E2y)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-47",
+      "type": "markdown",
+      "source": "### 6.5 Tangent lines at E1 and E2\n\nFor any tangent point `T=(Tx,Ty)`:\n\n`(Tx-h0)*(x-h0) + (Ty-k0)*(y-k0) = rout^2`"
+    },
+    {
+      "id": "cell-48",
+      "type": "math",
+      "source": "a1 := E1x - h0\nb1 := E1y - k0\nrhs1 := rout^2 + a1*h0 + b1*k0\n\na2 := E2x - h0\nb2 := E2y - k0\nrhs2 := rout^2 + a2*h0 + b2*k0\n\nN(a1)\nN(b1)\nN(rhs1)\nN(a2)\nN(b2)\nN(rhs2)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-49",
+      "type": "markdown",
+      "source": "## Final answer cell (compact)\n\nUse this for copy/paste into final report."
+    },
+    {
+      "id": "cell-50",
+      "type": "math",
+      "source": "N(h0)\nN(k0)\n(x - h0)^2 + (y - k0)^2 = rout^2\nu^2 + v^2 = rin^2\n\nN(T)\nN(Cx)\nN(Cy)\nN(Dx)\nN(Dy)\nN(phiAC)\nN(phiBD)\nN(dmin)\n\ny = x + bNE\nN(Ex)\nN(Ey)\nN(E1x)\nN(E1y)\nN(E2x)\nN(E2y)\n\na1*x + b1*y = rhs1\na2*x + b2*y = rhs2",
+      "mathOutput": null
+    }
+  ]
+}

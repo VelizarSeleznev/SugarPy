@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './ui/App';
+import { WikiPage } from './ui/WikiPage';
 import './styles.css';
 import 'katex/dist/katex.min.css';
 
@@ -37,7 +38,8 @@ window.addEventListener('unhandledrejection', (event) => {
 
 try {
   const root = createRoot(rootEl);
-  root.render(<App />);
+  const isWikiPage = window.location.pathname === '/wiki' || window.location.pathname === '/wiki/';
+  root.render(isWikiPage ? <WikiPage /> : <App />);
 } catch (err) {
   renderFatal(err instanceof Error ? err.message : String(err));
 }

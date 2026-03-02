@@ -4,6 +4,7 @@
 SugarPy is a local notebook toolkit:
 - Python package for math and chemistry helpers.
 - React/Vite web UI for notebook-style interaction with a local Jupyter kernel.
+- CAS-style Math cell parser/evaluator for teacher-friendly math input.
 
 ## Top-level layout
 - `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading).
@@ -13,12 +14,22 @@ SugarPy is a local notebook toolkit:
 - `notebooks/`: local notebooks.
 - `artifacts/`, `output/`: generated outputs.
 
+## Main user entry points
+- Notebook app: `http://localhost:5173/`
+- Standalone teacher wiki page: `http://localhost:5173/wiki`
+- Demo notebook: `notebooks/CoreFeaturesDemo.ipynb`
+
 ## Key scripts
 - `scripts/run-all.sh`: starts Jupyter backend and Vite dev server together.
 - `scripts/launch.sh`: starts Jupyter server only.
 - `scripts/test-all.sh`: full Python + frontend + UI checks.
-- `scripts/ui-check.sh`: headless UI console-error check via `agent-browser`.
+- `scripts/ui-check.sh`: Playwright smoke UI checks (`@smoke`).
 - `scripts/sync-functions.sh`: syncs user function file (`~/.sugarpy/user_functions.py`) into runtime location.
+
+## Specs
+- Math cell behavior and syntax: `docs/MATH_CELL_SPEC.md`.
+- Notebook authoring guidelines (large tasks): `docs/ASSIGNMENT_GUIDELINES.md`.
+- Testing policy and maintenance rules: `docs/TESTING_PRINCIPLES.md`.
 
 ## External state
 - User functions are loaded from `~/.sugarpy/user_functions.py`.

@@ -41,8 +41,7 @@ Run full checks (includes UI console checks):
 ```
 
 `./scripts/test-all.sh` uses `uv` for Python deps and `npm ci` for the web app.
-
-UI checks use `agent-browser` in headless mode by default.
+UI checks use Playwright (smoke/e2e) in headless mode by default.
 
 ## Current UI/UX behavior (for future context)
 - Code cells use CodeMirror 6 (Python). Shift+Enter runs the cell; Tab indents; Enter accepts autocomplete.
@@ -53,6 +52,13 @@ UI checks use `agent-browser` in headless mode by default.
 - Cell menu (top-right) supports move up/down and delete.
 - Function autocomplete combines library functions + any `def` executed in the session.
 - Library functions are auto-loaded into the kernel on connect (no import needed).
+- Math cells are CAS-style: `=` means equation, `:=` means assignment, `^` is supported, and implicit multiplication works.
+- Math cells share namespace with Code cells (functions/variables defined in Code cells are available in Math cells).
+
+## Code vs Math cell
+- Use **Code cells** for Python logic (`def`, loops, imports, custom utilities).
+- Use **Math cells** for CAS input (`x^2 + 2x + 1`, `x^2 = 2`, `a := 5`).
+- If you need to define a function, do it in Code and then call it from Math.
 
 ## Function Library
 - Built-in function list: `web/public/functions.json`
