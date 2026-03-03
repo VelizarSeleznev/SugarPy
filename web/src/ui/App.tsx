@@ -96,8 +96,35 @@ const asText = (value: unknown) => {
   return String(value);
 };
 
+const resolveDefaultServerUrl = () => {
+  const envUrl = (import.meta.env.VITE_JUPYTER_URL || '').trim();
+  const host = window.location.hostname.toLowerCase();
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  if (envUrl) {
+    const envLooksLocal =
+      envUrl.startsWith('http://localhost') || envUrl.startsWith('http://127.0.0.1') || envUrl.startsWith('https://localhost');
+    if (envLooksLocal && !isLocalHost) {
+      return '/jupyter/';
+    }
+    return envUrl;
+  }
+  return isLocalHost ? 'http://localhost:8888' : '/jupyter/';
+};
+
+const resolveServerConfig = (rawServerUrl: string) => {
+  const fallback = resolveDefaultServerUrl();
+  const trimmed = (rawServerUrl || '').trim() || fallback;
+  const resolved = new URL(trimmed, window.location.origin);
+  const protocol = resolved.protocol.toLowerCase();
+  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  const baseUrl = resolved.toString().replace(/\/?$/, '/');
+  const wsUrl = `${wsProtocol}//${resolved.host}${resolved.pathname.replace(/\/?$/, '/')}`;
+  return { baseUrl, wsUrl };
+};
+
 function App() {
-  const [serverUrl, setServerUrl] = useState(import.meta.env.VITE_JUPYTER_URL || 'http://localhost:8888');
+  const defaultServerUrl = resolveDefaultServerUrl();
+  const [serverUrl, setServerUrl] = useState(defaultServerUrl);
   const [token, setToken] = useState(import.meta.env.VITE_JUPYTER_TOKEN || 'sugarpy');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -164,10 +191,11 @@ function App() {
     setStatus('connecting');
     setErrorMsg('');
     try {
+      const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
       const settings = ServerConnection.makeSettings({
-        baseUrl: serverUrl,
+        baseUrl,
         token,
-        wsUrl: serverUrl.replace(/^http/, 'ws'),
+        wsUrl,
         appendToken: true
       });
       const manager = new KernelManager({ serverSettings: settings });
@@ -183,13 +211,15 @@ function App() {
 
   const activeKernel = kernel;
 
-  const getServerSettings = () =>
-    ServerConnection.makeSettings({
-      baseUrl: serverUrl,
+  const getServerSettings = () => {
+    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
+    return ServerConnection.makeSettings({
+      baseUrl,
       token,
-      wsUrl: serverUrl.replace(/^http/, 'ws'),
+      wsUrl,
       appendToken: true
     });
+  };
 
   const getAutosavePath = (id: string) => `notebooks/.sugarpy-autosave/${id}.sugarpy`;
 
@@ -820,10 +850,11 @@ function App() {
     const name = notebookName.trim() || 'Untitled';
     const filename = name.endsWith('.ipynb') ? name : `${name}.ipynb`;
     const path = filename.includes('/') ? filename : `notebooks/${filename}`;
+    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
     const settings = ServerConnection.makeSettings({
-      baseUrl: serverUrl,
+      baseUrl,
       token,
-      wsUrl: serverUrl.replace(/^http/, 'ws'),
+      wsUrl,
       appendToken: true
     });
     const contents = new ContentsManager({ serverSettings: settings });

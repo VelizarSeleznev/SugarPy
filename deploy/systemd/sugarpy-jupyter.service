@@ -1,0 +1,19 @@
+[Unit]
+Description=SugarPy Jupyter Server
+After=network.target
+
+[Service]
+Type=simple
+User=sugarpy
+WorkingDirectory=/opt/sugarpy/SugarPy
+Environment=IPYTHONDIR=/opt/sugarpy/SugarPy/.ipython
+Environment=UV_PROJECT_ENVIRONMENT=/opt/sugarpy/SugarPy/.venv
+ExecStart=/bin/bash -lc 'mkdir -p "$IPYTHONDIR/profile_default/startup"; printf "from sugarpy.startup import *\n" > "$IPYTHONDIR/profile_default/startup/00-sugarpy.py"; uv sync --extra lab --frozen; source .venv/bin/activate; exec jupyter server --no-browser --ip=127.0.0.1 --ServerApp.port=8888 --ServerApp.port_retries=0 --ServerApp.base_url=/jupyter/ --IdentityProvider.token=sugarpy --ServerApp.log_level=ERROR --LabApp.log_level=ERROR --ServerApp.websocket_ping_interval=30000 --ServerApp.websocket_ping_timeout=30000 --ServerApp.allow_origin=* --ServerApp.allow_remote_access=True --ServerApp.allow_credentials=True --ServerApp.disable_check_xsrf=True --MappingKernelManager.cull_idle_timeout=1800 --MappingKernelManager.cull_interval=60'
+Restart=on-failure
+RestartSec=5
+MemoryMax=8G
+MemorySwapMax=0
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

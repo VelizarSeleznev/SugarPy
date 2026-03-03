@@ -443,6 +443,16 @@ body {
   display: none;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .cell-insert-actions {
+    display: inline-flex;
+  }
+
+  .cell-insert-toggle {
+    display: none;
+  }
+}
+
 .cell-insert-btn {
   border: 1px dashed var(--border);
   background: transparent;

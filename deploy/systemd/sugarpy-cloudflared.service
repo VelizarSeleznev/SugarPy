@@ -1,0 +1,15 @@
+[Unit]
+Description=SugarPy Cloudflare Quick Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=egg
+WorkingDirectory=/home/egg
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:18081
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

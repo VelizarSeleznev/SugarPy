@@ -11,6 +11,7 @@ SugarPy is a local notebook toolkit:
 - `web/src/`: frontend app code.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
 - `scripts/`: run/test/dev automation scripts.
+- `deploy/`: demo deployment examples (Nginx + systemd, including cloudflared service).
 - `notebooks/`: local notebooks.
 - `artifacts/`, `output/`: generated outputs.
 
@@ -30,6 +31,8 @@ SugarPy is a local notebook toolkit:
 - Math cell behavior and syntax: `docs/MATH_CELL_SPEC.md`.
 - Notebook authoring guidelines (large tasks): `docs/ASSIGNMENT_GUIDELINES.md`.
 - Testing policy and maintenance rules: `docs/TESTING_PRINCIPLES.md`.
+- Demo deployment guide: `docs/DEPLOY_DEMO.md`.
+- Current server deployment snapshot: `docs/DEPLOY_STATE.md`.
 
 ## External state
 - User functions are loaded from `~/.sugarpy/user_functions.py`.

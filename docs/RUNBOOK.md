@@ -40,6 +40,10 @@ What it does:
 See `docs/ASSIGNMENT_GUIDELINES.md` for the recommended structure and conventions
 for multi-step CAS-first assignments.
 
+## Demo deployment (single host, multi-user)
+See `docs/DEPLOY_DEMO.md` for the reverse-proxy + Jupyter server demo setup.
+See `docs/DEPLOY_STATE.md` for the current working deployment snapshot on server.
+
 ## Start backend only
 ```bash
 ./scripts/launch.sh
