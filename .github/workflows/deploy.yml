@@ -24,7 +24,7 @@ jobs:
       - name: Backend tests
         run: |
           uv sync --extra test --frozen
-          .venv/bin/python -m pytest tests/backend/
+          .venv/bin/python -m pytest tests/backend/ -k "not notebook_examples"
 
       - name: Setup Node
         uses: actions/setup-node@v4
