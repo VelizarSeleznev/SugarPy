@@ -50,6 +50,35 @@ cloudflared tunnel --url http://localhost:8080
 
 Cloudflared prints a temporary `https://...trycloudflare.com` URL.
 
+## GitHub Actions deployment (no browser flow required)
+This repository includes CI/CD in `.github/workflows/deploy.yml`:
+- Runs backend tests (`pytest tests/backend/`) and frontend build.
+- Deploys to a remote host over SSH only after checks pass.
+
+Set required GitHub repository secrets from terminal:
+```bash
+./scripts/setup-gh-deploy-secrets.sh seggver sugarpy /opt/sugarpy/SugarPy 22 sugarpy
+```
+
+Required secrets:
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_PATH`
+- `DEPLOY_PORT`
+- `DEPLOY_SSH_KEY` (private key used by Actions)
+- `DEPLOY_SSH_KNOWN_HOSTS`
+- `DEPLOY_JUPYTER_TOKEN` (for post-deploy API health check)
+
+Manual deploy from local terminal (same mechanism as CI):
+```bash
+DEPLOY_HOST=seggver \
+DEPLOY_USER=sugarpy \
+DEPLOY_PATH=/opt/sugarpy/SugarPy \
+DEPLOY_PORT=22 \
+DEPLOY_JUPYTER_TOKEN=sugarpy \
+./scripts/deploy-remote.sh
+```
+
 ## Notes and limitations
 - This is a demo configuration (shared token, no per-user account isolation).
 - For production multi-user separation, migrate to JupyterHub/TLJH.
