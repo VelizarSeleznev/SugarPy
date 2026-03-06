@@ -18,9 +18,13 @@ What it does:
 ## Notebook persistence (autosave + recovery)
 - The UI now keeps a local autosave in browser `localStorage` for crash/reload recovery.
 - The UI also writes a server autosave (`.sugarpy`) to:
-  `notebooks/.sugarpy-autosave/<notebook-id>.sugarpy`
+  `notebooks/sugarpy-autosave/<notebook-id>.sugarpy`
 - On startup, SugarPy restores the newest version between local autosave and server autosave.
 - Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
+- Notebook actions are available from the top-right `⋮` menu in the fixed header.
+- A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
+- New cells are created from the single bottom `+ Add Cell` control.
+- On phone portrait touch devices, cell actions move to a fixed action bar above the virtual keyboard while editing.
 
 ## Open the standalone wiki page
 - Open `http://localhost:5173/wiki`

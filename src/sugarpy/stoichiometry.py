@@ -8,6 +8,11 @@ import re
 
 from chempy import Substance, balance_stoichiometry
 
+from .utils import display_sugarpy
+
+
+STOICH_MIME_TYPE = "application/vnd.sugarpy.stoich+json"
+
 
 _ARROW_RE = re.compile(r"->|=")
 _COEFF_RE = re.compile(r"^\s*[0-9]+(?:\.[0-9]+)?\s*")
@@ -209,3 +214,10 @@ def render_stoichiometry(reaction: str, inputs: Any = None) -> Dict[str, Any]:
         "equation_latex": equation_latex,
         "species": species_rows,
     }
+
+
+def display_stoichiometry(reaction: str, inputs: Any = None) -> Dict[str, Any]:
+    """Render stoichiometry and send structured payload via Jupyter MIME output."""
+    payload = render_stoichiometry(reaction, inputs)
+    display_sugarpy({**payload, "schema_version": 1}, STOICH_MIME_TYPE)
+    return payload

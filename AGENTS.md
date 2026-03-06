@@ -13,6 +13,7 @@ This file is a table of contents for contributors and agents.
 
 ## Required quality gates
 - For behavior changes, update the relevant file under `docs/`.
+- For Math-cell command/function changes, update `docs/MATH_CELL_SPEC.md` in the same change set.
 - For UI changes, run `./scripts/ui-check.sh` (or `./scripts/test-all.sh`) and report the browser result.
 - Do not mark work complete when script checks fail or UI console errors remain.
 

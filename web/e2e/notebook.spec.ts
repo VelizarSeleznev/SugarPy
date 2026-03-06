@@ -13,10 +13,9 @@ const setCodeInFirstCell = async (page: any, code: string) => {
 };
 
 const addMathCellAfterFirstCode = async (page: any) => {
-  const firstNotebookItem = page.locator('.notebook-item').first();
-  const insertPop = firstNotebookItem.locator('.cell-insert-pop').first();
-  await insertPop.hover();
-  await insertPop.getByRole('button', { name: '+ Math' }).click();
+  const divider = page.getByTestId('cell-divider-1');
+  await divider.hover();
+  await divider.getByRole('button', { name: 'Math' }).click();
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 

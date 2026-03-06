@@ -37,13 +37,23 @@ class MathParseError(ValueError):
 
 @dataclass(frozen=True)
 class ParsedMathInput:
-    kind: Literal["assignment", "equation", "expression"]
+    kind: Literal["assignment", "function_assignment", "equation", "expression"]
     source: str
     normalized_source: str
     lhs_source: str | None = None
     rhs_source: str | None = None
     assigned_name: str | None = None
+    assigned_names: tuple[str, ...] = ()
+    function_name: str | None = None
+    function_args: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RenderDirective:
+    value: Any
+    mode: Literal["decimal", "exact"]
+    places: int | None = None
 
 
 def _scan_top_level(source: str) -> Dict[str, list[int]]:
@@ -113,6 +123,89 @@ def _check_blocked_identifiers(source: str) -> None:
             raise MathParseError(f"'{name}' is not allowed in Math cells.")
 
 
+def _split_top_level_commas(source: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for ch in source:
+        if quote:
+            buf.append(ch)
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == quote:
+                quote = None
+            continue
+
+        if ch in {"'", '"'}:
+            quote = ch
+            buf.append(ch)
+            continue
+
+        if ch in "([{":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch in ")]}":
+            depth -= 1
+            buf.append(ch)
+            continue
+
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+
+    parts.append("".join(buf).strip())
+    return [part for part in parts if part]
+
+
+def _parse_assignment_targets(lhs: str) -> tuple[str, ...]:
+    trimmed = lhs.strip()
+    if trimmed.startswith("(") and trimmed.endswith(")"):
+        trimmed = trimmed[1:-1].strip()
+    targets = tuple(_split_top_level_commas(trimmed))
+    if not targets:
+        raise MathParseError("Left side of ':=' must define at least one variable name.")
+    for target in targets:
+        if not _ASSIGN_TARGET_RE.match(target):
+            raise MathParseError(
+                "Left side of ':=' must be a variable name or comma-separated variable names."
+            )
+    if len(set(targets)) != len(targets):
+        raise MathParseError("Duplicate names are not allowed on assignment left side.")
+    return targets
+
+
+def _parse_function_target(lhs: str) -> tuple[str, tuple[str, ...]] | None:
+    trimmed = lhs.strip()
+    open_idx = trimmed.find("(")
+    close_idx = trimmed.rfind(")")
+    if open_idx <= 0 or close_idx != len(trimmed) - 1:
+        return None
+    name = trimmed[:open_idx].strip()
+    if not _ASSIGN_TARGET_RE.match(name):
+        return None
+    raw_args = trimmed[open_idx + 1 : close_idx].strip()
+    if not raw_args:
+        return name, ()
+    args = tuple(_split_top_level_commas(raw_args))
+    if not args:
+        return name, ()
+    for arg in args:
+        if not _ASSIGN_TARGET_RE.match(arg):
+            raise MathParseError("Function arguments must be simple variable names.")
+    if len(set(args)) != len(args):
+        raise MathParseError("Duplicate function argument names are not allowed.")
+    return name, args
+
+
 def parse_math_input(source: str) -> ParsedMathInput:
     raw = (source or "").strip()
     if not raw:
@@ -130,15 +223,29 @@ def parse_math_input(source: str) -> ParsedMathInput:
         rhs = raw[idx + 2 :].strip()
         if not lhs or not rhs:
             raise MathParseError("Assignment must have both name and expression.")
-        if not _ASSIGN_TARGET_RE.match(lhs):
-            raise MathParseError("Left side of ':=' must be a single variable name.")
+        function_target = _parse_function_target(lhs)
+        if function_target is not None:
+            function_name, function_args = function_target
+            return ParsedMathInput(
+                kind="function_assignment",
+                source=raw,
+                normalized_source=f"{lhs} := {rhs}",
+                lhs_source=lhs,
+                rhs_source=rhs,
+                assigned_name=function_name,
+                assigned_names=(function_name,),
+                function_name=function_name,
+                function_args=function_args,
+            )
+        targets = _parse_assignment_targets(lhs)
         return ParsedMathInput(
             kind="assignment",
             source=raw,
             normalized_source=f"{lhs} := {rhs}",
             lhs_source=lhs,
             rhs_source=rhs,
-            assigned_name=lhs,
+            assigned_name=targets[0],
+            assigned_names=targets,
         )
 
     if len(marks["equation"]) > 1:
@@ -197,6 +304,35 @@ def build_math_locals(
         except Exception:
             return sp.N(value, *args, **kwargs)
 
+    def _resolve_decimal_places(places: Any | None) -> int:
+        def _fallback_default() -> int:
+            default_places = user_ns.get("__sugarpy_decimal_places", 4)
+            try:
+                resolved_default = int(default_places)
+            except Exception:
+                resolved_default = 4
+            return min(max(resolved_default, 0), 12)
+
+        if places is None:
+            return _fallback_default()
+        try:
+            resolved = int(places)
+        except Exception:
+            # Keep rendering resilient: if places cannot be parsed, use configured/default precision.
+            return _fallback_default()
+        return min(max(resolved, 0), 12)
+
+    def set_decimal_places(places: Any) -> int:
+        resolved = _resolve_decimal_places(places)
+        user_ns["__sugarpy_decimal_places"] = resolved
+        return resolved
+
+    def render_decimal(value: Any, places: Any | None = None) -> RenderDirective:
+        return RenderDirective(value=value, mode="decimal", places=_resolve_decimal_places(places))
+
+    def render_exact(value: Any) -> RenderDirective:
+        return RenderDirective(value=value, mode="exact", places=None)
+
     def _normalize_equations_for_solve(value: Any) -> Any:
         if isinstance(value, sp.Equality):
             return sp.simplify(value.lhs - value.rhs)
@@ -210,7 +346,30 @@ def build_math_locals(
 
     def solve(equations: Any, *args: Any, **kwargs: Any) -> Any:
         normalized = _normalize_equations_for_solve(equations)
-        return sp.solve(normalized, *args, **kwargs)
+        try:
+            return sp.solve(normalized, *args, **kwargs)
+        except Exception as exc:
+            # SymPy can fail with `CoercionFailed: nan is not in any domain` for exact polynomial systems.
+            # Fallback to polynomial solver when possible to preserve exact symbolic output.
+            msg = str(exc).lower()
+            if "nan is not in any domain" not in msg:
+                raise
+            if kwargs:
+                raise
+            if not isinstance(normalized, (list, tuple)):
+                raise
+            if not args:
+                raise
+
+            raw_vars = args[0]
+            if isinstance(raw_vars, (list, tuple, set)):
+                vars_seq = tuple(raw_vars)
+            else:
+                vars_seq = (raw_vars,)
+            if not vars_seq:
+                raise
+
+            return sp.solve_poly_system(tuple(normalized), *vars_seq)
 
     def subs(expr: Any, *args: Any, **kwargs: Any) -> Any:
         if hasattr(expr, "subs"):
@@ -242,6 +401,9 @@ def build_math_locals(
         "expand": sp.expand,
         "factor": sp.factor,
         "N": N,
+        "set_decimal_places": set_decimal_places,
+        "render_decimal": render_decimal,
+        "render_exact": render_exact,
         "math": sp,
     }
 

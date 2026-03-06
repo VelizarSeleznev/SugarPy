@@ -21,6 +21,8 @@ The Math cell is a CAS-style layer over SymPy:
 1. Expression: `2x + 1`, `sin(30)`, `sqrt(2)`
 2. Equation: `x^2 = 2`
 3. Assignment: `a := 5`, `b := x^2 + 1`
+4. Unpack assignment: `a0, b0 := solO[1]` (Python-style tuple/list unpack)
+5. Function assignment: `f(x) := x^2 + 1`, `dist(P,Q) := sqrt((P[0]-Q[0])^2 + (P[1]-Q[1])^2)`
 
 You can also place multiple statements in one Math cell (one per line).
 They run top-to-bottom and share the same Math namespace.
@@ -32,10 +34,29 @@ Statements can span multiple lines when parentheses/brackets are still open
 - `Eq(...)`
 - `solve(...)`, `linsolve(...)`
 - `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`
+- `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`
 
 Quick meaning:
 - `expand(expr)` expands parentheses and products into a summed form.
   Example: `expand((x-1)(x+2))` -> `x^2 + x - 2`.
+- `render_decimal(expr, places?)` renders the given expression in decimal form.
+  - `places` means decimal places (digits after decimal point).
+  - If omitted, uses the current default set by `set_decimal_places(...)`.
+- `render_exact(expr)` renders the expression in exact symbolic form.
+- `set_decimal_places(k)` sets default decimal places for future `render_decimal(expr)` calls.
+
+Notes:
+- These render helpers affect Math cell display behavior.
+- They do **not** change SymPy `N(...)` behavior.
+- If both styles are needed in one cell, wrap each line explicitly:
+  - `render_exact(...)` for symbolic view
+  - `render_decimal(...)` for numeric view
+- `render_decimal(...)` rounds by decimal places (digits after `.`), not by significant digits.
+- Math cells also provide a toolbar toggle (`Exact` / `Decimal`) for cell-level display mode.
+- Function assignment in Math cells supports expression or equation right-hand side.
+- Function definitions are shared through namespace and can be called from later Math/Code cells.
+- Function definitions are lazy at declaration time: the right side is not eagerly evaluated on `:=`.
+  This avoids expensive `solve(...)` execution and huge symbolic dumps while defining helper functions.
 
 ## Container results
 Some CAS helpers return containers (for example `solve(...)` returning a list of points).
@@ -57,6 +78,8 @@ This enables multi-step symbolic workflows directly in Math cells, for example:
 - `solve((Eq(c1, 0), Eq(c2, 0)), (x, y))`
 
 ## Output payload (render_math_cell)
+`render_math_cell(source, mode='deg', render_mode='exact'|'decimal')`
+
 - `ok`: success flag
 - `kind`: `expression | equation | assignment`
 - `steps`: rendered LaTeX steps
@@ -73,6 +96,6 @@ Notes:
 - If CAS returns concrete containers (for example list of solutions), `value` is returned as a string representation.
 
 ## Out of scope for this version
-- Function definitions in Math cells (`def`, `f(x) := ...`)
+- Python `def` blocks directly inside Math cells (use `f(args) := expr` form instead)
 - Full Maple grammar compatibility
 - Matrices, piecewise, units-specific syntax

@@ -23,6 +23,10 @@
   - `sugarpy.math_parser.parse_math_input` classifies input as expression/equation/assignment.
   - `sugarpy.math_parser.parse_sympy_expression` parses CAS input with `^` and implicit multiplication.
   - `sugarpy.math_cell.render_math_cell` evaluates with shared `ip.user_ns` namespace and returns normalized output payload (`kind`, `steps`, `value`, `error`).
+  - `sugarpy.math_cell.display_math_cell` emits structured frontend payload via
+    `application/vnd.sugarpy.math+json` (`display_data` channel).
+  - `sugarpy.stoichiometry.display_stoichiometry` emits structured frontend payload via
+    `application/vnd.sugarpy.stoich+json` (`display_data` channel).
 
 ## Data and catalogs
 - Built-in function catalog: `web/public/functions.json`.
@@ -38,6 +42,9 @@
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.
   - `error` -> concise `ename: evalue` output.
+- Math/Stoich transport contract is MIME-first (no stdout marker parsing):
+  - `application/vnd.sugarpy.math+json` -> `cell.mathOutput`.
+  - `application/vnd.sugarpy.stoich+json` -> `cell.stoichOutput`.
 - Behavior/architecture changes must include matching updates in `docs/`.
 - Keep project language in English across code, UI text, docs, tests, and logs.
 - Math cell semantics are fixed:

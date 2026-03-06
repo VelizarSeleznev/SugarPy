@@ -69,3 +69,18 @@ def test_assignment_can_store_equation_rhs():
     assert parsed.kind == "assignment"
     assert parsed.assigned_name == "eq1"
     assert parsed.rhs_source == "(3-a)^2 + (38-b)^2 = R^2"
+
+
+def test_assignment_unpack_targets_are_parsed():
+    parsed = parse_math_input("a0, b0 := solO[1]")
+    assert parsed.kind == "assignment"
+    assert parsed.assigned_names == ("a0", "b0")
+    assert parsed.assigned_name == "a0"
+    assert parsed.rhs_source == "solO[1]"
+
+
+def test_function_assignment_is_parsed():
+    parsed = parse_math_input("dist(P, Q) := sqrt((P[0]-Q[0])^2 + (P[1]-Q[1])^2)")
+    assert parsed.kind == "function_assignment"
+    assert parsed.function_name == "dist"
+    assert parsed.function_args == ("P", "Q")

@@ -6,7 +6,7 @@ import { NotebookCell } from './components/NotebookCell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
-import { insertCellAbove, insertCellBelow, moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
+import { moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   createNotebookId,
@@ -48,6 +48,7 @@ export type CellModel = {
       plotly_figure?: unknown;
     }>;
   };
+  mathRenderMode?: 'exact' | 'decimal';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
 };
@@ -96,6 +97,36 @@ const asText = (value: unknown) => {
   return String(value);
 };
 
+const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
+const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
+const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
+
+const isCanceledFutureError = (error: unknown) => {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Canceled future for execute_request message before replies were done');
+};
+
+const isDeadKernelError = (error: unknown) => {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes('kernel is dead');
+};
+
+const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+  let timer: number | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((_resolve, reject) => {
+      timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      window.clearTimeout(timer);
+    }
+  }
+};
+
 const resolveDefaultServerUrl = () => {
   const envUrl = (import.meta.env.VITE_JUPYTER_URL || '').trim();
   const host = window.location.hostname.toLowerCase();
@@ -122,15 +153,24 @@ const resolveServerConfig = (rawServerUrl: string) => {
   return { baseUrl, wsUrl };
 };
 
+const isEditableElement = (element: Element | null) => {
+  if (!element || !(element instanceof HTMLElement)) return false;
+  if (element.isContentEditable) return true;
+  if (element.matches('input, textarea, select')) return true;
+  if (element.closest('.cm-editor')) return true;
+  return false;
+};
+
 function App() {
   const defaultServerUrl = resolveDefaultServerUrl();
   const [serverUrl, setServerUrl] = useState(defaultServerUrl);
   const [token, setToken] = useState(import.meta.env.VITE_JUPYTER_TOKEN || 'sugarpy');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [kernel, setKernel] = useState<any>(null);
   const [cells, setCells] = useState<CellModel[]>([defaultCell]);
-  const { functions, allFunctions, subjects, search, setSearch, subject, setSubject } = useFunctionLibrary();
+  const { allFunctions } = useFunctionLibrary();
   const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
   const [execCounter, setExecCounter] = useState(0);
@@ -140,6 +180,15 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string>('');
+  const [activeCellId, setActiveCellId] = useState<string | null>(null);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [configureConnection, setConfigureConnection] = useState(false);
+  const [isRunningAll, setIsRunningAll] = useState(false);
+  const [mobileActionsEligible, setMobileActionsEligible] = useState(false);
+  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
+  const [mobileEditorCellId, setMobileEditorCellId] = useState<string | null>(null);
+  const [mobileVisualTop, setMobileVisualTop] = useState(0);
+  const [mobileVisualHeight, setMobileVisualHeight] = useState(window.innerHeight);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -155,6 +204,9 @@ function App() {
       { label: 'abs', detail: 'absolute value' },
       { label: 'pi', detail: 'pi constant' },
       { label: 'e', detail: 'Euler constant' },
+      { label: 'render_decimal', detail: 'render expression as decimal (with optional places)' },
+      { label: 'render_exact', detail: 'render expression in exact symbolic form' },
+      { label: 'set_decimal_places', detail: 'set default decimal places for render_decimal' },
     ],
     []
   );
@@ -165,6 +217,10 @@ function App() {
   const lastSnapshot = useRef<string>('');
   const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const connectingRef = useRef(false);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const kernelRef = useRef<any>(null);
+  const reconnectAttemptsRef = useRef(0);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
@@ -180,17 +236,28 @@ function App() {
   const slashCommandMap = slashData.map;
   const codeSuggestions = useMemo(
     () => [
-      ...buildSuggestions(functions),
+      ...buildSuggestions(allFunctions),
       ...userFunctions.map((name) => ({ label: name, detail: 'user function' }))
     ],
-    [functions, userFunctions]
+    [allFunctions, userFunctions]
   );
 
   const connectKernel = async () => {
-    if (status === 'connecting' || status === 'connected') return;
+    if (connectingRef.current) return;
+    connectingRef.current = true;
     setStatus('connecting');
+    setStatusDetail('Initializing environment...');
     setErrorMsg('');
     try {
+      if (kernel) {
+        try {
+          await kernel.shutdown();
+        } catch (_err) {
+          // ignore stale kernel shutdown failures
+        }
+        setKernel(null);
+        kernelRef.current = null;
+      }
       const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
       const settings = ServerConnection.makeSettings({
         baseUrl,
@@ -199,13 +266,86 @@ function App() {
         appendToken: true
       });
       const manager = new KernelManager({ serverSettings: settings });
-      const newKernel = await manager.startNew({ name: 'python3' });
+      const newKernel = await withTimeout(manager.startNew({ name: 'python3' }), 12000, 'Kernel start');
+      kernelRef.current = newKernel;
+      newKernel.statusChanged.connect((_sender: any, nextStatus: string) => {
+        if (kernelRef.current !== newKernel) return;
+        if (nextStatus === 'dead' || nextStatus === 'terminating') {
+          setStatus('error');
+          setStatusDetail('');
+          setErrorMsg('Kernel is dead. Reconnect to continue.');
+        }
+      });
+      newKernel.connectionStatusChanged.connect((_sender: any, nextStatus: string) => {
+        if (kernelRef.current !== newKernel) return;
+        const runReconnectAttempt = () => {
+          if (kernelRef.current !== newKernel) return;
+          if ((newKernel as any).isDisposed) {
+            setStatus('connecting');
+            setStatusDetail('Kernel was disposed. Starting a new session...');
+            connectKernel().catch(() => undefined);
+            return;
+          }
+          reconnectAttemptsRef.current += 1;
+          if (reconnectAttemptsRef.current > 3) {
+            setStatus('error');
+            setStatusDetail('');
+            setErrorMsg('Kernel connection lost. Please reconnect.');
+            return;
+          }
+          setStatus('connecting');
+          setStatusDetail(`Reinitializing environment (${reconnectAttemptsRef.current}/3)...`);
+          let reconnectPromise: Promise<void>;
+          try {
+            reconnectPromise = newKernel.reconnect();
+          } catch (_err) {
+            if (kernelRef.current !== newKernel) return;
+            setStatus('connecting');
+            setStatusDetail('Kernel reconnect failed. Starting a new session...');
+            connectKernel().catch(() => undefined);
+            return;
+          }
+          withTimeout(reconnectPromise, 8000, 'Kernel reconnect').catch(() => {
+            if (kernelRef.current !== newKernel) return;
+            if (reconnectTimerRef.current) return;
+            reconnectTimerRef.current = window.setTimeout(() => {
+              reconnectTimerRef.current = null;
+              runReconnectAttempt();
+            }, 1600);
+          });
+        };
+
+        if (nextStatus === 'disconnected') {
+          if (reconnectTimerRef.current) return;
+          setStatus('connecting');
+          setStatusDetail('Kernel disconnected. Waiting for reconnection...');
+          reconnectTimerRef.current = window.setTimeout(() => {
+            reconnectTimerRef.current = null;
+            runReconnectAttempt();
+          }, 1200);
+          return;
+        }
+        if (nextStatus === 'connected' && reconnectTimerRef.current) {
+          window.clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        if (nextStatus === 'connected') {
+          reconnectAttemptsRef.current = 0;
+          setStatusDetail('');
+        }
+      });
       setKernel(newKernel);
       setBootstrapLoaded(false);
       setStatus('connected');
+      setStatusDetail('');
+      setErrorMsg('');
+      reconnectAttemptsRef.current = 0;
     } catch (err) {
       setStatus('error');
+      setStatusDetail('');
       setErrorMsg(err instanceof Error ? err.message : 'Failed to connect.');
+    } finally {
+      connectingRef.current = false;
     }
   };
 
@@ -221,7 +361,7 @@ function App() {
     });
   };
 
-  const getAutosavePath = (id: string) => `notebooks/.sugarpy-autosave/${id}.sugarpy`;
+  const getAutosavePath = (id: string) => `${SERVER_AUTOSAVE_DIR}/${id}.sugarpy`;
 
   const buildSnapshot = (nextCells: CellModel[], nextTrigMode: 'deg' | 'rad', nextName: string, nextId: string) =>
     JSON.stringify({
@@ -245,9 +385,10 @@ function App() {
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
       try {
-        await contents.get(current, { content: false });
-      } catch (_err) {
         await contents.save(current, { type: 'directory' as any });
+      } catch (_err) {
+        // Directory may already exist or server may return noisy 4xx for nested checks.
+        // Fall through: later writes will surface real failures if path is unusable.
       }
     }
   };
@@ -256,6 +397,7 @@ function App() {
     const contents = ensureContents();
     const path = getAutosavePath(id);
     try {
+      await ensureServerDir(SERVER_AUTOSAVE_DIR);
       const model = await contents.get(path, { content: true });
       const raw = typeof model.content === 'string' ? model.content : '';
       if (!raw) return null;
@@ -278,7 +420,7 @@ function App() {
       if (!params.silent) {
         setSyncMessage('Saving to server...');
       }
-      await ensureServerDir('notebooks/.sugarpy-autosave');
+      await ensureServerDir(SERVER_AUTOSAVE_DIR);
       const payload = serializeSugarPy({
         id: params.id,
         name: params.name,
@@ -305,12 +447,109 @@ function App() {
   }, [serverUrl, token]);
 
   useEffect(() => {
+    if (cells.length === 0) {
+      setActiveCellId(null);
+      return;
+    }
+    if (!activeCellId || !cells.some((cell) => cell.id === activeCellId)) {
+      setActiveCellId(cells[0].id);
+    }
+  }, [cells, activeCellId]);
+
+  useEffect(() => {
     if (connectOnce.current) return;
     connectOnce.current = true;
     connectKernel().catch(() => {
       // handled in connectKernel
     });
   }, []);
+
+  useEffect(() => {
+    const updateEligibility = () => {
+      const coarse = window.matchMedia('(pointer: coarse)').matches;
+      const noHover = window.matchMedia('(hover: none)').matches;
+      const anyFine = window.matchMedia('(any-pointer: fine)').matches;
+      const portrait = window.matchMedia('(orientation: portrait)').matches;
+      const narrow = window.innerWidth <= 900;
+      setMobileActionsEligible(coarse && noHover && !anyFine && narrow && portrait);
+    };
+    updateEligibility();
+    window.addEventListener('resize', updateEligibility);
+    window.addEventListener('orientationchange', updateEligibility);
+    return () => {
+      window.removeEventListener('resize', updateEligibility);
+      window.removeEventListener('orientationchange', updateEligibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    const readActiveEditorCell = () => {
+      const active = document.activeElement;
+      if (!isEditableElement(active)) {
+        setMobileEditorCellId(null);
+        return;
+      }
+      const cellHost = (active as HTMLElement).closest('[data-cell-id]') as HTMLElement | null;
+      setMobileEditorCellId(cellHost?.dataset.cellId ?? null);
+    };
+    const onFocusIn = () => readActiveEditorCell();
+    const onFocusOut = () => window.setTimeout(readActiveEditorCell, 0);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateKeyboard = () => {
+      if (!mobileActionsEligible) {
+        setMobileKeyboardOpen(false);
+        setMobileVisualTop(0);
+        setMobileVisualHeight(window.innerHeight);
+        return;
+      }
+      const vv = window.visualViewport;
+      if (!vv) {
+        setMobileKeyboardOpen(!!mobileEditorCellId);
+        setMobileVisualTop(0);
+        setMobileVisualHeight(window.innerHeight);
+        return;
+      }
+      const inset = Math.max(0, Math.round(window.innerHeight - vv.height));
+      setMobileVisualTop(Math.max(0, Math.round(vv.offsetTop)));
+      setMobileVisualHeight(Math.max(0, Math.round(vv.height)));
+      setMobileKeyboardOpen(inset > 120);
+    };
+    updateKeyboard();
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', updateKeyboard);
+      vv.addEventListener('scroll', updateKeyboard);
+    }
+    window.addEventListener('resize', updateKeyboard);
+    return () => {
+      if (vv) {
+        vv.removeEventListener('resize', updateKeyboard);
+        vv.removeEventListener('scroll', updateKeyboard);
+      }
+      window.removeEventListener('resize', updateKeyboard);
+    };
+  }, [mobileActionsEligible, mobileEditorCellId]);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+      if (!kernel) return;
+      if (kernelRef.current === kernel) {
+        kernelRef.current = null;
+      }
+      kernel.shutdown().catch(() => undefined);
+    };
+  }, [kernel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -344,6 +583,7 @@ function App() {
       setNotebookName(decoded.name);
       setTrigMode(decoded.trigMode);
       setCells(nextCells);
+      setActiveCellId(nextCells[0]?.id ?? null);
       setLastSavedAt(selected.updatedAt ?? null);
       lastSnapshot.current = buildSnapshot(nextCells, decoded.trigMode, decoded.name, decoded.id);
       hydrated.current = true;
@@ -366,7 +606,22 @@ function App() {
         return [...prev, { id: cellId, source: code, type: 'code' }];
       });
     }
-    const future = activeKernel.requestExecute({ code, stop_on_error: true });
+    let future: any;
+    try {
+      future = activeKernel.requestExecute({ code, stop_on_error: true });
+    } catch (error) {
+      if (showOutput) {
+        const message = isCanceledFutureError(error)
+          ? 'Kernel execution was canceled.'
+          : String(error instanceof Error ? error.message : error);
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId ? { ...c, output: { type: 'error', ename: 'ExecutionError', evalue: message }, isRunning: false } : c
+          )
+        );
+      }
+      return;
+    }
     let streamText = '';
     let mimeData: Record<string, unknown> = {};
     setCells((prev) =>
@@ -422,7 +677,32 @@ function App() {
         );
       }
     };
-    const reply = await future.done;
+    let reply: any = null;
+    try {
+      reply = await future.done;
+    } catch (error) {
+      if (isDeadKernelError(error)) {
+        setStatus('error');
+        setErrorMsg('Kernel is dead. Reconnect to continue.');
+      }
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+        throw error;
+      }
+      if (showOutput) {
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId
+              ? {
+                  ...c,
+                  output: { type: 'error', ename: 'ExecutionCanceled', evalue: 'Kernel execution was canceled.' },
+                  isRunning: false
+                }
+              : c
+          )
+        );
+      }
+      return;
+    }
     if (showOutput) {
       const content = (reply as any)?.content;
       if (content?.status === 'error') {
@@ -461,15 +741,17 @@ function App() {
     }
   };
 
-  const runMathCell = async (cellId: string, source: string) => {
+  const runMathCell = async (cellId: string, source: string, renderModeOverride?: 'exact' | 'decimal') => {
     if (!activeKernel) return;
+    const renderMode =
+      renderModeOverride ??
+      (cells.find((cell) => cell.id === cellId)?.mathRenderMode === 'decimal' ? 'decimal' : 'exact');
     const payload = JSON.stringify({ source, mode: trigMode });
     const code = [
       'import json',
-      'from sugarpy.math_cell import render_math_cell',
+      'from sugarpy.math_cell import display_math_cell',
       `_payload = json.loads(${JSON.stringify(payload)})`,
-      "_result = render_math_cell(_payload['source'], _payload['mode'])",
-      "print('__SUGARPY_MATH__' + json.dumps(_result))"
+      `_ = display_math_cell(_payload['source'], _payload['mode'], ${JSON.stringify(renderMode)})`
     ].join('\n');
 
     setCells((prev) =>
@@ -477,24 +759,34 @@ function App() {
         c.id === cellId ? { ...c, isRunning: true, mathOutput: undefined, output: undefined } : c
       )
     );
-    const future = activeKernel.requestExecute({ code, stop_on_error: true });
-    const marker = '__SUGARPY_MATH__';
-    let streamBuffer = '';
+    let future: any;
+    try {
+      future = activeKernel.requestExecute({ code, stop_on_error: true });
+    } catch (error) {
+      setCells((prev) =>
+        prev.map((c) =>
+          c.id === cellId
+            ? {
+                ...c,
+                isRunning: false,
+                mathOutput: {
+                  kind: 'expression',
+                  steps: [],
+                  error: isCanceledFutureError(error) ? 'Kernel execution was canceled.' : String(error),
+                  mode: trigMode,
+                  warnings: []
+                }
+              }
+            : c
+        )
+      );
+      return;
+    }
     let streamText = '';
     let mimeData: Record<string, unknown> = {};
     let parsed: (CellModel['mathOutput'] & { plotly_figure?: unknown }) | null = null;
 
-    const setMimeOutput = () => {
-      // Hide the internal marker payload from the visible plain output.
-      const idx = streamText.lastIndexOf(marker);
-      const visiblePlain = idx >= 0 ? streamText.slice(0, idx) : streamText;
-      const nextData = { ...mimeData };
-      const cleanedPlain = visiblePlain.trimEnd();
-      if (cleanedPlain) {
-        nextData['text/plain'] = cleanedPlain;
-      } else {
-        delete nextData['text/plain'];
-      }
+    const setMimeOutput = (nextData: Record<string, unknown>) => {
       if (Object.keys(nextData).length === 0) return;
       setCells((prev) =>
         prev.map((c) => (c.id === cellId ? { ...c, output: { type: 'mime', data: nextData } } : c))
@@ -505,16 +797,20 @@ function App() {
       if (msg.header.msg_type === 'stream') {
         // @ts-ignore
         const text = msg.content.text ?? '';
-        streamBuffer += text;
         streamText += text;
-        mimeData = { ...mimeData, 'text/plain': streamText };
-        setMimeOutput();
+        const nextData = { ...mimeData, 'text/plain': streamText };
+        mimeData = nextData;
+        setMimeOutput(nextData);
       }
       if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
         // @ts-ignore
         const data = msg.content.data ?? {};
         const merged: Record<string, unknown> = { ...mimeData };
         Object.entries(data).forEach(([mime, value]) => {
+          if (mime === SUGARPY_MIME_MATH && value && typeof value === 'object') {
+            parsed = value as CellModel['mathOutput'] & { plotly_figure?: unknown };
+            return;
+          }
           if (mime === 'text/plain') {
             const existing = asText(merged['text/plain']);
             merged['text/plain'] = `${existing}${asText(value)}`;
@@ -523,27 +819,12 @@ function App() {
           }
         });
         mimeData = merged;
-        setMimeOutput();
+        setMimeOutput(merged);
       }
       if (msg.header.msg_type === 'error') {
         // @ts-ignore
         const err = (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '');
         parsed = { kind: 'expression', steps: [], error: err, mode: trigMode, warnings: [] };
-      }
-      const idx = streamBuffer.lastIndexOf(marker);
-      if (idx >= 0) {
-        const jsonText = streamBuffer.slice(idx + marker.length).trim();
-        try {
-          parsed = JSON.parse(jsonText);
-        } catch (err) {
-          parsed = {
-            kind: 'expression',
-            steps: [],
-            error: 'Failed to parse math output.',
-            mode: trigMode,
-            warnings: []
-          };
-        }
       }
       if (parsed) {
         setCells((prev) =>
@@ -559,8 +840,36 @@ function App() {
         );
       }
     };
-    await future.done;
-    setMimeOutput();
+    try {
+      await future.done;
+    } catch (error) {
+      if (isDeadKernelError(error)) {
+        setStatus('error');
+        setErrorMsg('Kernel is dead. Reconnect to continue.');
+      }
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+        throw error;
+      }
+      setCells((prev) =>
+        prev.map((c) =>
+          c.id === cellId
+            ? {
+                ...c,
+                isRunning: false,
+                mathOutput: {
+                  kind: 'expression',
+                  steps: [],
+                  error: 'Kernel execution was canceled.',
+                  mode: trigMode,
+                  warnings: []
+                }
+              }
+            : c
+        )
+      );
+      return;
+    }
+    setMimeOutput(mimeData);
     setExecCounter((prev) => {
       const next = prev + 1;
       setCells((cellsPrev) =>
@@ -577,45 +886,60 @@ function App() {
     const payload = JSON.stringify({ reaction: state.reaction, inputs: state.inputs });
     const code = [
       'import json',
-      'from sugarpy.stoichiometry import render_stoichiometry',
+      'from sugarpy.stoichiometry import display_stoichiometry',
       `_payload = json.loads(${JSON.stringify(payload)})`,
-      "_result = render_stoichiometry(_payload.get('reaction', ''), _payload.get('inputs'))",
-      "print('__SUGARPY_STOICH__' + json.dumps(_result))"
+      "_ = display_stoichiometry(_payload.get('reaction', ''), _payload.get('inputs'))"
     ].join('\n');
 
     setCells((prev) =>
       prev.map((c) => (c.id === cellId ? { ...c, isRunning: true } : c))
     );
 
-    const future = activeKernel.requestExecute({ code, stop_on_error: true });
-    const marker = '__SUGARPY_STOICH__';
-    let buffer = '';
+    let future: any;
+    try {
+      future = activeKernel.requestExecute({ code, stop_on_error: true });
+    } catch (error) {
+      setCells((prev) =>
+        prev.map((c) =>
+          c.id === cellId
+            ? { ...c, isRunning: false, stoichOutput: { ok: false, error: String(error), species: [] } }
+            : c
+        )
+      );
+      return;
+    }
+    let parsed: StoichOutput | null = null;
 
     future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'stream') {
-        // @ts-ignore
-        buffer += msg.content.text ?? '';
-      }
       if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
         // @ts-ignore
-        buffer += msg.content.data?.['text/plain'] ?? '';
+        const data = msg.content.data ?? {};
+        const payload = data[SUGARPY_MIME_STOICH];
+        if (payload && typeof payload === 'object') {
+          parsed = payload as StoichOutput;
+        }
+      }
+      if (msg.header.msg_type === 'error') {
+        const ename = (msg.content as any).ename ?? 'Error';
+        const evalue = (msg.content as any).evalue ?? '';
+        parsed = { ok: false, error: `${ename}: ${evalue}`, species: [] };
       }
     };
 
-    await future.done;
-    let parsed: StoichOutput | null = null;
-    const idx = buffer.lastIndexOf(marker);
-    if (idx !== -1) {
-      const raw = buffer.slice(idx + marker.length).trim();
-      try {
-        parsed = JSON.parse(raw) as StoichOutput;
-      } catch {
-        parsed = { ok: false, error: 'Failed to parse stoichiometry output.', species: [] };
+    try {
+      await future.done;
+    } catch (error) {
+      if (isDeadKernelError(error)) {
+        setStatus('error');
+        setErrorMsg('Kernel is dead. Reconnect to continue.');
       }
-    } else if (buffer.trim()) {
-      parsed = { ok: false, error: buffer.trim(), species: [] };
-    } else {
-      parsed = { ok: false, error: 'No output received.', species: [] };
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+        throw error;
+      }
+      parsed = { ok: false, error: 'Kernel execution was canceled.', species: [] };
+    }
+    if (!parsed) {
+      parsed = { ok: false, error: 'No structured output received.', species: [] };
     }
 
     setCells((prev) =>
@@ -625,8 +949,31 @@ function App() {
     );
   };
 
-  const addCell = (source = '', type: 'code' | 'markdown' | 'math' | 'stoich' = 'code') => {
-    setCells((prev) => [...prev, createCell(type, source, prev.length + 1)]);
+  const runAllCells = async () => {
+    if (isRunningAll) return;
+    if (!activeKernel) {
+      await connectKernel();
+      if (!kernelRef.current) return;
+    }
+    setIsRunningAll(true);
+    try {
+      const queue = [...cells];
+      for (const cell of queue) {
+        setActiveCellId(cell.id);
+        if (cell.type === 'markdown') continue;
+        if (cell.type === 'math') {
+          await runMathCell(cell.id, cell.source, cell.mathRenderMode ?? 'exact');
+          continue;
+        }
+        if (cell.type === 'stoich') {
+          await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
+          continue;
+        }
+        await runCell(cell.id, cell.source);
+      }
+    } finally {
+      setIsRunningAll(false);
+    }
   };
 
   const createCell = (
@@ -646,17 +993,22 @@ function App() {
     return {
       id: `cell-${idSuffix}`,
       source,
-      type
+      type,
+      ...(type === 'math' ? { mathRenderMode: 'exact' as const } : {})
     };
   };
 
   const createInitialCell = () => createCell('code');
 
-  const blurActiveElement = () => {
-    const active = document.activeElement;
-    if (active && active instanceof HTMLElement) {
-      active.blur();
-    }
+  const insertCellAt = (
+    index: number,
+    type: 'code' | 'markdown' | 'math',
+    source = ''
+  ) => {
+    const bounded = Math.max(0, Math.min(index, cells.length));
+    const nextCell = createCell(type, source, bounded + 1);
+    setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
+    setActiveCellId(nextCell.id);
   };
 
   const updateCell = (cellId: string, source: string) => {
@@ -702,19 +1054,15 @@ function App() {
     return true;
   };
 
-  const insertFunction = (snippet: string) => {
-    addCell(snippet);
-  };
-
-  const insertStoichCell = () => {
-    addCell('', 'stoich');
-  };
-
   useEffect(() => {
     const bootstrap = async () => {
       if (!activeKernel || bootstrapLoaded) return;
-      await runCell(`bootstrap-math-${Date.now()}`, 'import math', false, false);
-      const defs = functions
+      try {
+        await runCell(`bootstrap-math-${Date.now()}`, 'import math', false, false);
+      } catch (_error) {
+        return;
+      }
+      const defs = allFunctions
         .map((fn) => {
           const lines = fn.snippet.split('\n');
           const start = lines.findIndex((line) => line.startsWith('def '));
@@ -730,11 +1078,15 @@ function App() {
         .filter((block) => block.startsWith('def '))
         .join('\n\n');
       if (!defs) return;
-      await runCell(`bootstrap-${Date.now()}`, defs, false, false);
+      try {
+        await runCell(`bootstrap-${Date.now()}`, defs, false, false);
+      } catch (_error) {
+        return;
+      }
       setBootstrapLoaded(true);
     };
-    bootstrap();
-  }, [activeKernel, bootstrapLoaded, functions]);
+    bootstrap().catch(() => undefined);
+  }, [activeKernel, bootstrapLoaded, allFunctions]);
 
   useEffect(() => {
     if (!hydrated.current) return;
@@ -817,6 +1169,7 @@ function App() {
     setNotebookName('Untitled');
     setTrigMode('deg');
     setCells(nextCells);
+    setActiveCellId(nextCells[0]?.id ?? null);
     setLastSavedAt(null);
     lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'Untitled', nextId);
     setDirty(false);
@@ -914,6 +1267,7 @@ function App() {
       setNotebookName(next.name || 'Untitled');
       setTrigMode(next.trigMode);
       setCells(safeCells);
+      setActiveCellId(safeCells[0]?.id ?? null);
       const payload = serializeSugarPy({
         id: next.id,
         name: next.name || 'Untitled',
@@ -948,103 +1302,179 @@ function App() {
     }, 50);
   };
 
+  const mobileActionCellId = mobileEditorCellId ?? activeCellId;
+  const mobileActionCell = cells.find((cell) => cell.id === mobileActionCellId) ?? null;
+  const showMobileActionBar = mobileActionsEligible && mobileKeyboardOpen && !!mobileActionCell;
+
+  const runCellById = async (cell: CellModel) => {
+    if (cell.type === 'markdown') return;
+    if (cell.type === 'math') {
+      await runMathCell(cell.id, cell.source, cell.mathRenderMode ?? 'exact');
+      return;
+    }
+    if (cell.type === 'stoich') {
+      await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
+      return;
+    }
+    await runCell(cell.id, cell.source);
+  };
+
   return (
     <ErrorBoundary>
-    <div className="app">
-      <aside className="panel">
-        <h1 className="brand">SugarPy</h1>
-        <a className="button secondary wiki-link" href="/wiki" target="_blank" rel="noreferrer">
-          Open Wiki
-        </a>
-
-        <div className="section-title">Connection</div>
-        <input className="input" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
-        <details>
-          <summary className="subtitle">Advanced</summary>
-          <input className="input" value={token} onChange={(e) => setToken(e.target.value)} />
-        </details>
-        <div className="connection-row">
-          <button className="button" onClick={connectKernel} disabled={status === 'connecting'}>
-            {activeKernel ? 'Kernel Connected' : 'Connect Kernel'}
-          </button>
-          <span className={`status-pill status-${status}`}>{status}</span>
-        </div>
-        {status === 'error' ? (
-          <div className="output">
-            {errorMsg}
-            {'\n'}
-            Check that Jupyter Server is running on {serverUrl} and the token is correct.
-          </div>
-        ) : null}
-
-        <div className="section-title">Function Library</div>
-        <input
-          className="input"
-          placeholder="Search..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <select className="select" value={subject} onChange={(e) => setSubject(e.target.value)}>
-          <option value="all">All subjects</option>
-          {subjects.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-
-        {functions.map((fn) => (
-          <div className="function-card" key={fn.id}>
-            <h4>{fn.title}</h4>
-            <div className="subtitle function-desc">{fn.description}</div>
-            <div className="badges">
-              <span className="badge">{fn.subject}</span>
-              {fn.tags.map((tag) => (
-                <span className="badge" key={tag}>
-                  {tag}
-                </span>
-              ))}
-            </div>
-            <button
-              className="button secondary"
-              onClick={() => {
-                if (fn.id === 'chem.stoichiometry_table') {
-                  insertStoichCell();
-                } else {
-                  insertFunction(fn.snippet);
-                }
-              }}
-            >
-              Insert
-            </button>
-          </div>
-        ))}
-      </aside>
-
-      <main className="workspace">
-        <div className="panel notebook-panel">
-        <div className="section-title">Notebook</div>
-        <div className="notebook-actions">
-          <div className="notebook-meta">
+      <div className={`app${mobileActionsEligible ? ' mobile-actions-mode' : ''}`}>
+        <header className="app-header">
+          <div className="header-left">
             <input
-              className="input"
+              className="file-name-input"
               value={notebookName}
               onChange={(e) => setNotebookName(e.target.value)}
               placeholder="Notebook name"
             />
-            <div className="subtitle">
-              {lastSavedAt ? `Autosaved ${new Date(lastSavedAt).toLocaleTimeString()}` : 'Not saved yet'}
+          </div>
+          <div className="header-right">
+            <button className="button" onClick={runAllCells} disabled={isRunningAll || status === 'connecting'}>
+              {isRunningAll ? 'Running…' : 'Run All'}
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+            >
+              Trig: {trigMode === 'deg' ? 'Deg' : 'Rad'}
+            </button>
+            <div className={`conn-pill status-${status}`}>
+              <span className={`conn-dot ${status}`} />
+              {status === 'connected'
+                ? 'Connected'
+                : status === 'connecting'
+                  ? statusDetail || 'Initializing environment...'
+                  : status}
+            </div>
+            <div className={`save-status ${dirty ? 'dirty' : 'clean'}`}>
+              {lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : 'Not saved'}
               {dirty ? ' · editing…' : ''}
               {syncMessage ? ` · ${syncMessage}` : ''}
             </div>
+            <div className="header-menu-wrap">
+              <button
+                className="menu-button"
+                onClick={() => setHeaderMenuOpen((prev) => !prev)}
+                aria-label="More actions"
+              >
+                ⋮
+              </button>
+              {headerMenuOpen ? (
+                <div className="header-menu">
+                  <button className="menu-item" onClick={connectKernel}>
+                    {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() => setConfigureConnection((prev) => !prev)}
+                  >
+                    {configureConnection ? 'Hide Connection Settings' : 'Configure Connection'}
+                  </button>
+                  {configureConnection ? (
+                    <div className="menu-connection-form">
+                      <input
+                        className="input"
+                        value={serverUrl}
+                        onChange={(e) => setServerUrl(e.target.value)}
+                        placeholder="Server URL"
+                      />
+                      <input
+                        className="input"
+                        value={token}
+                        onChange={(e) => setToken(e.target.value)}
+                        placeholder="Token"
+                      />
+                    </div>
+                  ) : null}
+                  <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
+                  <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
+                  <button className="menu-item" onClick={handleDownloadIpynb}>Download .ipynb</button>
+                  <button className="menu-item" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
+                  <button className="menu-item" onClick={handleImportClick}>Import</button>
+                  <button className="menu-item" onClick={handleNewNotebook}>New Notebook</button>
+                  <a className="menu-item" href="/wiki" target="_blank" rel="noreferrer">
+                    Open Wiki
+                  </a>
+                </div>
+              ) : null}
+            </div>
           </div>
-          <div className="notebook-buttons">
-            <button className="button secondary" onClick={handleNewNotebook}>New</button>
-            <button className="button" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
-            <button className="button" onClick={handleDownloadIpynb}>Download .ipynb</button>
-            <button className="button" onClick={handleSaveToServer}>Save to Server</button>
-            <button className="button secondary" onClick={handleImportClick}>Import</button>
-            <button className="button secondary" onClick={handleExportPdf}>Export PDF</button>
+        </header>
+
+        <main className="workspace">
+          {status === 'error' ? (
+            <div className="output">
+              {errorMsg}
+              {'\n'}
+              Check that Jupyter Server is running on {serverUrl} and the token is correct.
+            </div>
+          ) : null}
+
+          <div className="notebook-stack">
+            {cells.length === 0 ? (
+              <div className="cell-empty">
+                <div className="subtitle">Your notebook is empty.</div>
+                <div className="divider-menu open">
+                  <button className="divider-btn" onClick={() => insertCellAt(0, 'code')}>Code</button>
+                  <button className="divider-btn" onClick={() => insertCellAt(0, 'markdown')}>Text</button>
+                  <button className="divider-btn" onClick={() => insertCellAt(0, 'math')}>Math</button>
+                </div>
+              </div>
+            ) : null}
+            {cells.length > 0 ? (
+              <>
+                {Array.from({ length: cells.length + 1 }).map((_, index) => (
+                  <React.Fragment key={`slot-${index}`}>
+                    <div
+                      className="cell-divider"
+                      data-testid={`cell-divider-${index}`}
+                    >
+                      <div className="cell-divider-line" />
+                      <div className="divider-menu" role="menu" aria-label="Insert cell type">
+                        <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
+                        <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
+                        <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                      </div>
+                    </div>
+                    {index < cells.length ? (
+                      <NotebookCell
+                        key={cells[index].id}
+                        cell={cells[index]}
+                        isActive={cells[index].id === activeCellId}
+                        onActivate={() => setActiveCellId(cells[index].id)}
+                        onChange={(value) => updateCell(cells[index].id, value)}
+                        onRun={(value) => runCell(cells[index].id, value)}
+                        onRunMath={(value) =>
+                          runMathCell(cells[index].id, value, cells[index].mathRenderMode ?? 'exact')
+                        }
+                        onRunStoich={(state) => runStoichCell(cells[index].id, state)}
+                        onChangeStoich={(state) => updateStoichState(cells[index].id, state)}
+                        onMoveUp={() => setCells((prev) => moveCellUp(prev, cells[index].id))}
+                        onMoveDown={() => setCells((prev) => moveCellDown(prev, cells[index].id))}
+                        onDelete={() => setCells((prev) => deleteCell(prev, cells[index].id))}
+                        suggestions={codeSuggestions}
+                        slashCommands={slashCommands}
+                        onSlashCommand={(command) => handleSlashCommand(cells[index].id, command)}
+                        mathSuggestions={mathSuggestions}
+                        trigMode={trigMode}
+                        kernelReady={!!activeKernel}
+                        onSetMathRenderMode={(mode) =>
+                          setCells((prev) =>
+                            prev.map((cell) =>
+                              cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
+                            )
+                          )
+                        }
+                        onToggleTrigMode={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+                      />
+                    ) : null}
+                  </React.Fragment>
+                ))}
+              </>
+            ) : null}
           </div>
           <input
             ref={fileInputRef}
@@ -1053,126 +1483,81 @@ function App() {
             onChange={handleImportFile}
             className="file-input"
           />
-        </div>
-        <div className="trig-row">
-          <span className="label-muted">Trig</span>
-          <select className="select" value={trigMode} onChange={(e) => setTrigMode(e.target.value as 'deg' | 'rad')}>
-            <option value="deg">Degrees</option>
-            <option value="rad">Radians</option>
-          </select>
-        </div>
-        <div className="notebook-stack">
-            {cells.length > 0 ? (
-              <div className="cell-insert-divider">
-                <div className="cell-insert-pop" role="group" aria-label="Insert cell">
-                  <button className="cell-insert-toggle" type="button" aria-label="Insert cell">+</button>
-                  <div className="cell-insert-actions">
-                    <button
-                      className="cell-insert-btn"
-                      onClick={() => {
-                        setCells((prev) => insertCellAbove(prev, cells[0].id, createCell('code')));
-                        blurActiveElement();
-                      }}
-                    >
-                      + Code
-                    </button>
-                    <button
-                      className="cell-insert-btn"
-                      onClick={() => {
-                        setCells((prev) => insertCellAbove(prev, cells[0].id, createCell('markdown')));
-                        blurActiveElement();
-                      }}
-                    >
-                      + Text
-                    </button>
-                    <button
-                      className="cell-insert-btn"
-                      onClick={() => {
-                        setCells((prev) => insertCellAbove(prev, cells[0].id, createCell('math')));
-                        blurActiveElement();
-                      }}
-                    >
-                      + Math
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="cell-empty">
-                <div className="subtitle">Your notebook is empty.</div>
-                <div className="cell-insert-actions inline">
-                  <button className="cell-insert-btn" onClick={() => setCells([createCell('code')])}>
-                    + Code
-                  </button>
-                  <button className="cell-insert-btn" onClick={() => setCells([createCell('markdown')])}>
-                    + Text
-                  </button>
-                  <button className="cell-insert-btn" onClick={() => setCells([createCell('math')])}>
-                    + Math
-                  </button>
-                </div>
-              </div>
-            )}
-            {cells.map((cell) => (
-              <div className="notebook-item" key={cell.id}>
-                <NotebookCell
-                  cell={cell}
-                  onChange={(value) => updateCell(cell.id, value)}
-                  onRun={(value) => runCell(cell.id, value)}
-                  onRunMath={(value) => runMathCell(cell.id, value)}
-                  onRunStoich={(state) => runStoichCell(cell.id, state)}
-                  onChangeStoich={(state) => updateStoichState(cell.id, state)}
-                  onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
-                  onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
-                  onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}
-                  suggestions={codeSuggestions}
-                  slashCommands={slashCommands}
-                  onSlashCommand={(command) => handleSlashCommand(cell.id, command)}
-                  mathSuggestions={mathSuggestions}
-                  trigMode={trigMode}
-                  kernelReady={!!activeKernel}
-                />
-                <div className="cell-insert-divider">
-                  <div className="cell-insert-pop" role="group" aria-label="Insert cell">
-                    <button className="cell-insert-toggle" type="button" aria-label="Insert cell">+</button>
-                    <div className="cell-insert-actions">
-                      <button
-                        className="cell-insert-btn"
-                        onClick={() => {
-                          setCells((prev) => insertCellBelow(prev, cell.id, createCell('code')));
-                          blurActiveElement();
-                        }}
-                      >
-                        + Code
-                      </button>
-                      <button
-                        className="cell-insert-btn"
-                        onClick={() => {
-                          setCells((prev) => insertCellBelow(prev, cell.id, createCell('markdown')));
-                          blurActiveElement();
-                        }}
-                      >
-                        + Text
-                      </button>
-                      <button
-                        className="cell-insert-btn"
-                        onClick={() => {
-                          setCells((prev) => insertCellBelow(prev, cell.id, createCell('math')));
-                          blurActiveElement();
-                        }}
-                      >
-                        + Math
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
+        </main>
+        {showMobileActionBar && mobileActionCell ? (
+          <div
+            className="mobile-cell-actions"
+            role="toolbar"
+            aria-label="Cell actions mobile"
+            style={{ top: `${Math.max(56, mobileVisualTop + mobileVisualHeight - 8)}px` }}
+          >
+            <button
+              type="button"
+              className="mobile-cell-action-btn primary"
+              onClick={() => {
+                runCellById(mobileActionCell).catch(() => undefined);
+              }}
+              disabled={mobileActionCell.type === 'markdown'}
+            >
+              Run
+            </button>
+            {mobileActionCell.type === 'math' ? (
+              <button
+                type="button"
+                className="mobile-cell-action-btn"
+                onClick={() =>
+                  setCells((prev) =>
+                    prev.map((cell) =>
+                      cell.id === mobileActionCell.id
+                        ? {
+                            ...cell,
+                            mathRenderMode: cell.mathRenderMode === 'decimal' ? 'exact' : 'decimal'
+                          }
+                        : cell
+                    )
+                  )
+                }
+              >
+                {mobileActionCell.mathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
+              </button>
+            ) : null}
+            {mobileActionCell.type === 'math' ? (
+              <button
+                type="button"
+                className="mobile-cell-action-btn"
+                onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+              >
+                {trigMode === 'deg' ? 'Deg' : 'Rad'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mobile-cell-action-btn"
+              onClick={() => setCells((prev) => moveCellUp(prev, mobileActionCell.id))}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="mobile-cell-action-btn"
+              onClick={() => setCells((prev) => moveCellDown(prev, mobileActionCell.id))}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className="mobile-cell-action-btn danger"
+              onClick={() => {
+                setCells((prev) => deleteCell(prev, mobileActionCell.id));
+                setMobileEditorCellId(null);
+                setMobileKeyboardOpen(false);
+              }}
+            >
+              ✕
+            </button>
           </div>
-        </div>
-      </main>
-
-    </div>
+        ) : null}
+      </div>
     </ErrorBoundary>
   );
 }

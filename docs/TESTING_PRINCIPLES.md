@@ -39,6 +39,47 @@ Keep tests reliable, fast enough for daily use, and representative of real user 
   - e2e test for visible flow.
 - Keep tests readable; prefer explicit expected values over vague truthy checks.
 
+## Coverage matrix requirement
+Before implementation, list all impacted user paths and explicitly map each path to a verification method.
+
+Required path categories:
+- Happy path.
+- Alternative path(s).
+- Error/recovery path(s) (for example reconnect/retry/cancel).
+- Empty-state path(s).
+- Mobile-specific path(s) when UI behavior differs from desktop.
+
+Required mapping format:
+- `path -> auto test` (preferred), or
+- `path -> manual check` (only when automation is impractical).
+
+Work is not complete until every impacted path is mapped and verified.
+
+## Regression gate for UI and flow refactors
+For UI or execution-flow changes, completion requires all of:
+- Frontend build success.
+- Targeted E2E coverage for changed paths.
+- Project smoke/full gate (`./scripts/ui-check.sh` or `./scripts/test-all.sh`).
+- Browser result report (including console/page errors status).
+
+## Refactor safety checks (dangling references)
+After removing or renaming state/props/handlers/selectors:
+- Search for stale references (`rg`) and resolve all unintended matches.
+- Update affected tests/selectors in the same change.
+- Do not rely on runtime discovery of missing symbols.
+
+## Bug-to-test rule
+Every production bug must produce a regression test:
+- First add a failing/representative test for the reproduced scenario.
+- Then implement the fix.
+- Keep the test to prevent recurrence.
+
+## Context discipline for contributors and agents
+When working in this repository, keep testing policy in active context:
+- Read `docs/TESTING_PRINCIPLES.md` before significant UI/flow edits.
+- If a required guideline is missing from context or docs, add it as part of the same change.
+- Do not mark work complete if coverage mapping or regression gate evidence is missing.
+
 ## Regression targets (large assignments)
 Large, multi-step “assignment-style” workflows must be covered by at least one automated regression test.
 Preferred approach:

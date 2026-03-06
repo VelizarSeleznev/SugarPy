@@ -30,13 +30,11 @@ type Props = {
   trigMode: 'deg' | 'rad';
 };
 
-export function MathEditor({ value, onChange, onRun, completions, output, isRunning, trigMode }: Props) {
+export function MathEditor({ value, onChange, onRun, completions, output, isRunning, trigMode: _trigMode }: Props) {
   const [editing, setEditing] = useState(true);
   const [draft, setDraft] = useState(value);
   const [dirty, setDirty] = useState(false);
   const [lastRendered, setLastRendered] = useState(value);
-  const displayMode = output?.mode ?? trigMode;
-
   useEffect(() => {
     setDraft(value);
     setLastRendered(value);
@@ -78,11 +76,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
   if (!editing) {
     return (
       <div className="math-render" onClick={() => setEditing(true)} data-testid="math-output">
-        <div className="math-meta">
-          <span className="math-badge">{displayMode === 'deg' ? 'Degrees' : 'Radians'}</span>
-          {output?.kind ? <span className="math-badge">{output.kind}</span> : null}
-          {isRunning ? <span className="math-running">running…</span> : null}
-        </div>
+        {isRunning ? <span className="math-running">running…</span> : null}
         {output?.error ? (
           <div className="math-error" data-testid="math-error">{output.error}</div>
         ) : renderedTrace ? (
@@ -121,9 +115,6 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
         ) : (
           <div className="math-empty">Click to edit.</div>
         )}
-        {output?.warnings?.length ? (
-          <div className="math-error" data-testid="math-warning">{output.warnings.join(' ')}</div>
-        ) : null}
       </div>
     );
   }
@@ -169,7 +160,6 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
           autoFocus
         />
       </div>
-      <div className="subtitle">Examples: x^2 + 2x + 1, x^2 = 2, a := 5</div>
     </div>
   );
 }

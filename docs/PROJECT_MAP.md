@@ -19,6 +19,8 @@ SugarPy is a local notebook toolkit:
 - Notebook app: `http://localhost:5173/`
 - Standalone teacher wiki page: `http://localhost:5173/wiki`
 - Demo notebook: `notebooks/CoreFeaturesDemo.ipynb`
+- Notebook UI uses a fixed top header and a single bottom `+ Add Cell` entry point
+  (`Code | Text | Math | Stoich`).
 
 ## Key scripts
 - `scripts/run-all.sh`: starts Jupyter backend and Vite dev server together.

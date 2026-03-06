@@ -1,100 +1,17 @@
 import React from 'react';
-import createPlotlyComponent from 'react-plotly.js/factory';
-import Plotly from 'plotly.js-dist-min';
-import katex from 'katex';
 import { CellModel } from '../App';
 import { CodeEditor } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
-import { CellHeader } from './CellHeader';
 import { StoichiometryCell } from './StoichiometryCell';
 import { StoichState } from '../utils/stoichTypes';
-
-const Plot = createPlotlyComponent(Plotly as any);
-
-const asText = (value: unknown) => {
-  if (Array.isArray(value)) return value.join('');
-  if (value === null || value === undefined) return '';
-  return String(value);
-};
-
-const normalizeLatex = (value: unknown) => {
-  let latex = asText(value).trim();
-  latex = latex.replace(/^\$+/, '').replace(/\$+$/, '').trim();
-  latex = latex.replace(/^\\displaystyle\s*/, '').trim();
-  return latex;
-};
-
-const renderOutput = (cell: CellModel) => {
-  if (!cell.output) return null;
-
-  if (cell.output.type === 'error') {
-    return (
-      <div className="output output-plain cell-error" data-testid="cell-error">
-        {cell.output.ename}: {cell.output.evalue}
-      </div>
-    );
-  }
-
-  const data = cell.output.data ?? {};
-  const plotlyValue = data['application/vnd.plotly.v1+json'];
-  if (plotlyValue && typeof plotlyValue === 'object') {
-    const figure = plotlyValue as any;
-    return (
-      <div className="output output-rich" data-testid="plotly-graph">
-        <Plot
-          data={Array.isArray(figure.data) ? figure.data : []}
-          layout={{
-            dragmode: 'pan',
-            autosize: true,
-            ...(figure.layout ?? {}),
-            xaxis: {
-              fixedrange: false,
-              constrain: 'none',
-              ...(figure.layout?.xaxis ?? {})
-            },
-            yaxis: {
-              fixedrange: false,
-              ...(figure.layout?.yaxis ?? {})
-            }
-          }}
-          config={{
-            responsive: true,
-            scrollZoom: true,
-            doubleClick: 'reset',
-            modeBarButtonsToRemove: ['autoScale2d']
-          }}
-          style={{ width: '100%', height: 360 }}
-          useResizeHandler
-        />
-      </div>
-    );
-  }
-
-  const latexValue = data['text/latex'];
-  if (latexValue) {
-    const clean = normalizeLatex(latexValue);
-    const html = katex.renderToString(clean, { throwOnError: false, displayMode: true });
-    return (
-      <div
-        className="output output-rich"
-        data-testid="katex-formula"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    );
-  }
-
-  const plain = asText(data['text/plain']).trim();
-  if (!plain) return null;
-  return (
-    <div className="output output-plain" data-testid="cell-plain-output">
-      {plain}
-    </div>
-  );
-};
+import { CellWrapper } from './CellWrapper';
+import { OutputArea } from './OutputArea';
 
 type Props = {
   cell: CellModel;
+  isActive: boolean;
+  onActivate: () => void;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
   onRunMath: (value: string) => void;
@@ -109,10 +26,21 @@ type Props = {
   mathSuggestions: { label: string; detail?: string }[];
   trigMode: 'deg' | 'rad';
   kernelReady: boolean;
+  onSetMathRenderMode: (mode: 'exact' | 'decimal') => void;
+  onToggleTrigMode: () => void;
+};
+
+const statusFromCell = (cell: CellModel) => {
+  if (cell.isRunning) return '*';
+  if (cell.type === 'markdown' || cell.type === 'stoich') return ' ';
+  if (cell.execCount === null || cell.execCount === undefined) return ' ';
+  return String(cell.execCount);
 };
 
 export function NotebookCell({
   cell,
+  isActive,
+  onActivate,
   onChange,
   onRun,
   onRunMath,
@@ -126,59 +54,54 @@ export function NotebookCell({
   onSlashCommand,
   mathSuggestions,
   trigMode,
-  kernelReady
+  kernelReady,
+  onSetMathRenderMode,
+  onToggleTrigMode
 }: Props) {
   const cellType = cell.type ?? 'code';
+  const mathRenderMode = cell.mathRenderMode ?? 'exact';
+  const runHandler =
+    cellType === 'markdown' || cellType === 'stoich'
+      ? undefined
+      : () => {
+          if (cellType === 'math') onRunMath(cell.source);
+          else onRun(cell.source);
+        };
+
   return (
-    <div className="cell-row" data-testid={`cell-row-${cellType}`}>
-      <div className="cell-gutter">
-        {cell.type !== 'markdown' && cell.type !== 'stoich' ? (
-          <CellHeader
-            execCount={cell.execCount}
-            isRunning={cell.isRunning}
-            onRun={() => {
-              if (cell.type === 'math') {
-                onRunMath(cell.source);
-              } else {
-                onRun(cell.source);
-              }
-            }}
-          />
-        ) : (
-          <div className="cell-placeholder">[ ]</div>
-        )}
-      </div>
-      <div className="cell cell-main">
-        <div className="cell-menu">
-          <button className="cell-menu-btn" onClick={onMoveUp}>↑</button>
-          <button className="cell-menu-btn" onClick={onMoveDown}>↓</button>
-          <button className="cell-menu-btn" onClick={onDelete}>✕</button>
-        </div>
-        {cell.type === 'markdown' ? (
-          <MarkdownEditor value={cell.source} onChange={onChange} />
-        ) : cell.type === 'stoich' ? (
-          <StoichiometryCell
-            state={cell.stoichState ?? { reaction: '', inputs: {} }}
-            output={cell.stoichOutput}
-            isRunning={cell.isRunning}
-            onChange={onChangeStoich}
-            onCompute={onRunStoich}
-            kernelReady={kernelReady}
-          />
-        ) : cell.type === 'math' ? (
-          <>
-            <MathEditor
-              value={cell.source}
-              onChange={onChange}
-              onRun={onRunMath}
-              completions={mathSuggestions}
-              output={cell.mathOutput}
-              isRunning={cell.isRunning}
-              trigMode={trigMode}
-            />
-            <div data-testid="cell-output">{renderOutput(cell)}</div>
-          </>
-        ) : (
+    <div className="notebook-item" data-testid={`cell-row-${cellType}`} data-cell-id={cell.id}>
+      <CellWrapper
+        isActive={isActive}
+        status={statusFromCell(cell)}
+        onRun={runHandler}
+        onMoveUp={onMoveUp}
+        onMoveDown={onMoveDown}
+        onDelete={onDelete}
+        onActivate={onActivate}
+        toolbarExtras={
+          cellType === 'math' ? (
+            <div className="cell-toolbar-mode" role="group" aria-label="Math render mode">
+              <button
+                type="button"
+                className="cell-toolbar-mode-btn active"
+                onClick={() => onSetMathRenderMode(mathRenderMode === 'exact' ? 'decimal' : 'exact')}
+                aria-label="Toggle math output mode"
+              >
+                {mathRenderMode === 'exact' ? 'Exact' : 'Decimal'}
+              </button>
+              <button
+                type="button"
+                className="cell-toolbar-mode-btn"
+                onClick={onToggleTrigMode}
+                aria-label="Toggle trig mode"
+              >
+                {trigMode === 'deg' ? 'Deg' : 'Rad'}
+              </button>
+            </div>
+          ) : null
+        }
+      >
+        {cellType === 'code' ? (
           <>
             <CodeEditor
               value={cell.source}
@@ -189,10 +112,44 @@ export function NotebookCell({
               onSlashCommand={onSlashCommand}
               placeholderText="Type code..."
             />
-            <div data-testid="cell-output">{renderOutput(cell)}</div>
+            <div data-testid="cell-output">
+              <OutputArea output={cell.output} />
+            </div>
           </>
-        )}
-      </div>
+        ) : null}
+
+        {cellType === 'markdown' ? (
+          <MarkdownEditor value={cell.source} onChange={onChange} />
+        ) : null}
+
+        {cellType === 'math' ? (
+          <>
+            <MathEditor
+              value={cell.source}
+              onChange={onChange}
+              onRun={onRunMath}
+              completions={mathSuggestions}
+              output={cell.mathOutput}
+              isRunning={cell.isRunning}
+              trigMode={trigMode}
+            />
+            <div data-testid="cell-output">
+              <OutputArea output={cell.output} />
+            </div>
+          </>
+        ) : null}
+
+        {cellType === 'stoich' ? (
+          <StoichiometryCell
+            state={cell.stoichState ?? { reaction: '', inputs: {} }}
+            output={cell.stoichOutput}
+            isRunning={cell.isRunning}
+            onChange={onChangeStoich}
+            onCompute={onRunStoich}
+            kernelReady={kernelReady}
+          />
+        ) : null}
+      </CellWrapper>
     </div>
   );
 }
