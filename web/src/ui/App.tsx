@@ -112,6 +112,45 @@ const getCodeLanguage = (cell: Pick<CellModel, 'type' | 'runtimeLanguage'> | nul
   return normalizeCodeLanguage(cell.runtimeLanguage);
 };
 
+const buildPhpBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import os',
+    'import shutil',
+    'import subprocess',
+    'import tempfile',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_php_source = _payload.get('source', '')",
+    '_proc = None',
+    "if shutil.which('php') is None:",
+    "    raise RuntimeError('PHP runtime is not installed on server. Install php CLI to run PHP cells.')",
+    "with tempfile.NamedTemporaryFile('w', suffix='.php', delete=False, encoding='utf-8') as _tmp:",
+    '    _tmp.write(_php_source)',
+    '    _path = _tmp.name',
+    'try:',
+    "    _proc = subprocess.run(['php', _path], capture_output=True, text=True)",
+    'finally:',
+    '    try:',
+    '        os.unlink(_path)',
+    '    except OSError:',
+    '        pass',
+    'if _proc is None:',
+    "    raise RuntimeError('PHP process did not start.')",
+    'if _proc.stdout:',
+    "    print(_proc.stdout, end='')",
+    'if _proc.stderr:',
+    "    print(_proc.stderr, end='')",
+    'if _proc.returncode != 0:',
+    "    raise RuntimeError(f'PHP exited with code {_proc.returncode}')"
+  ].join('\n');
+};
+
+const buildExecutionCode = (language: CodeLanguage, source: string) => {
+  if (language === 'php') return buildPhpBridgeCode(source);
+  return source;
+};
+
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
 const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
@@ -649,8 +688,9 @@ function App() {
       });
     }
     let future: any;
+    const codeToExecute = buildExecutionCode(resolvedLanguage, code);
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      future = activeKernel.requestExecute({ code: codeToExecute, stop_on_error: true });
     } catch (error) {
       if (showOutput) {
         const message = isCanceledFutureError(error)

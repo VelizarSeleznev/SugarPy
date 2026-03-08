@@ -39,8 +39,10 @@
 - `./scripts/test-all.sh` gate order is: frontend build -> backend pytest -> Playwright E2E.
 - UI changes must be validated by `./scripts/ui-check.sh` (or by `./scripts/test-all.sh`).
 - CAS UI behavior for code cells is MIME-first:
-  - Execution backend is Python kernel only; non-Python code cells return a UI-level
-    `UnsupportedLanguage` error and do not execute against the kernel.
+  - Execution backend uses Python kernel runtime:
+    - `Python` cells execute directly in kernel.
+    - `PHP` cells execute via Python subprocess bridge (`php` CLI must be installed on server).
+    - `C`/`Go` cells currently return a UI-level `UnsupportedLanguage` error.
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.
