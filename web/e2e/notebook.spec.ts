@@ -19,6 +19,14 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const setLanguageInFirstCodeCell = async (page: any, languageLabel: 'Python' | 'C' | 'Go' | 'PHP') => {
+  const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+  await firstCell.hover();
+  const selector = firstCell.getByTestId('code-language-select').first();
+  await expect(selector).toBeVisible();
+  await selector.selectOption({ label: languageLabel });
+};
+
 const setMathInLastCell = async (page: any, source: string) => {
   const mathCell = page.locator('[data-testid="cell-row-math"]').last();
   const editor = mathCell.locator('.cm-content').first();
@@ -125,6 +133,53 @@ test.describe('Notebook CAS outputs', () => {
     await addMathCellAfterFirstCode(page);
     await setMathInLastCell(page, 'f(3)');
     await expect(page.getByTestId('math-output').last()).toContainText('4');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('@smoke Go code cell: executes via bridge or reports missing go runtime', async ({ page }) => {
+    test.setTimeout(180_000);
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setLanguageInFirstCodeCell(page, 'Go');
+    await setCodeInFirstCell(
+      page,
+      'package main\nimport "fmt"\nfunc main() {\n    fmt.Println(2 + 3)\n}'
+    );
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/5|Go runtime is not installed on server/i, { timeout: 120_000 });
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('PHP code cell: executes via bridge or reports missing php runtime', async ({ page }) => {
+    test.setTimeout(180_000);
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setLanguageInFirstCodeCell(page, 'PHP');
+    await setCodeInFirstCell(page, "<?php\necho (2 + 2) . PHP_EOL;");
+
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/4|PHP runtime is not installed on server/i, { timeout: 120_000 });
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('C code cell: compiles via bridge or reports missing c compiler', async ({ page }) => {
+    test.setTimeout(180_000);
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setLanguageInFirstCodeCell(page, 'C');
+    await setCodeInFirstCell(
+      page,
+      '#include <stdio.h>\nint main(void) {\n    printf("%d\\n", 6 * 7);\n    return 0;\n}'
+    );
+
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/42|C compiler is not installed on server/i, { timeout: 120_000 });
     await expectNoGlobalErrors(page, guards);
   });
 });

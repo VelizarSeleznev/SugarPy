@@ -8,6 +8,7 @@
 - Frontend has two page entrypoints:
   - `/` for the notebook app (kernel-aware runtime).
   - `/wiki` for the standalone documentation page (no kernel dependency).
+- Code cell editor supports language selection (`Python`, `C`, `Go`, `PHP`) for authoring.
 
 ## Runtime boundaries
 - UI and kernel communicate over localhost.
@@ -38,6 +39,11 @@
 - `./scripts/test-all.sh` gate order is: frontend build -> backend pytest -> Playwright E2E.
 - UI changes must be validated by `./scripts/ui-check.sh` (or by `./scripts/test-all.sh`).
 - CAS UI behavior for code cells is MIME-first:
+  - Execution backend uses Python kernel runtime:
+    - `Python` cells execute directly in kernel.
+    - `PHP` cells execute via Python subprocess bridge (`php` CLI, or `podman` + `php:8.3-cli` container).
+    - `C` cells compile and run via Python subprocess bridge (`gcc`/`cc`, or `podman` + `gcc:14` container).
+    - `Go` cells run via Python subprocess bridge (`go`, or `podman` + `golang:1.24` container).
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.

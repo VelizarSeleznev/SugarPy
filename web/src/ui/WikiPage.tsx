@@ -55,7 +55,7 @@ export function WikiPage() {
       <section className="wiki-section">
         <h2>What SugarPy can do</h2>
         <ul>
-          <li>Run Python in notebook-style code cells.</li>
+          <li>Write code in Python, C, Go, or PHP in notebook-style code cells.</li>
           <li>Evaluate CAS-style math in Math cells.</li>
           <li>Render formulas and Plotly graphs.</li>
           <li>Balance reactions and compute stoichiometry (optional chemistry flow).</li>
@@ -65,7 +65,7 @@ export function WikiPage() {
       <section className="wiki-section">
         <h2>Cell types</h2>
         <ul>
-          <li>`Code`: Python logic, function definitions, imports, plots.</li>
+          <li>`Code`: language-selectable editor (`Python`, `C`, `Go`, `PHP`). Execution supports all four languages (local toolchain or `podman` fallback).</li>
           <li>`Math`: fast symbolic math using `=`, `:=`, `^`, implicit multiplication.</li>
           <li>`Stoichiometry`: interactive chemistry reaction table.</li>
           <li>`Text`: lesson notes and explanations.</li>
@@ -84,7 +84,7 @@ export function WikiPage() {
 
       <section className="wiki-section">
         <h2>Code workflow</h2>
-        <p>Define functions in Code cells, then reuse them in Math cells.</p>
+        <p>Use Python Code cells to define functions, then reuse them in Math cells.</p>
         <ExampleBlock lines={codeExamples} />
       </section>
 

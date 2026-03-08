@@ -20,12 +20,21 @@ import {
   serializeIpynb,
   serializeSugarPy
 } from './utils/notebookIO';
+import {
+  CODE_LANGUAGES,
+  CODE_LANGUAGE_LABELS,
+  CodeLanguage,
+  DEFAULT_CODE_LANGUAGE,
+  isExecutableCodeLanguage,
+  normalizeCodeLanguage
+} from './utils/codeLanguage';
 
 export type CellModel = {
   id: string;
   source: string;
   output?: CellOutput;
   type?: 'code' | 'markdown' | 'math' | 'stoich';
+  runtimeLanguage?: CodeLanguage;
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -67,7 +76,8 @@ export type CellOutput =
 const defaultCell: CellModel = {
   id: 'cell-1',
   source: '# Try: find_hypotenuse(3, 4)\n',
-  type: 'code'
+  type: 'code',
+  runtimeLanguage: DEFAULT_CODE_LANGUAGE
 };
 
 const createStoichState = (reaction = ''): StoichState => ({
@@ -95,6 +105,129 @@ const asText = (value: unknown) => {
   if (Array.isArray(value)) return value.join('');
   if (value === null || value === undefined) return '';
   return String(value);
+};
+
+const getCodeLanguage = (cell: Pick<CellModel, 'type' | 'runtimeLanguage'> | null | undefined): CodeLanguage => {
+  if (!cell || cell.type !== 'code') return DEFAULT_CODE_LANGUAGE;
+  return normalizeCodeLanguage(cell.runtimeLanguage);
+};
+
+const buildPhpBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import shutil',
+    'import subprocess',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_php_source = _payload.get('source', '')",
+    '_proc = None',
+    "_php_cmd = shutil.which('php')",
+    "if _php_cmd:",
+    "    _proc = subprocess.run([_php_cmd], input=_php_source, capture_output=True, text=True)",
+    'else:',
+    "    _podman_cmd = shutil.which('podman')",
+    "    if not _podman_cmd:",
+    "        raise RuntimeError('PHP runtime is not installed on server. Install php CLI or podman to run PHP cells.')",
+    '    _proc = subprocess.run(',
+    "        [_podman_cmd, 'run', '--rm', '-i', 'docker.io/library/php:8.3-cli', 'php'],",
+    '        input=_php_source,',
+    '        capture_output=True,',
+    '        text=True',
+    '    )',
+    'if _proc is None:',
+    "    raise RuntimeError('PHP process did not start.')",
+    'if _proc.stdout:',
+    "    print(_proc.stdout, end='')",
+    'if _proc.stderr:',
+    "    print(_proc.stderr, end='')",
+    'if _proc.returncode != 0:',
+    "    raise RuntimeError(f'PHP exited with code {_proc.returncode}')"
+  ].join('\n');
+};
+
+const buildCBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import os',
+    'import shutil',
+    'import subprocess',
+    'import tempfile',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_c_source = _payload.get('source', '')",
+    "_compiler = shutil.which('gcc') or shutil.which('cc')",
+    "_podman_cmd = shutil.which('podman')",
+    "if not _compiler and not _podman_cmd:",
+    "    raise RuntimeError('C compiler is not installed on server. Install gcc/cc or podman to run C cells.')",
+    "with tempfile.TemporaryDirectory(prefix='sugarpy-c-') as _tmp:",
+    "    _src = os.path.join(_tmp, 'main.c')",
+    "    _bin = os.path.join(_tmp, 'main')",
+    "    with open(_src, 'w', encoding='utf-8') as _fh:",
+    '        _fh.write(_c_source)',
+    '    if _compiler:',
+    "        _compile = subprocess.run([_compiler, _src, '-O2', '-std=c11', '-o', _bin], capture_output=True, text=True)",
+    '    else:',
+    '        _compile = subprocess.run(',
+    "            [_podman_cmd, 'run', '--rm', '-v', f'{_tmp}:/work:Z', '-w', '/work', 'docker.io/library/gcc:14', 'gcc', 'main.c', '-O2', '-std=c11', '-o', 'main'],",
+    '            capture_output=True,',
+    '            text=True',
+    '        )',
+    '    if _compile.stdout:',
+    "        print(_compile.stdout, end='')",
+    '    if _compile.stderr:',
+    "        print(_compile.stderr, end='')",
+    '    if _compile.returncode != 0:',
+    "        raise RuntimeError(f'C compilation failed with code {_compile.returncode}')",
+    '    _run = subprocess.run([_bin], capture_output=True, text=True)',
+    '    if _run.stdout:',
+    "        print(_run.stdout, end='')",
+    '    if _run.stderr:',
+    "        print(_run.stderr, end='')",
+    '    if _run.returncode != 0:',
+    "        raise RuntimeError(f'C program exited with code {_run.returncode}')"
+  ].join('\n');
+};
+
+const buildGoBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import os',
+    'import shutil',
+    'import subprocess',
+    'import tempfile',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_go_source = _payload.get('source', '')",
+    "_go_cmd = shutil.which('go')",
+    "_podman_cmd = shutil.which('podman')",
+    "if not _go_cmd and not _podman_cmd:",
+    "    raise RuntimeError('Go runtime is not installed on server. Install go or podman to run Go cells.')",
+    "with tempfile.TemporaryDirectory(prefix='sugarpy-go-') as _tmp:",
+    "    _src = os.path.join(_tmp, 'main.go')",
+    "    with open(_src, 'w', encoding='utf-8') as _fh:",
+    '        _fh.write(_go_source)',
+    '    if _go_cmd:',
+    "        _run = subprocess.run([_go_cmd, 'run', _src], capture_output=True, text=True)",
+    '    else:',
+    '        _run = subprocess.run(',
+    "            [_podman_cmd, 'run', '--rm', '-v', f'{_tmp}:/work:Z', '-w', '/work', 'docker.io/library/golang:1.24', 'go', 'run', 'main.go'],",
+    '            capture_output=True,',
+    '            text=True',
+    '        )',
+    '    if _run.stdout:',
+    "        print(_run.stdout, end='')",
+    '    if _run.stderr:',
+    "        print(_run.stderr, end='')",
+    '    if _run.returncode != 0:',
+    "        raise RuntimeError(f'Go program failed with code {_run.returncode}')"
+  ].join('\n');
+};
+
+const buildExecutionCode = (language: CodeLanguage, source: string) => {
+  if (language === 'php') return buildPhpBridgeCode(source);
+  if (language === 'c') return buildCBridgeCode(source);
+  if (language === 'go') return buildGoBridgeCode(source);
+  return source;
 };
 
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
@@ -597,18 +730,46 @@ function App() {
     };
   }, [serverUrl, token]);
 
-  const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
+  const runCell = async (
+    cellId: string,
+    code: string,
+    showOutput = true,
+    countExecution = true,
+    language?: CodeLanguage
+  ) => {
     if (!activeKernel) return;
+    const resolvedLanguage = language ?? getCodeLanguage(cells.find((cell) => cell.id === cellId));
+    if (!isExecutableCodeLanguage(resolvedLanguage)) {
+      if (showOutput) {
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId
+              ? {
+                  ...c,
+                  isRunning: false,
+                  output: {
+                    type: 'error',
+                    ename: 'UnsupportedLanguage',
+                    evalue: `${resolvedLanguage.toUpperCase()} execution is not available yet. Switch to Python to run this cell.`
+                  }
+                }
+              : c
+          )
+        );
+      }
+      return;
+    }
     if (showOutput) {
       setCells((prev) => {
         const exists = prev.some((c) => c.id === cellId);
         if (exists) return prev;
-        return [...prev, { id: cellId, source: code, type: 'code' }];
+        return [...prev, { id: cellId, source: code, type: 'code', runtimeLanguage: resolvedLanguage }];
       });
     }
     let future: any;
+    const codeToExecute = buildExecutionCode(resolvedLanguage, code);
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      future = activeKernel.requestExecute({ code: codeToExecute, stop_on_error: true });
     } catch (error) {
       if (showOutput) {
         const message = isCanceledFutureError(error)
@@ -969,7 +1130,7 @@ function App() {
           await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
           continue;
         }
-        await runCell(cell.id, cell.source);
+        await runCell(cell.id, cell.source, true, true, getCodeLanguage(cell));
       }
     } finally {
       setIsRunningAll(false);
@@ -994,6 +1155,7 @@ function App() {
       id: `cell-${idSuffix}`,
       source,
       type,
+      ...(type === 'code' ? { runtimeLanguage: DEFAULT_CODE_LANGUAGE } : {}),
       ...(type === 'math' ? { mathRenderMode: 'exact' as const } : {})
     };
   };
@@ -1041,6 +1203,7 @@ function App() {
         return {
           ...cell,
           type: 'code',
+          runtimeLanguage: DEFAULT_CODE_LANGUAGE,
           source: entry.snippet,
           output: undefined,
           execCount: undefined,
@@ -1316,7 +1479,7 @@ function App() {
       await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
       return;
     }
-    await runCell(cell.id, cell.source);
+    await runCell(cell.id, cell.source, true, true, getCodeLanguage(cell));
   };
 
   return (
@@ -1446,7 +1609,9 @@ function App() {
                         isActive={cells[index].id === activeCellId}
                         onActivate={() => setActiveCellId(cells[index].id)}
                         onChange={(value) => updateCell(cells[index].id, value)}
-                        onRun={(value) => runCell(cells[index].id, value)}
+                        onRun={(value) =>
+                          runCell(cells[index].id, value, true, true, getCodeLanguage(cells[index]))
+                        }
                         onRunMath={(value) =>
                           runMathCell(cells[index].id, value, cells[index].mathRenderMode ?? 'exact')
                         }
@@ -1465,6 +1630,21 @@ function App() {
                           setCells((prev) =>
                             prev.map((cell) =>
                               cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
+                            )
+                          )
+                        }
+                        onSetCodeLanguage={(language) =>
+                          setCells((prev) =>
+                            prev.map((cell) =>
+                              cell.id === cells[index].id
+                                ? {
+                                    ...cell,
+                                    runtimeLanguage: language,
+                                    output: undefined,
+                                    execCount: undefined,
+                                    isRunning: false
+                                  }
+                                : cell
                             )
                           )
                         }
@@ -1501,6 +1681,38 @@ function App() {
             >
               Run
             </button>
+            {mobileActionCell.type === 'code' ? (
+              <label className="mobile-cell-language-wrap">
+                <span className="mobile-cell-language-label">Lang</span>
+                <select
+                  className="mobile-cell-language-select"
+                  data-testid="mobile-code-language-select"
+                  value={getCodeLanguage(mobileActionCell)}
+                  onChange={(event) => {
+                    const nextLanguage = normalizeCodeLanguage(event.target.value);
+                    setCells((prev) =>
+                      prev.map((cell) =>
+                        cell.id === mobileActionCell.id
+                          ? {
+                              ...cell,
+                              runtimeLanguage: nextLanguage,
+                              output: undefined,
+                              execCount: undefined,
+                              isRunning: false
+                            }
+                          : cell
+                      )
+                    );
+                  }}
+                >
+                  {CODE_LANGUAGES.map((language) => (
+                    <option key={language} value={language}>
+                      {CODE_LANGUAGE_LABELS[language]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             {mobileActionCell.type === 'math' ? (
               <button
                 type="button"

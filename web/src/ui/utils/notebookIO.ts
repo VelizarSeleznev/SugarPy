@@ -1,4 +1,5 @@
 import { CellModel, CellOutput } from '../App';
+import { DEFAULT_CODE_LANGUAGE, normalizeCodeLanguage } from './codeLanguage';
 
 export type SugarPyNotebookV1 = {
   version: 1;
@@ -75,6 +76,9 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   trigMode: data.trigMode,
   cells: data.cells.map((cell) => ({
     ...cell,
+    ...(cell.type === 'code' || !cell.type
+      ? { runtimeLanguage: normalizeCodeLanguage((cell as any).runtimeLanguage) }
+      : { runtimeLanguage: undefined }),
     output: normalizeOutput((cell as any).output),
     isRunning: false
   }))
@@ -218,7 +222,12 @@ export const serializeIpynb = (params: {
     })();
     return {
       cell_type: 'code',
-      metadata: {},
+      metadata: {
+        sugarpy: {
+          type: 'code',
+          runtimeLanguage: normalizeCodeLanguage(cell.runtimeLanguage)
+        }
+      },
       source: toLines(cell.source),
       outputs,
       execution_count: cell.execCount ?? null
@@ -306,6 +315,7 @@ export const deserializeIpynb = (data: any) => {
       id: `cell-${Date.now()}-${idx}`,
       source: fromLines(cell?.source ?? ''),
       type: 'code',
+      runtimeLanguage: normalizeCodeLanguage(cell?.metadata?.sugarpy?.runtimeLanguage ?? DEFAULT_CODE_LANGUAGE),
       output: parsedOutput,
       execCount: cell?.execution_count ?? undefined,
       isRunning: false
