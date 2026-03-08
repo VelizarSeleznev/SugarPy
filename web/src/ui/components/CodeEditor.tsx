@@ -33,6 +33,7 @@ export function CodeEditor({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const completionCompartment = useRef(new Compartment());
+  const languageCompartment = useRef(new Compartment());
   const onRunRef = useRef(onRun);
   const onSlashCommandRef = useRef(onSlashCommand);
 
@@ -79,7 +80,7 @@ export function CodeEditor({
           ])
         ),
         keymap.of([...defaultKeymap, indentWithTab]),
-        (language || python()),
+        languageCompartment.current.of(language || python()),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': { height: 'auto' },
@@ -130,6 +131,14 @@ export function CodeEditor({
       });
     }
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: languageCompartment.current.reconfigure(language || python())
+    });
+  }, [language]);
 
   useEffect(() => {
     const view = viewRef.current;

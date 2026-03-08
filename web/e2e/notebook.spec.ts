@@ -19,6 +19,14 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const setLanguageInFirstCodeCell = async (page: any, languageLabel: 'Python' | 'C' | 'Go' | 'PHP') => {
+  const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+  await firstCell.hover();
+  const selector = firstCell.getByTestId('code-language-select').first();
+  await expect(selector).toBeVisible();
+  await selector.selectOption({ label: languageLabel });
+};
+
 const setMathInLastCell = async (page: any, source: string) => {
   const mathCell = page.locator('[data-testid="cell-row-math"]').last();
   const editor = mathCell.locator('.cm-content').first();
@@ -125,6 +133,19 @@ test.describe('Notebook CAS outputs', () => {
     await addMathCellAfterFirstCode(page);
     await setMathInLastCell(page, 'f(3)');
     await expect(page.getByTestId('math-output').last()).toContainText('4');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('@smoke Code language selector: non-Python run shows unsupported-language message', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setLanguageInFirstCodeCell(page, 'Go');
+    await setCodeInFirstCell(page, 'fmt.Println("hello")');
+    const errorOutput = page.getByTestId('cell-error');
+    await expect(errorOutput).toBeVisible();
+    await expect(errorOutput).toContainText(
+      'UnsupportedLanguage: GO execution is not available yet. Switch to Python to run this cell.'
+    );
     await expectNoGlobalErrors(page, guards);
   });
 });

@@ -20,12 +20,21 @@ import {
   serializeIpynb,
   serializeSugarPy
 } from './utils/notebookIO';
+import {
+  CODE_LANGUAGES,
+  CODE_LANGUAGE_LABELS,
+  CodeLanguage,
+  DEFAULT_CODE_LANGUAGE,
+  isExecutableCodeLanguage,
+  normalizeCodeLanguage
+} from './utils/codeLanguage';
 
 export type CellModel = {
   id: string;
   source: string;
   output?: CellOutput;
   type?: 'code' | 'markdown' | 'math' | 'stoich';
+  runtimeLanguage?: CodeLanguage;
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -67,7 +76,8 @@ export type CellOutput =
 const defaultCell: CellModel = {
   id: 'cell-1',
   source: '# Try: find_hypotenuse(3, 4)\n',
-  type: 'code'
+  type: 'code',
+  runtimeLanguage: DEFAULT_CODE_LANGUAGE
 };
 
 const createStoichState = (reaction = ''): StoichState => ({
@@ -95,6 +105,11 @@ const asText = (value: unknown) => {
   if (Array.isArray(value)) return value.join('');
   if (value === null || value === undefined) return '';
   return String(value);
+};
+
+const getCodeLanguage = (cell: Pick<CellModel, 'type' | 'runtimeLanguage'> | null | undefined): CodeLanguage => {
+  if (!cell || cell.type !== 'code') return DEFAULT_CODE_LANGUAGE;
+  return normalizeCodeLanguage(cell.runtimeLanguage);
 };
 
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
@@ -597,13 +612,40 @@ function App() {
     };
   }, [serverUrl, token]);
 
-  const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
+  const runCell = async (
+    cellId: string,
+    code: string,
+    showOutput = true,
+    countExecution = true,
+    language?: CodeLanguage
+  ) => {
     if (!activeKernel) return;
+    const resolvedLanguage = language ?? getCodeLanguage(cells.find((cell) => cell.id === cellId));
+    if (!isExecutableCodeLanguage(resolvedLanguage)) {
+      if (showOutput) {
+        setCells((prev) =>
+          prev.map((c) =>
+            c.id === cellId
+              ? {
+                  ...c,
+                  isRunning: false,
+                  output: {
+                    type: 'error',
+                    ename: 'UnsupportedLanguage',
+                    evalue: `${resolvedLanguage.toUpperCase()} execution is not available yet. Switch to Python to run this cell.`
+                  }
+                }
+              : c
+          )
+        );
+      }
+      return;
+    }
     if (showOutput) {
       setCells((prev) => {
         const exists = prev.some((c) => c.id === cellId);
         if (exists) return prev;
-        return [...prev, { id: cellId, source: code, type: 'code' }];
+        return [...prev, { id: cellId, source: code, type: 'code', runtimeLanguage: resolvedLanguage }];
       });
     }
     let future: any;
@@ -969,7 +1011,7 @@ function App() {
           await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
           continue;
         }
-        await runCell(cell.id, cell.source);
+        await runCell(cell.id, cell.source, true, true, getCodeLanguage(cell));
       }
     } finally {
       setIsRunningAll(false);
@@ -994,6 +1036,7 @@ function App() {
       id: `cell-${idSuffix}`,
       source,
       type,
+      ...(type === 'code' ? { runtimeLanguage: DEFAULT_CODE_LANGUAGE } : {}),
       ...(type === 'math' ? { mathRenderMode: 'exact' as const } : {})
     };
   };
@@ -1041,6 +1084,7 @@ function App() {
         return {
           ...cell,
           type: 'code',
+          runtimeLanguage: DEFAULT_CODE_LANGUAGE,
           source: entry.snippet,
           output: undefined,
           execCount: undefined,
@@ -1316,7 +1360,7 @@ function App() {
       await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
       return;
     }
-    await runCell(cell.id, cell.source);
+    await runCell(cell.id, cell.source, true, true, getCodeLanguage(cell));
   };
 
   return (
@@ -1446,7 +1490,9 @@ function App() {
                         isActive={cells[index].id === activeCellId}
                         onActivate={() => setActiveCellId(cells[index].id)}
                         onChange={(value) => updateCell(cells[index].id, value)}
-                        onRun={(value) => runCell(cells[index].id, value)}
+                        onRun={(value) =>
+                          runCell(cells[index].id, value, true, true, getCodeLanguage(cells[index]))
+                        }
                         onRunMath={(value) =>
                           runMathCell(cells[index].id, value, cells[index].mathRenderMode ?? 'exact')
                         }
@@ -1465,6 +1511,21 @@ function App() {
                           setCells((prev) =>
                             prev.map((cell) =>
                               cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
+                            )
+                          )
+                        }
+                        onSetCodeLanguage={(language) =>
+                          setCells((prev) =>
+                            prev.map((cell) =>
+                              cell.id === cells[index].id
+                                ? {
+                                    ...cell,
+                                    runtimeLanguage: language,
+                                    output: undefined,
+                                    execCount: undefined,
+                                    isRunning: false
+                                  }
+                                : cell
                             )
                           )
                         }
@@ -1501,6 +1562,38 @@ function App() {
             >
               Run
             </button>
+            {mobileActionCell.type === 'code' ? (
+              <label className="mobile-cell-language-wrap">
+                <span className="mobile-cell-language-label">Lang</span>
+                <select
+                  className="mobile-cell-language-select"
+                  data-testid="mobile-code-language-select"
+                  value={getCodeLanguage(mobileActionCell)}
+                  onChange={(event) => {
+                    const nextLanguage = normalizeCodeLanguage(event.target.value);
+                    setCells((prev) =>
+                      prev.map((cell) =>
+                        cell.id === mobileActionCell.id
+                          ? {
+                              ...cell,
+                              runtimeLanguage: nextLanguage,
+                              output: undefined,
+                              execCount: undefined,
+                              isRunning: false
+                            }
+                          : cell
+                      )
+                    );
+                  }}
+                >
+                  {CODE_LANGUAGES.map((language) => (
+                    <option key={language} value={language}>
+                      {CODE_LANGUAGE_LABELS[language]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             {mobileActionCell.type === 'math' ? (
               <button
                 type="button"
