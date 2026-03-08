@@ -65,7 +65,7 @@ export function WikiPage() {
       <section className="wiki-section">
         <h2>Cell types</h2>
         <ul>
-          <li>`Code`: language-selectable editor (`Python`, `C`, `Go`, `PHP`). Execution supports `Python` and `PHP` (`php` CLI or `podman` + `php:8.3-cli`).</li>
+          <li>`Code`: language-selectable editor (`Python`, `C`, `Go`, `PHP`). Execution supports all four languages (local toolchain or `podman` fallback).</li>
           <li>`Math`: fast symbolic math using `=`, `:=`, `^`, implicit multiplication.</li>
           <li>`Stoichiometry`: interactive chemistry reaction table.</li>
           <li>`Text`: lesson notes and explanations.</li>

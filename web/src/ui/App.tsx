@@ -145,8 +145,88 @@ const buildPhpBridgeCode = (source: string) => {
   ].join('\n');
 };
 
+const buildCBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import os',
+    'import shutil',
+    'import subprocess',
+    'import tempfile',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_c_source = _payload.get('source', '')",
+    "_compiler = shutil.which('gcc') or shutil.which('cc')",
+    "_podman_cmd = shutil.which('podman')",
+    "if not _compiler and not _podman_cmd:",
+    "    raise RuntimeError('C compiler is not installed on server. Install gcc/cc or podman to run C cells.')",
+    "with tempfile.TemporaryDirectory(prefix='sugarpy-c-') as _tmp:",
+    "    _src = os.path.join(_tmp, 'main.c')",
+    "    _bin = os.path.join(_tmp, 'main')",
+    "    with open(_src, 'w', encoding='utf-8') as _fh:",
+    '        _fh.write(_c_source)',
+    '    if _compiler:',
+    "        _compile = subprocess.run([_compiler, _src, '-O2', '-std=c11', '-o', _bin], capture_output=True, text=True)",
+    '    else:',
+    '        _compile = subprocess.run(',
+    "            [_podman_cmd, 'run', '--rm', '-v', f'{_tmp}:/work:Z', '-w', '/work', 'docker.io/library/gcc:14', 'gcc', 'main.c', '-O2', '-std=c11', '-o', 'main'],",
+    '            capture_output=True,',
+    '            text=True',
+    '        )',
+    '    if _compile.stdout:',
+    "        print(_compile.stdout, end='')",
+    '    if _compile.stderr:',
+    "        print(_compile.stderr, end='')",
+    '    if _compile.returncode != 0:',
+    "        raise RuntimeError(f'C compilation failed with code {_compile.returncode}')",
+    '    _run = subprocess.run([_bin], capture_output=True, text=True)',
+    '    if _run.stdout:',
+    "        print(_run.stdout, end='')",
+    '    if _run.stderr:',
+    "        print(_run.stderr, end='')",
+    '    if _run.returncode != 0:',
+    "        raise RuntimeError(f'C program exited with code {_run.returncode}')"
+  ].join('\n');
+};
+
+const buildGoBridgeCode = (source: string) => {
+  const payload = JSON.stringify({ source });
+  return [
+    'import json',
+    'import os',
+    'import shutil',
+    'import subprocess',
+    'import tempfile',
+    `_payload = json.loads(${JSON.stringify(payload)})`,
+    "_go_source = _payload.get('source', '')",
+    "_go_cmd = shutil.which('go')",
+    "_podman_cmd = shutil.which('podman')",
+    "if not _go_cmd and not _podman_cmd:",
+    "    raise RuntimeError('Go runtime is not installed on server. Install go or podman to run Go cells.')",
+    "with tempfile.TemporaryDirectory(prefix='sugarpy-go-') as _tmp:",
+    "    _src = os.path.join(_tmp, 'main.go')",
+    "    with open(_src, 'w', encoding='utf-8') as _fh:",
+    '        _fh.write(_go_source)',
+    '    if _go_cmd:',
+    "        _run = subprocess.run([_go_cmd, 'run', _src], capture_output=True, text=True)",
+    '    else:',
+    '        _run = subprocess.run(',
+    "            [_podman_cmd, 'run', '--rm', '-v', f'{_tmp}:/work:Z', '-w', '/work', 'docker.io/library/golang:1.24', 'go', 'run', 'main.go'],",
+    '            capture_output=True,',
+    '            text=True',
+    '        )',
+    '    if _run.stdout:',
+    "        print(_run.stdout, end='')",
+    '    if _run.stderr:',
+    "        print(_run.stderr, end='')",
+    '    if _run.returncode != 0:',
+    "        raise RuntimeError(f'Go program failed with code {_run.returncode}')"
+  ].join('\n');
+};
+
 const buildExecutionCode = (language: CodeLanguage, source: string) => {
   if (language === 'php') return buildPhpBridgeCode(source);
+  if (language === 'c') return buildCBridgeCode(source);
+  if (language === 'go') return buildGoBridgeCode(source);
   return source;
 };
 

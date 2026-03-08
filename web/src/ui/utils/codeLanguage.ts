@@ -21,4 +21,4 @@ export const normalizeCodeLanguage = (value: unknown): CodeLanguage => {
 };
 
 export const isExecutableCodeLanguage = (language: CodeLanguage) =>
-  language === 'python' || language === 'php';
+  language === 'python' || language === 'php' || language === 'c' || language === 'go';

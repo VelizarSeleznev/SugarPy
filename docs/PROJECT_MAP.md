@@ -22,8 +22,8 @@ SugarPy is a local notebook toolkit:
 - Notebook UI uses a fixed top header and a single bottom `+ Add Cell` entry point
   (`Code | Text | Math | Stoich`).
 - Code cells include an in-cell language selector (`Python`, `C`, `Go`, `PHP`) for authoring.
-  Runtime execution currently supports `Python` and `PHP` (`php` CLI, or `podman` + `php:8.3-cli`);
-  `C` and `Go` remain non-executable for now.
+  Runtime execution supports all listed languages through local toolchains
+  (`python` / `php` / `gcc|cc` / `go`) with `podman` container fallbacks.
 
 ## Key scripts
 - `scripts/run-all.sh`: starts Jupyter backend and Vite dev server together.

@@ -42,7 +42,8 @@
   - Execution backend uses Python kernel runtime:
     - `Python` cells execute directly in kernel.
     - `PHP` cells execute via Python subprocess bridge (`php` CLI, or `podman` + `php:8.3-cli` container).
-    - `C`/`Go` cells currently return a UI-level `UnsupportedLanguage` error.
+    - `C` cells compile and run via Python subprocess bridge (`gcc`/`cc`, or `podman` + `gcc:14` container).
+    - `Go` cells run via Python subprocess bridge (`go`, or `podman` + `golang:1.24` container).
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.

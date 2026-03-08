@@ -136,16 +136,19 @@ test.describe('Notebook CAS outputs', () => {
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('@smoke Code language selector: non-Python run shows unsupported-language message', async ({ page }) => {
+  test('@smoke Go code cell: executes via bridge or reports missing go runtime', async ({ page }) => {
+    test.setTimeout(180_000);
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await setLanguageInFirstCodeCell(page, 'Go');
-    await setCodeInFirstCell(page, 'fmt.Println("hello")');
-    const errorOutput = page.getByTestId('cell-error');
-    await expect(errorOutput).toBeVisible();
-    await expect(errorOutput).toContainText(
-      'UnsupportedLanguage: GO execution is not available yet. Switch to Python to run this cell.'
+    await setCodeInFirstCell(
+      page,
+      'package main\nimport "fmt"\nfunc main() {\n    fmt.Println(2 + 3)\n}'
     );
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/5|Go runtime is not installed on server/i, { timeout: 120_000 });
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -160,6 +163,23 @@ test.describe('Notebook CAS outputs', () => {
     await expect(
       firstCell.locator('[data-testid="cell-output"]').first()
     ).toContainText(/4|PHP runtime is not installed on server/i, { timeout: 120_000 });
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('C code cell: compiles via bridge or reports missing c compiler', async ({ page }) => {
+    test.setTimeout(180_000);
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setLanguageInFirstCodeCell(page, 'C');
+    await setCodeInFirstCell(
+      page,
+      '#include <stdio.h>\nint main(void) {\n    printf("%d\\n", 6 * 7);\n    return 0;\n}'
+    );
+
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/42|C compiler is not installed on server/i, { timeout: 120_000 });
     await expectNoGlobalErrors(page, guards);
   });
 });
