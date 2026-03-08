@@ -150,15 +150,16 @@ test.describe('Notebook CAS outputs', () => {
   });
 
   test('PHP code cell: executes via bridge or reports missing php runtime', async ({ page }) => {
+    test.setTimeout(180_000);
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await setLanguageInFirstCodeCell(page, 'PHP');
     await setCodeInFirstCell(page, "<?php\necho (2 + 2) . PHP_EOL;");
 
     const firstCell = page.locator('[data-testid="cell-row-code"]').first();
-    await expect(firstCell.locator('[data-testid="cell-output"]').first()).toContainText(
-      /4|PHP runtime is not installed on server/i
-    );
+    await expect(
+      firstCell.locator('[data-testid="cell-output"]').first()
+    ).toContainText(/4|PHP runtime is not installed on server/i, { timeout: 120_000 });
     await expectNoGlobalErrors(page, guards);
   });
 });

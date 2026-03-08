@@ -41,7 +41,7 @@
 - CAS UI behavior for code cells is MIME-first:
   - Execution backend uses Python kernel runtime:
     - `Python` cells execute directly in kernel.
-    - `PHP` cells execute via Python subprocess bridge (`php` CLI must be installed on server).
+    - `PHP` cells execute via Python subprocess bridge (`php` CLI, or `podman` + `php:8.3-cli` container).
     - `C`/`Go` cells currently return a UI-level `UnsupportedLanguage` error.
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).

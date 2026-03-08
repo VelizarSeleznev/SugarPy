@@ -22,7 +22,7 @@ SugarPy is a local notebook toolkit:
 - Notebook UI uses a fixed top header and a single bottom `+ Add Cell` entry point
   (`Code | Text | Math | Stoich`).
 - Code cells include an in-cell language selector (`Python`, `C`, `Go`, `PHP`) for authoring.
-  Runtime execution currently supports `Python` and `PHP` (`php` CLI required on server);
+  Runtime execution currently supports `Python` and `PHP` (`php` CLI, or `podman` + `php:8.3-cli`);
   `C` and `Go` remain non-executable for now.
 
 ## Key scripts
