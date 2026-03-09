@@ -8,6 +8,10 @@ type Props = {
   onRun: (value: string) => void;
   completions?: { label: string; detail?: string }[];
   output?: {
+    render_cache?: {
+      exact: { steps: string[]; value?: string | null };
+      decimal: { steps: string[]; value?: string | null };
+    } | null;
     kind: 'expression' | 'equation' | 'assignment';
     steps: string[];
     value?: string;
@@ -24,13 +28,93 @@ type Props = {
       steps: string[];
       value?: string | null;
       plotly_figure?: unknown;
+      render_cache?: {
+        exact: { steps: string[]; value?: string | null };
+        decimal: { steps: string[]; value?: string | null };
+      } | null;
     }>;
   };
   isRunning?: boolean;
   trigMode: 'deg' | 'rad';
+  renderMode: 'exact' | 'decimal';
+  onToggleRenderMode: () => void;
+  onToggleTrigMode: () => void;
 };
 
-export function MathEditor({ value, onChange, onRun, completions, output, isRunning, trigMode: _trigMode }: Props) {
+const shortcutItems = [
+  { label: 'x²', snippet: '^2' },
+  { label: '√', snippet: 'sqrt(__CURSOR__)' },
+  { label: '( )', snippet: '(__CURSOR__)' },
+  { label: '=', snippet: ' = ' },
+  { label: ':=', snippet: ' := ' },
+  { label: 'solve', snippet: 'solve(__CURSOR__, x)' },
+  { label: 'expand', snippet: 'expand(__CURSOR__)' },
+  { label: 'factor', snippet: 'factor(__CURSOR__)' },
+  { label: 'N', snippet: 'N(__CURSOR__)' },
+  { label: 'plot', snippet: 'plot(__CURSOR__)' }
+];
+
+const withSourceBreakHints = (latex: string) =>
+  latex
+    .replace(/,/g, ",\\allowbreak ")
+    .replace(/=/g, "=\\allowbreak ")
+    .replace(/\\coloneqq/g, "\\coloneqq\\allowbreak ");
+
+const sourceToLatex = (source: string) => {
+  return source
+    .replace(/\btheta_([A-Za-z0-9]+)/g, '\\theta_{$1}')
+    .replace(/\b([A-Za-z]+)\[(\d+)\]/g, '$1_{$2}')
+    .replace(/:=/g, '\\coloneqq ')
+    .replace(/\*/g, ' \\cdot ')
+    .replace(/!=/g, '\\ne ')
+    .replace(/>=/g, '\\ge ')
+    .replace(/<=/g, '\\le ');
+};
+
+const renderSourceMath = (source: string) => {
+  try {
+    return katex.renderToString(withSourceBreakHints(sourceToLatex(source)), {
+      throwOnError: false,
+      displayMode: true
+    });
+  } catch (_err) {
+    return '';
+  }
+};
+
+const normalizeLatexForCompare = (latex: string) =>
+  latex
+    .replace(/\s+/g, '')
+    .replace(/\\left|\\right/g, '')
+    .replace(/\\coloneqq/g, '=')
+    .replace(/\\,/g, '')
+    .trim();
+
+const isTrivialAssignmentSource = (source: string, stepCount: number, kind?: string) => {
+  if (kind !== 'assignment' || stepCount !== 1) return false;
+  const parts = source.split(':=');
+  if (parts.length !== 2) return false;
+  const rhs = parts[1].trim();
+  return /^[\[\]\w\s,.-]+$/.test(rhs);
+};
+
+const isDuplicateRenderedSource = (source: string, firstStep?: string | null) => {
+  if (!source.trim() || !firstStep?.trim()) return false;
+  return normalizeLatexForCompare(sourceToLatex(source)) === normalizeLatexForCompare(firstStep);
+};
+
+export function MathEditor({
+  value,
+  onChange,
+  onRun,
+  completions,
+  output,
+  isRunning,
+  trigMode,
+  renderMode,
+  onToggleRenderMode,
+  onToggleTrigMode
+}: Props) {
   const [editing, setEditing] = useState(true);
   const [draft, setDraft] = useState(value);
   const [dirty, setDirty] = useState(false);
@@ -60,37 +144,103 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
   };
 
   const renderedSteps = useMemo(() => {
-    if (!output?.steps?.length) return [];
-    return renderLatexSteps(output.steps);
-  }, [output?.steps]);
+    const steps = output?.render_cache?.[renderMode]?.steps ?? output?.steps ?? [];
+    if (!steps.length) return [];
+    return renderLatexSteps(steps);
+  }, [output?.render_cache, output?.steps, renderMode]);
 
   const renderedTrace = useMemo(() => {
-    if (!output?.trace?.length) return null;
+    if (!output?.trace?.length || output.trace.length < 2) return null;
     return output.trace.map((item, idx) => {
-      const steps = item.steps ?? [];
+      const steps = item.render_cache?.[renderMode]?.steps ?? item.steps ?? [];
       const rendered = steps.length ? renderLatexSteps(steps) : [];
-      return { idx, item, rendered };
+      const hideDuplicatedSource =
+        isTrivialAssignmentSource(item.source || '', rendered.length, item.kind) ||
+        isDuplicateRenderedSource(item.source || '', steps[0] ?? null);
+      return {
+        idx,
+        item,
+        rendered,
+        renderedSource: renderSourceMath(item.source || ''),
+        showSource: !hideDuplicatedSource
+      };
     });
-  }, [output?.trace]);
+  }, [output?.trace, renderMode]);
+
+  const sourceText = useMemo(() => {
+    return (output?.normalized_source || lastRendered || value || '').trim();
+  }, [lastRendered, output?.normalized_source, value]);
+  const renderedSource = useMemo(() => renderSourceMath(sourceText), [sourceText]);
+  const showCardSource = useMemo(() => {
+    const stepCount = output?.steps?.length ?? 0;
+    if (renderedTrace) return false;
+    if (isTrivialAssignmentSource(sourceText, stepCount, output?.kind)) return false;
+    return !isDuplicateRenderedSource(
+      sourceText,
+      output?.render_cache?.[renderMode]?.steps?.[0] ?? output?.steps?.[0] ?? null
+    );
+  }, [output?.kind, output?.render_cache, output?.steps, renderMode, renderedTrace, sourceText]);
 
   if (!editing) {
     return (
-      <div className="math-render" onClick={() => setEditing(true)} data-testid="math-output">
+      <div className="math-card" onClick={() => setEditing(true)} data-testid="math-output">
+        <div className="math-card-topline">
+          <div className="math-card-controls" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="math-card-pill-btn primary mobile-only"
+              onClick={() => onRun(value)}
+              disabled={isRunning}
+              aria-label="Run math cell"
+              title="Run math cell"
+            >
+              ▶
+            </button>
+            <button type="button" className="math-card-pill-btn" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+            <button type="button" className="math-card-pill-btn" onClick={onToggleRenderMode}>
+              {renderMode === 'decimal' ? 'Decimal' : 'Exact'}
+            </button>
+            <button type="button" className="math-card-pill-btn" onClick={onToggleTrigMode}>
+              {trigMode === 'deg' ? 'Deg' : 'Rad'}
+            </button>
+          </div>
+        </div>
+        {!renderedTrace && showCardSource && renderedSource ? (
+          <div
+            className="math-card-source"
+            data-block-cell-swipe="true"
+            dangerouslySetInnerHTML={{ __html: renderedSource }}
+          />
+        ) : null}
         {isRunning ? <span className="math-running">running…</span> : null}
         {output?.error ? (
           <div className="math-error" data-testid="math-error">{output.error}</div>
         ) : renderedTrace ? (
-          <div className="math-trace">
-            {renderedTrace.map(({ idx, item, rendered }) => (
+          <div className="math-trace math-trace-card">
+            {renderedTrace.map(({ idx, item, rendered, renderedSource, showSource }) => (
               <div className="math-trace-item" key={`trace-${idx}`}>
-                <pre className="math-trace-source">
-                  <code>{item.source}</code>
-                </pre>
+                {showSource ? (
+                  <div className="math-trace-line">
+                    <span className="math-trace-index">{item.line_start}</span>
+                    <div
+                      className="math-trace-source math-trace-source-rendered"
+                      data-block-cell-swipe="true"
+                      dangerouslySetInnerHTML={{ __html: renderedSource }}
+                    />
+                  </div>
+                ) : (
+                  <div className="math-trace-line compact">
+                    <span className="math-trace-index">{item.line_start}</span>
+                  </div>
+                )}
                 {rendered.length ? (
                   <div className="math-steps">
                     {rendered.map((html, stepIdx) => (
                       <div
                         className="math-step"
+                        data-block-cell-swipe="true"
                         key={`trace-${idx}-step-${stepIdx}`}
                         data-testid="math-latex"
                         dangerouslySetInnerHTML={{ __html: html }}
@@ -106,6 +256,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
             {renderedSteps.map((html, idx) => (
               <div
                 className="math-step"
+                data-block-cell-swipe="true"
                 key={`step-${idx}`}
                 data-testid="math-latex"
                 dangerouslySetInnerHTML={{ __html: html }}
@@ -133,6 +284,30 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
 
   return (
     <div className="math-editor">
+      <div className="math-editor-toolbar">
+        <div className="math-card-controls">
+          <button
+            type="button"
+            className="math-card-pill-btn primary mobile-only"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              runNow();
+            }}
+            disabled={isRunning}
+            aria-label="Run math cell"
+            title="Run math cell"
+          >
+            ▶
+          </button>
+          <button type="button" className="math-card-pill-btn" onClick={onToggleRenderMode}>
+            {renderMode === 'decimal' ? 'Decimal' : 'Exact'}
+          </button>
+          <button type="button" className="math-card-pill-btn" onClick={onToggleTrigMode}>
+            {trigMode === 'deg' ? 'Deg' : 'Rad'}
+          </button>
+        </div>
+      </div>
       <div
         onBlur={() => {
           if (dirty) {
@@ -158,6 +333,7 @@ export function MathEditor({ value, onChange, onRun, completions, output, isRunn
           completions={completions ?? []}
           placeholderText="Type math..."
           autoFocus
+          shortcutItems={shortcutItems}
         />
       </div>
     </div>

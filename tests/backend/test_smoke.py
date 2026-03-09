@@ -3,6 +3,7 @@ from unittest.mock import patch
 from sugarpy.chem import balance_equation
 from sugarpy.library import load_catalog
 from sugarpy.math_cell import display_math_cell, render_math_cell
+from sugarpy.startup import plot, sqrt, x, y
 from sugarpy.stoichiometry import display_stoichiometry, render_stoichiometry
 
 
@@ -327,3 +328,40 @@ def test_math_function_definition_with_solve_is_not_eagerly_expanded_smoke():
         assert definition["ok"]
         assert "defined" in (definition.get("value") or "")
         assert "sqrt" not in (definition.get("value") or "")
+
+
+def test_plot_uses_explicit_viewport_and_equal_axes():
+    with patch("sugarpy.startup.display"):
+        figure = plot(
+            -1 + sqrt(9 - (x - 3) ** 2),
+            -1 - sqrt(9 - (x - 3) ** 2),
+            1 + sqrt(4 - (x - 4) ** 2),
+            1 - sqrt(4 - (x - 4) ** 2),
+            xmin=0,
+            xmax=8,
+            equal_axes=True,
+            title="Circle intersections (CAS check)",
+        )
+
+    layout = figure["layout"]
+    assert layout["xaxis"]["range"] == [0.0, 8.0]
+    assert layout["yaxis"]["scaleanchor"] == "x"
+    assert layout["yaxis"]["scaleratio"] == 1
+    assert layout["showlegend"] is False
+    assert layout["yaxis"]["range"][0] < -4.0
+    assert layout["yaxis"]["range"][1] > 3.0
+
+
+def test_plot_accepts_circle_expression_stored_from_equation_assignment():
+    with patch("sugarpy.startup.display"):
+        circle = (x - 2) ** 2 + (y - 30) ** 2 - 60
+        figure = plot(circle, xmin=-8, xmax=12)
+
+    trace = figure["data"][0]
+    layout = figure["layout"]
+    assert trace["type"] == "contour"
+    assert trace["contours"]["start"] == 0
+    assert layout["yaxis"]["scaleanchor"] == "x"
+    assert layout["yaxis"]["scaleratio"] == 1
+    assert layout["yaxis"]["range"][0] < 30
+    assert layout["yaxis"]["range"][1] > 30

@@ -62,13 +62,52 @@ Notes:
 Some CAS helpers return containers (for example `solve(...)` returning a list of points).
 Math cells render these containers as LaTeX so the result stays readable in the UI.
 
+## Rendered card UI
+After execution, a Math cell collapses into a rendered Math card instead of keeping the raw
+CAS text permanently visible above a separate result area.
+
+Expected behavior:
+- The normalized source is shown as rendered math (KaTeX-style), preserving the written structure
+  of the CAS input rather than showing a raw text blob.
+- The result or trace is shown inside the same card.
+- Tapping/clicking the card reopens the raw CAS editor.
+- The editor provides a compact shortcut bar for common CAS inserts
+  (`^2`, `sqrt(...)`, `solve(...)`, `expand(...)`, `N(...)`, `plot(...)`).
+- When the rendered source would duplicate the result verbatim (for example simple assignments
+  like `A := [1, 2]`), the source preview is omitted and only the useful result remains visible.
+- `Exact` / `Decimal` is a cell-level setting and updates the rendered output immediately from a
+  cached exact/decimal render payload, without rerunning the Math cell.
+- `Deg` / `Rad` is also stored per Math cell, so a notebook can mix degree-based and radian-based
+  calculations in different cells.
+- New Math cells inherit the notebook defaults for `Exact` / `Decimal` and `Deg` / `Rad`.
+- Notebook save/import preserves both those notebook defaults and any per-cell Math overrides.
+
 ## Trace rendering
-When a Math cell contains multiple statements, the UI renders a trace:
+When a Math cell contains multiple statements, the rendered card shows a trace:
 each executed statement is shown alongside its resulting output steps. This makes it easier
-to see how intermediate values (like `yline`) were produced.
+to see how intermediate values were produced without duplicating the full raw editor UI.
 
 ## Plotting from Math cells
 `plot(...)` can be called from Math cells. The Plotly graph renders under the Math cell output.
+
+Current plotting options:
+- `xmin`, `xmax` set the initial visible x-range.
+- `ymin`, `ymax` optionally pin the visible y-range.
+- `equal_axes=True` locks one unit on x to one unit on y, which is useful for circles and geometry.
+- `showlegend=True|False` overrides the default legend behavior.
+- `title='...'` adds an optional title. If omitted, SugarPy keeps the plot header visually quiet.
+
+Simple geometry workflow:
+- You can store a circle or other geometric relation as an equation assignment such as
+  `circle := (x-2)^2 + (y-30)^2 = 60`
+- SugarPy stores that assignment internally in `= 0` form for CAS work.
+- After that, `plot(circle)` renders the implicit curve directly.
+
+Plot defaults:
+- SugarPy uses the requested range as the authoritative starting view.
+- For 1-2 traces, the legend is shown by default; for larger multi-branch plots it is hidden by default to reduce clutter.
+- Double-clicking the graph resets back to that initial view.
+- Geometric plots may widen the visible x-range slightly when `equal_axes=True` is active, so that the 1:1 aspect ratio can be preserved in the available screen space.
 
 This enables multi-step symbolic workflows directly in Math cells, for example:
 - `c1 := (x-5)^2 + (y-5)^2 - 36`

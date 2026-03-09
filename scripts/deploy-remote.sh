@@ -9,6 +9,18 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 REMOTE="${DEPLOY_USER}@${DEPLOY_HOST}"
+RELEASE_ID="${DEPLOY_RELEASE_ID:-${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}}"
+RELEASES_TO_KEEP="${DEPLOY_RELEASES_TO_KEEP:-5}"
+
+if [[ "${DEPLOY_PATH}" != */current ]]; then
+  echo "DEPLOY_PATH must point to the stable current symlink (for example /opt/sugarpy/current)."
+  exit 1
+fi
+
+DEPLOY_ROOT=$(dirname "${DEPLOY_PATH}")
+RELEASES_DIR="${DEPLOY_ROOT}/releases"
+SHARED_DIR="${DEPLOY_ROOT}/shared"
+RELEASE_PATH="${RELEASES_DIR}/${RELEASE_ID}"
 
 SSH_OPTS=(
   -p "${DEPLOY_PORT}"
@@ -35,8 +47,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Deploying to ${REMOTE}:${DEPLOY_PATH}"
+echo "Release ID: ${RELEASE_ID}"
 
-# 1) Upload repository snapshot (without local build artifacts).
+# 1) Upload repository snapshot into a new release directory.
 cd "${ROOT_DIR}"
 tar \
   --exclude='.git' \
@@ -46,27 +59,55 @@ tar \
   --exclude='output' \
   --exclude='notebooks/.sugarpy-autosave' \
   -czf - . \
-  | ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p '${DEPLOY_PATH}' && tar -xzf - -C '${DEPLOY_PATH}'"
+  | ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+      set -euo pipefail
+      mkdir -p '${RELEASE_PATH}'
+      tar -xzf - -C '${RELEASE_PATH}'
+    "
 
-# 2) Build frontend on server.
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "cd '${DEPLOY_PATH}/web' && npm ci && npm run build"
-
-# 3) Best-effort service restart/reload.
+# 2) Prepare shared runtime state and build the release in isolation.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "
-  set -e
-  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    sudo systemctl restart sugarpy-jupyter.service || true
-    sudo systemctl reload nginx || true
-  else
-    echo 'No passwordless sudo; skipping system service restart.'
+  set -euo pipefail
+  mkdir -p '${RELEASES_DIR}' '${SHARED_DIR}/notebooks' '${SHARED_DIR}/.ipython'
+  if [ -d '${RELEASE_PATH}/notebooks' ]; then
+    cp -a '${RELEASE_PATH}/notebooks/.' '${SHARED_DIR}/notebooks/'
+    rm -rf '${RELEASE_PATH}/notebooks'
   fi
+  ln -sfn '${SHARED_DIR}/notebooks' '${RELEASE_PATH}/notebooks'
+  cd '${RELEASE_PATH}'
+  UV_PROJECT_ENVIRONMENT='${SHARED_DIR}/.venv' uv sync --extra lab --frozen
+  cd '${RELEASE_PATH}/web'
+  npm ci
+  npm run build
 "
 
-# 4) Health checks.
+# 3) Atomically switch current to the new release.
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  set -e
+  ln -sfn '${RELEASE_PATH}' '${DEPLOY_ROOT}/.current.next'
+  mv -Tf '${DEPLOY_ROOT}/.current.next' '${DEPLOY_PATH}'
+"
+
+# 4) Reload services.
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  set -e
+  sudo systemctl restart sugarpy-jupyter.service
+  sudo systemctl reload nginx
+"
+
+# 5) Health checks.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "curl -fsS http://127.0.0.1:18081/ >/dev/null"
 if [[ -n "${DEPLOY_JUPYTER_TOKEN:-}" ]]; then
   ssh "${SSH_OPTS[@]}" "${REMOTE}" \
     "curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
 fi
+
+# 6) Keep the most recent releases and prune older ones.
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  set -euo pipefail
+  if [ -d '${RELEASES_DIR}' ]; then
+    ls -1dt '${RELEASES_DIR}'/* 2>/dev/null | tail -n +$((RELEASES_TO_KEEP + 1)) | xargs -r rm -rf --
+  fi
+"
 
 echo "Deploy completed."

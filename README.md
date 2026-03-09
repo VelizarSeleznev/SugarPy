@@ -1,5 +1,11 @@
 # SugarPy (Student MVP)
 
+Current documentation entry points:
+- Product guide and feature inventory: `docs/PRODUCT_GUIDE.md`
+- Run and test commands: `docs/RUNBOOK.md`
+- Architecture and runtime invariants: `docs/ARCHITECTURE.md`
+- Math cell semantics: `docs/MATH_CELL_SPEC.md`
+
 A minimal, student-friendly Jupyter toolkit with:
 - A **Function Builder** widget for quick math functions.
 - A **Chemistry Balancer** widget to balance reaction equations.

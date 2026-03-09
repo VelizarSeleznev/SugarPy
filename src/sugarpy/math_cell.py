@@ -54,6 +54,26 @@ def _error_payload(source: str, mode: str, error: str, kind: str = "expression")
         "equation_latex": None,
         "plotly_figure": None,
         "trace": [],
+        "render_cache": None,
+    }
+
+
+def _make_render_cache(
+    *,
+    exact_steps: list[str],
+    exact_value: str | None,
+    decimal_steps: list[str] | None = None,
+    decimal_value: str | None = None,
+) -> Dict[str, Any]:
+    return {
+        "exact": {
+            "steps": [str(step) for step in exact_steps],
+            "value": exact_value,
+        },
+        "decimal": {
+            "steps": [str(step) for step in (decimal_steps if decimal_steps is not None else exact_steps)],
+            "value": decimal_value if decimal_value is not None else exact_value,
+        },
     }
 
 
@@ -350,6 +370,10 @@ def _render_wrapper_assignment(
         "equation_latex": None,
         "plotly_figure": None,
         "trace": [],
+        "render_cache": _make_render_cache(
+            exact_steps=steps,
+            exact_value=value_latex,
+        ),
     }
 
 
@@ -392,6 +416,10 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": None,
                 "plotly_figure": None,
                 "trace": [],
+                "render_cache": _make_render_cache(
+                    exact_steps=[value_latex],
+                    exact_value=value_latex,
+                ),
             }
 
         if parsed.kind == "assignment":
@@ -436,15 +464,36 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
             else:
                 rendered_values = finalized_values
 
+            exact_rendered_values = finalized_values
+            decimal_rendered_values = [_apply_decimal_places(item, _current_decimal_places(user_ns)) for item in finalized_values]
+
             if len(targets) == 1:
                 value_latex = _as_latex(rendered_values[0])
             else:
                 value_latex = _as_latex(sp.Tuple(*rendered_values))
 
+            exact_value_latex = _as_latex(exact_rendered_values[0]) if len(targets) == 1 else _as_latex(sp.Tuple(*exact_rendered_values))
+            decimal_value_latex = _as_latex(decimal_rendered_values[0]) if len(targets) == 1 else _as_latex(sp.Tuple(*decimal_rendered_values))
+
             final_steps = [
                 f"{sp.latex(sp.Symbol(name))} = {_as_latex(rendered)}"
                 for name, rendered in zip(targets, rendered_values)
             ]
+            exact_final_steps = [
+                f"{sp.latex(sp.Symbol(name))} = {_as_latex(rendered)}"
+                for name, rendered in zip(targets, exact_rendered_values)
+            ]
+            decimal_final_steps = [
+                f"{sp.latex(sp.Symbol(name))} = {_as_latex(rendered)}"
+                for name, rendered in zip(targets, decimal_rendered_values)
+            ]
+            exact_steps_cache = list(steps)
+            if not rendered_assignment:
+                if len(exact_final_steps) == 1:
+                    if exact_steps_cache[-1] != exact_final_steps[0]:
+                        exact_steps_cache.append(exact_final_steps[0])
+                else:
+                    exact_steps_cache = exact_final_steps
             if resolved_render_mode == "decimal" and not rendered_assignment:
                 # In decimal display mode, keep assignment output concise and avoid duplicating exact+decimal lines.
                 steps = final_steps
@@ -467,6 +516,12 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": None,
                 "plotly_figure": None,
                 "trace": [],
+                "render_cache": _make_render_cache(
+                    exact_steps=exact_steps_cache,
+                    exact_value=exact_value_latex,
+                    decimal_steps=decimal_final_steps if not rendered_assignment else steps,
+                    decimal_value=decimal_value_latex,
+                ),
             }
 
         if parsed.kind == "equation":
@@ -487,6 +542,10 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": equation_latex,
                 "plotly_figure": None,
                 "trace": [],
+                "render_cache": _make_render_cache(
+                    exact_steps=[equation_latex],
+                    exact_value=equation_latex,
+                ),
             }
 
         wrapper_assignment_result = _render_wrapper_assignment(source=parsed.source, mode=mode, user_ns=user_ns)
@@ -509,6 +568,10 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": None,
                 "plotly_figure": None,
                 "trace": [],
+                "render_cache": _make_render_cache(
+                    exact_steps=[rendered_value],
+                    exact_value=rendered_value,
+                ),
             }
         if isinstance(expr, Mapping) and "data" in expr and "layout" in expr:
             # plot(...) returns a Plotly-compatible figure dict and also emits MIME output.
@@ -527,6 +590,7 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": None,
                 "plotly_figure": figure,
                 "trace": [],
+                "render_cache": _make_render_cache(exact_steps=[], exact_value=None),
             }
         base = _as_latex(expr)
         steps = [base]
@@ -544,13 +608,24 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 "equation_latex": None,
                 "plotly_figure": None,
                 "trace": [],
+                "render_cache": _make_render_cache(
+                    exact_steps=steps,
+                    exact_value=None,
+                ),
             }
         value_expr = _finalize_value(expr)
+        decimal_value_expr = _apply_decimal_places(value_expr, _current_decimal_places(user_ns))
         if resolved_render_mode == "decimal":
             places = _current_decimal_places(user_ns)
             value_latex = _as_latex(_apply_decimal_places(value_expr, places))
         else:
             value_latex = _as_latex(value_expr)
+        exact_value_latex = _as_latex(value_expr)
+        decimal_value_latex = _as_latex(decimal_value_expr)
+        exact_steps_cache = list(steps)
+        if exact_steps_cache[-1] != exact_value_latex:
+            exact_steps_cache.append(exact_value_latex)
+        decimal_steps_cache = [decimal_value_latex]
         if resolved_render_mode == "decimal":
             # In decimal display mode, show only the decimal-rendered result.
             steps = [value_latex]
@@ -569,6 +644,12 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
             "equation_latex": None,
             "plotly_figure": None,
             "trace": [],
+            "render_cache": _make_render_cache(
+                exact_steps=exact_steps_cache,
+                exact_value=exact_value_latex,
+                decimal_steps=decimal_steps_cache,
+                decimal_value=decimal_value_latex,
+            ),
         }
     except MathParseError as exc:
         return _error_payload(source, mode, str(exc), kind=parsed.kind)
@@ -680,6 +761,7 @@ def render_math_cell(source: str, mode: str = "deg", render_mode: str | None = N
                 "steps": result.get("steps") or [],
                 "value": result.get("value"),
                 "plotly_figure": result.get("plotly_figure"),
+                "render_cache": result.get("render_cache"),
             }
         )
         merged_steps.extend(str(step) for step in (result.get("steps") or []))
@@ -707,6 +789,7 @@ def render_math_cell(source: str, mode: str = "deg", render_mode: str | None = N
         "equation_latex": last_result.get("equation_latex"),
         "plotly_figure": plotly_figure,
         "trace": trace,
+        "render_cache": last_result.get("render_cache"),
     }
 
 

@@ -11,7 +11,7 @@ SugarPy is a local notebook toolkit:
 - `web/src/`: frontend app code.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
 - `scripts/`: run/test/dev automation scripts.
-- `deploy/`: demo deployment examples (Nginx + systemd, including cloudflared service).
+- `deploy/`: demo deployment examples (Nginx + systemd).
 - `notebooks/`: local notebooks.
 - `artifacts/`, `output/`: generated outputs.
 
@@ -19,8 +19,9 @@ SugarPy is a local notebook toolkit:
 - Notebook app: `http://localhost:5173/`
 - Standalone teacher wiki page: `http://localhost:5173/wiki`
 - Demo notebook: `notebooks/CoreFeaturesDemo.ipynb`
-- Notebook UI uses a fixed top header and a single bottom `+ Add Cell` entry point
-  (`Code | Text | Math | Stoich`).
+- Visual math regression fixture: `notebooks/Roundabout_Visual_Check.sugarpy`
+- Notebook UI uses a compact fixed top header, touch-friendly cell gestures, and inline
+  insert controls for `Code | Text | Math`.
 
 ## Key scripts
 - `scripts/run-all.sh`: starts Jupyter backend and Vite dev server together.
@@ -28,8 +29,12 @@ SugarPy is a local notebook toolkit:
 - `scripts/test-all.sh`: full Python + frontend + UI checks.
 - `scripts/ui-check.sh`: Playwright smoke UI checks (`@smoke`).
 - `scripts/sync-functions.sh`: syncs user function file (`~/.sugarpy/user_functions.py`) into runtime location.
+- `scripts/start-work.sh`: creates or switches to a `codex/*` work branch from updated `master`.
+- `scripts/checkpoint.sh`: commits and pushes the current work branch to GitHub.
+- `scripts/release.sh`: runs checks, merges the current work branch into `master`, and pushes the release.
 
 ## Specs
+- Product-level feature inventory and AI assistant proposal: `docs/PRODUCT_GUIDE.md`.
 - Math cell behavior and syntax: `docs/MATH_CELL_SPEC.md`.
 - Notebook authoring guidelines (large tasks): `docs/ASSIGNMENT_GUIDELINES.md`.
 - Testing policy and maintenance rules: `docs/TESTING_PRINCIPLES.md`.

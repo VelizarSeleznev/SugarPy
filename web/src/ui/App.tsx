@@ -3,11 +3,20 @@ import { ContentsManager, KernelManager, ServerConnection } from '@jupyterlab/se
 
 import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
+import { AssistantDrawer } from './components/AssistantDrawer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
 import { moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
+import {
+  AssistantActivity,
+  AssistantOperation,
+  AssistantPlan,
+  AssistantPreference,
+  AssistantScope,
+  planNotebookChanges
+} from './utils/geminiAssistant';
 import {
   createNotebookId,
   deserializeIpynb,
@@ -15,10 +24,13 @@ import {
   downloadBlob,
   loadFromLocalStorage,
   loadLastOpenId,
+  pruneLocalNotebookSnapshots,
+  removeStorageItem,
   readFileAsText,
   saveToLocalStorage,
   serializeIpynb,
-  serializeSugarPy
+  serializeSugarPy,
+  writeStorageItem
 } from './utils/notebookIO';
 
 export type CellModel = {
@@ -29,6 +41,10 @@ export type CellModel = {
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
+    render_cache?: {
+      exact: { steps: string[]; value?: string | null };
+      decimal: { steps: string[]; value?: string | null };
+    } | null;
     kind: 'expression' | 'equation' | 'assignment';
     steps: string[];
     value?: string;
@@ -46,9 +62,14 @@ export type CellModel = {
       steps: string[];
       value?: string | null;
       plotly_figure?: unknown;
+      render_cache?: {
+        exact: { steps: string[]; value?: string | null };
+        decimal: { steps: string[]; value?: string | null };
+      } | null;
     }>;
   };
   mathRenderMode?: 'exact' | 'decimal';
+  mathTrigMode?: 'deg' | 'rad';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
 };
@@ -63,12 +84,6 @@ export type CellOutput =
       ename: string;
       evalue: string;
     };
-
-const defaultCell: CellModel = {
-  id: 'cell-1',
-  source: '# Try: find_hypotenuse(3, 4)\n',
-  type: 'code'
-};
 
 const createStoichState = (reaction = ''): StoichState => ({
   reaction,
@@ -100,6 +115,17 @@ const asText = (value: unknown) => {
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
 const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
+const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:gemini:key';
+const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:gemini:model';
+const ASSISTANT_SCOPE_STORAGE = 'sugarpy:assistant:scope';
+const ASSISTANT_PREFERENCE_STORAGE = 'sugarpy:assistant:preference';
+
+type AssistantSnapshot = {
+  cells: CellModel[];
+  trigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
+  activeCellId: string | null;
+};
 
 const isCanceledFutureError = (error: unknown) => {
   if (!error) return false;
@@ -161,6 +187,14 @@ const isEditableElement = (element: Element | null) => {
   return false;
 };
 
+const readOptionalStorageItem = (key: string) => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_err) {
+    return null;
+  }
+};
+
 function App() {
   const defaultServerUrl = resolveDefaultServerUrl();
   const [serverUrl, setServerUrl] = useState(defaultServerUrl);
@@ -169,12 +203,13 @@ function App() {
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [kernel, setKernel] = useState<any>(null);
-  const [cells, setCells] = useState<CellModel[]>([defaultCell]);
+  const [cells, setCells] = useState<CellModel[]>([]);
   const { allFunctions } = useFunctionLibrary();
   const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
   const [execCounter, setExecCounter] = useState(0);
   const [trigMode, setTrigMode] = useState<'deg' | 'rad'>('deg');
+  const [defaultMathRenderMode, setDefaultMathRenderMode] = useState<'exact' | 'decimal'>('exact');
   const [notebookId, setNotebookId] = useState(createNotebookId());
   const [notebookName, setNotebookName] = useState('Untitled');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
@@ -189,6 +224,20 @@ function App() {
   const [mobileEditorCellId, setMobileEditorCellId] = useState<string | null>(null);
   const [mobileVisualTop, setMobileVisualTop] = useState(0);
   const [mobileVisualHeight, setMobileVisualHeight] = useState(window.innerHeight);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantApiKey, setAssistantApiKey] = useState(import.meta.env.VITE_GEMINI_API_KEY || '');
+  const [assistantModel, setAssistantModel] = useState(
+    import.meta.env.VITE_GEMINI_MODEL || 'gemini-3.1-flash-lite-preview'
+  );
+  const [assistantScope, setAssistantScope] = useState<AssistantScope>('notebook');
+  const [assistantPreference, setAssistantPreference] = useState<AssistantPreference>('auto');
+  const [assistantPrompt, setAssistantPrompt] = useState('');
+  const [assistantLoading, setAssistantLoading] = useState(false);
+  const [assistantError, setAssistantError] = useState('');
+  const [assistantStatus, setAssistantStatus] = useState('');
+  const [assistantActivity, setAssistantActivity] = useState<AssistantActivity[]>([]);
+  const [assistantPlan, setAssistantPlan] = useState<AssistantPlan | null>(null);
+  const [assistantUndoStack, setAssistantUndoStack] = useState<AssistantSnapshot[]>([]);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -213,10 +262,14 @@ function App() {
   const connectOnce = useRef(false);
   const autosaveTimer = useRef<number | undefined>(undefined);
   const autosaveServerTimer = useRef<number | undefined>(undefined);
+  const localAutosaveWarningShown = useRef(false);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
   const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
+  const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
   const connectingRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const kernelRef = useRef<any>(null);
@@ -363,11 +416,18 @@ function App() {
 
   const getAutosavePath = (id: string) => `${SERVER_AUTOSAVE_DIR}/${id}.sugarpy`;
 
-  const buildSnapshot = (nextCells: CellModel[], nextTrigMode: 'deg' | 'rad', nextName: string, nextId: string) =>
+  const buildSnapshot = (
+    nextCells: CellModel[],
+    nextTrigMode: 'deg' | 'rad',
+    nextDefaultMathRenderMode: 'exact' | 'decimal',
+    nextName: string,
+    nextId: string
+  ) =>
     JSON.stringify({
       id: nextId,
       name: nextName,
       trigMode: nextTrigMode,
+      defaultMathRenderMode: nextDefaultMathRenderMode,
       cells: nextCells.map(({ isRunning, ...rest }) => rest)
     });
 
@@ -413,6 +473,7 @@ function App() {
     id: string;
     name: string;
     trigMode: 'deg' | 'rad';
+    defaultMathRenderMode: 'exact' | 'decimal';
     cells: CellModel[];
     silent?: boolean;
   }) => {
@@ -425,6 +486,7 @@ function App() {
         id: params.id,
         name: params.name,
         trigMode: params.trigMode,
+        defaultMathRenderMode: params.defaultMathRenderMode,
         cells: params.cells
       });
       await ensureContents().save(getAutosavePath(params.id), {
@@ -539,6 +601,37 @@ function App() {
   }, [mobileActionsEligible, mobileEditorCellId]);
 
   useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (headerMenuOpen && headerMenuRef.current && target && !headerMenuRef.current.contains(target)) {
+        setHeaderMenuOpen(false);
+      }
+      if (
+        assistantOpen &&
+        target &&
+        assistantDrawerRef.current &&
+        !assistantDrawerRef.current.contains(target) &&
+        !assistantToggleRef.current?.contains(target)
+      ) {
+        setAssistantOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (headerMenuOpen) setHeaderMenuOpen(false);
+      if (assistantOpen) setAssistantOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [assistantOpen, headerMenuOpen]);
+
+  useEffect(() => {
     return () => {
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
@@ -555,6 +648,7 @@ function App() {
     let cancelled = false;
     const hydrate = async () => {
       const lastId = loadLastOpenId();
+      pruneLocalNotebookSnapshots(lastId);
       if (!lastId) {
         hydrated.current = true;
         return;
@@ -578,14 +672,21 @@ function App() {
       }
 
       const decoded = deserializeSugarPy(selected);
-      const nextCells = decoded.cells.length > 0 ? decoded.cells : [defaultCell];
+      const nextCells = decoded.cells;
       setNotebookId(decoded.id);
       setNotebookName(decoded.name);
       setTrigMode(decoded.trigMode);
+      setDefaultMathRenderMode(decoded.defaultMathRenderMode);
       setCells(nextCells);
       setActiveCellId(nextCells[0]?.id ?? null);
       setLastSavedAt(selected.updatedAt ?? null);
-      lastSnapshot.current = buildSnapshot(nextCells, decoded.trigMode, decoded.name, decoded.id);
+      lastSnapshot.current = buildSnapshot(
+        nextCells,
+        decoded.trigMode,
+        decoded.defaultMathRenderMode,
+        decoded.name,
+        decoded.id
+      );
       hydrated.current = true;
     };
 
@@ -741,12 +842,20 @@ function App() {
     }
   };
 
-  const runMathCell = async (cellId: string, source: string, renderModeOverride?: 'exact' | 'decimal') => {
+  const runMathCell = async (
+    cellId: string,
+    source: string,
+    renderModeOverride?: 'exact' | 'decimal',
+    trigModeOverride?: 'deg' | 'rad',
+    preserveOutput = false
+  ) => {
     if (!activeKernel) return;
+    const cell = cells.find((entry) => entry.id === cellId);
     const renderMode =
       renderModeOverride ??
-      (cells.find((cell) => cell.id === cellId)?.mathRenderMode === 'decimal' ? 'decimal' : 'exact');
-    const payload = JSON.stringify({ source, mode: trigMode });
+      (cell?.mathRenderMode === 'decimal' ? 'decimal' : defaultMathRenderMode);
+    const mode = trigModeOverride ?? cell?.mathTrigMode ?? trigMode;
+    const payload = JSON.stringify({ source, mode });
     const code = [
       'import json',
       'from sugarpy.math_cell import display_math_cell',
@@ -756,7 +865,13 @@ function App() {
 
     setCells((prev) =>
       prev.map((c) =>
-        c.id === cellId ? { ...c, isRunning: true, mathOutput: undefined, output: undefined } : c
+        c.id === cellId
+          ? {
+              ...c,
+              isRunning: true,
+              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined })
+            }
+          : c
       )
     );
     let future: any;
@@ -773,7 +888,7 @@ function App() {
                   kind: 'expression',
                   steps: [],
                   error: isCanceledFutureError(error) ? 'Kernel execution was canceled.' : String(error),
-                  mode: trigMode,
+                  mode,
                   warnings: []
                 }
               }
@@ -824,7 +939,7 @@ function App() {
       if (msg.header.msg_type === 'error') {
         // @ts-ignore
         const err = (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '');
-        parsed = { kind: 'expression', steps: [], error: err, mode: trigMode, warnings: [] };
+        parsed = { kind: 'expression', steps: [], error: err, mode, warnings: [] };
       }
       if (parsed) {
         setCells((prev) =>
@@ -860,7 +975,7 @@ function App() {
                   kind: 'expression',
                   steps: [],
                   error: 'Kernel execution was canceled.',
-                  mode: trigMode,
+                  mode,
                   warnings: []
                 }
               }
@@ -962,7 +1077,12 @@ function App() {
         setActiveCellId(cell.id);
         if (cell.type === 'markdown') continue;
         if (cell.type === 'math') {
-          await runMathCell(cell.id, cell.source, cell.mathRenderMode ?? 'exact');
+          await runMathCell(
+            cell.id,
+            cell.source,
+            cell.mathRenderMode ?? defaultMathRenderMode,
+            cell.mathTrigMode ?? trigMode
+          );
           continue;
         }
         if (cell.type === 'stoich') {
@@ -994,11 +1114,67 @@ function App() {
       id: `cell-${idSuffix}`,
       source,
       type,
-      ...(type === 'math' ? { mathRenderMode: 'exact' as const } : {})
+      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {})
     };
   };
 
-  const createInitialCell = () => createCell('code');
+  const getCellDisplayText = (cell: CellModel) => {
+    if (cell.type === 'stoich') {
+      return cell.stoichState?.reaction ?? '';
+    }
+    if (cell.output?.type === 'error') {
+      return `${cell.output.ename}: ${cell.output.evalue}`;
+    }
+    if (cell.mathOutput?.error) {
+      return cell.mathOutput.error;
+    }
+    if (cell.mathOutput?.steps?.length) {
+      return cell.mathOutput.steps.join('\n');
+    }
+    const plain = cell.output?.type === 'mime' ? cell.output.data['text/plain'] : '';
+    return asText(plain);
+  };
+
+  const buildAssistantContext = () => ({
+    notebookName,
+    defaultTrigMode: trigMode,
+    defaultMathRenderMode,
+    activeCellId,
+    cells: cells.map((cell) => ({
+      id: cell.id,
+      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich',
+      source: cell.source,
+      mathRenderMode: cell.mathRenderMode,
+      mathTrigMode: cell.mathTrigMode,
+      stoichReaction: cell.stoichState?.reaction ?? '',
+      outputText: getCellDisplayText(cell),
+      hasError: !!(
+        cell.output?.type === 'error' ||
+        cell.mathOutput?.error ||
+        (cell.stoichOutput && cell.stoichOutput.ok === false)
+      )
+    }))
+  });
+
+  const captureAssistantSnapshot = (): AssistantSnapshot => ({
+    cells: cells.map((cell) => ({
+      ...cell,
+      mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
+      stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
+      stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
+      output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
+    })),
+    trigMode,
+    defaultMathRenderMode,
+    activeCellId
+  });
+
+  const restoreAssistantSnapshot = (snapshot: AssistantSnapshot) => {
+    setCells(snapshot.cells);
+    setTrigMode(snapshot.trigMode);
+    setDefaultMathRenderMode(snapshot.defaultMathRenderMode);
+    setActiveCellId(snapshot.activeCellId);
+  };
 
   const insertCellAt = (
     index: number,
@@ -1055,6 +1231,187 @@ function App() {
   };
 
   useEffect(() => {
+    const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
+    const storedModel = readOptionalStorageItem(ASSISTANT_MODEL_STORAGE);
+    const storedScope = readOptionalStorageItem(ASSISTANT_SCOPE_STORAGE);
+    const storedPreference = readOptionalStorageItem(ASSISTANT_PREFERENCE_STORAGE);
+    if (storedKey) setAssistantApiKey(storedKey);
+    if (storedModel) setAssistantModel(storedModel);
+    if (storedScope === 'active' || storedScope === 'notebook') {
+      setAssistantScope(storedScope);
+    }
+    if (storedPreference === 'auto' || storedPreference === 'cas' || storedPreference === 'python' || storedPreference === 'explain') {
+      setAssistantPreference(storedPreference);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (assistantApiKey) {
+      writeStorageItem(ASSISTANT_API_KEY_STORAGE, assistantApiKey);
+    } else {
+      removeStorageItem(ASSISTANT_API_KEY_STORAGE);
+    }
+  }, [assistantApiKey]);
+
+  useEffect(() => {
+    writeStorageItem(ASSISTANT_MODEL_STORAGE, assistantModel);
+  }, [assistantModel]);
+
+  useEffect(() => {
+    writeStorageItem(ASSISTANT_SCOPE_STORAGE, assistantScope);
+  }, [assistantScope]);
+
+  useEffect(() => {
+    writeStorageItem(ASSISTANT_PREFERENCE_STORAGE, assistantPreference);
+  }, [assistantPreference]);
+
+  const runAssistant = async () => {
+    if (!assistantApiKey.trim()) {
+      setAssistantError('Gemini API key is required.');
+      return;
+    }
+    if (!assistantPrompt.trim()) {
+      setAssistantError('Write a request for the assistant first.');
+      return;
+    }
+    setAssistantLoading(true);
+    setAssistantError('');
+    setAssistantStatus('Inspecting notebook…');
+    setAssistantActivity([]);
+    try {
+      const plan = await planNotebookChanges({
+        apiKey: assistantApiKey.trim(),
+        model: assistantModel.trim(),
+        request: assistantPrompt.trim(),
+        scope: assistantScope,
+        preference: assistantPreference,
+        context: buildAssistantContext(),
+        onActivity: (item) => {
+          setAssistantActivity((prev) => [...prev, item]);
+        }
+      });
+      setAssistantPlan(plan);
+      setAssistantStatus(
+        plan.operations.length > 0 ? `Prepared ${plan.operations.length} notebook change(s).` : 'No notebook changes proposed.'
+      );
+    } catch (error) {
+      setAssistantError(error instanceof Error ? error.message : 'Assistant request failed.');
+      setAssistantStatus('');
+    } finally {
+      setAssistantLoading(false);
+    }
+  };
+
+  const applyAssistantPlan = async (runAfterApply = false) => {
+    if (!assistantPlan) return;
+    const snapshot = captureAssistantSnapshot();
+    const newCellIds: string[] = [];
+    let nextCells = [...cells];
+    let nextTrigMode = trigMode;
+    let nextRenderMode = defaultMathRenderMode;
+    let nextActiveCellId = activeCellId;
+
+    const makeStoichCell = (source: string, indexSeed?: number) => {
+      const cell = createCell('stoich', '', indexSeed);
+      return {
+        ...cell,
+        stoichState: createStoichState(source)
+      };
+    };
+
+    const createFromOperation = (operation: Extract<AssistantOperation, { type: 'insert_cell' }>) => {
+      if (operation.cellType === 'stoich') {
+        return makeStoichCell(operation.source, operation.index + 1);
+      }
+      return createCell(operation.cellType, operation.source, operation.index + 1);
+    };
+
+    assistantPlan.operations.forEach((operation) => {
+      if (operation.type === 'insert_cell') {
+        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+        const nextCell = createFromOperation(operation);
+        nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
+        newCellIds.push(nextCell.id);
+        nextActiveCellId = nextCell.id;
+        return;
+      }
+      if (operation.type === 'update_cell') {
+        nextCells = nextCells.map((cell) => {
+          if (cell.id !== operation.cellId) return cell;
+          if (cell.type === 'stoich') {
+            return {
+              ...cell,
+              source: '',
+              stoichState: createStoichState(operation.source),
+              stoichOutput: undefined
+            };
+          }
+          return {
+            ...cell,
+            source: operation.source,
+            output: undefined,
+            mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
+            stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput
+          };
+        });
+        nextActiveCellId = operation.cellId;
+        return;
+      }
+      if (operation.type === 'delete_cell') {
+        nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
+        if (nextActiveCellId === operation.cellId) {
+          nextActiveCellId = nextCells[0]?.id ?? null;
+        }
+        return;
+      }
+      if (operation.type === 'move_cell') {
+        const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
+        if (index === -1) return;
+        const [cell] = nextCells.splice(index, 1);
+        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+        nextCells.splice(bounded, 0, cell);
+        nextCells = [...nextCells];
+        nextActiveCellId = operation.cellId;
+        return;
+      }
+      if (operation.type === 'set_notebook_defaults') {
+        if (operation.trigMode) nextTrigMode = operation.trigMode;
+        if (operation.renderMode) nextRenderMode = operation.renderMode;
+      }
+    });
+
+    setAssistantUndoStack((prev) => [...prev.slice(-9), snapshot]);
+    setCells(nextCells);
+    setTrigMode(nextTrigMode);
+    setDefaultMathRenderMode(nextRenderMode);
+    setActiveCellId(nextActiveCellId);
+    setAssistantStatus(runAfterApply ? 'Applied changes. Running updated cells…' : 'Applied assistant changes.');
+
+    if (runAfterApply) {
+      const runTargets = nextCells.filter(
+        (cell) =>
+          newCellIds.includes(cell.id) ||
+          assistantPlan.operations.some(
+            (operation) => operation.type === 'update_cell' && operation.cellId === cell.id
+          )
+      );
+      for (const cell of runTargets) {
+        if (cell.type === 'markdown') continue;
+        await runCellById(cell);
+      }
+      setAssistantStatus('Applied assistant changes and ran updated cells.');
+    }
+  };
+
+  const undoAssistantPlan = () => {
+    const snapshot = assistantUndoStack[assistantUndoStack.length - 1];
+    if (!snapshot) return;
+    restoreAssistantSnapshot(snapshot);
+    setAssistantUndoStack((prev) => prev.slice(0, -1));
+    setAssistantStatus('Reverted last assistant change.');
+  };
+
+  useEffect(() => {
     const bootstrap = async () => {
       if (!activeKernel || bootstrapLoaded) return;
       try {
@@ -1090,7 +1447,7 @@ function App() {
 
   useEffect(() => {
     if (!hydrated.current) return;
-    const snapshot = buildSnapshot(cells, trigMode, notebookName, notebookId);
+    const snapshot = buildSnapshot(cells, trigMode, defaultMathRenderMode, notebookName, notebookId);
     if (snapshot === lastSnapshot.current) return;
     setDirty(true);
     if (autosaveTimer.current) {
@@ -1101,9 +1458,18 @@ function App() {
         id: notebookId,
         name: notebookName,
         trigMode,
+        defaultMathRenderMode,
         cells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok) {
+        if (!localAutosaveWarningShown.current) {
+          console.warn(`Local autosave skipped: ${saved.reason}`);
+          localAutosaveWarningShown.current = true;
+        }
+      } else {
+        localAutosaveWarningShown.current = false;
+      }
       setLastSavedAt(payload.updatedAt);
       lastSnapshot.current = snapshot;
       setDirty(false);
@@ -1117,6 +1483,7 @@ function App() {
         id: notebookId,
         name: notebookName,
         trigMode,
+        defaultMathRenderMode,
         cells,
         silent: true
       }).then((saved) => {
@@ -1124,7 +1491,7 @@ function App() {
         setLastSavedAt(saved.updatedAt);
       });
     }, 1500);
-  }, [cells, trigMode, notebookName, notebookId]);
+  }, [cells, trigMode, defaultMathRenderMode, notebookName, notebookId]);
 
   useEffect(() => {
     const flush = () => {
@@ -1133,14 +1500,20 @@ function App() {
         id: notebookId,
         name: notebookName,
         trigMode,
+        defaultMathRenderMode,
         cells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok && !localAutosaveWarningShown.current) {
+        console.warn(`Local autosave skipped during flush: ${saved.reason}`);
+        localAutosaveWarningShown.current = true;
+      }
       setLastSavedAt(payload.updatedAt);
       saveServerAutosave({
         id: notebookId,
         name: notebookName,
         trigMode,
+        defaultMathRenderMode,
         cells,
         silent: true
       }).then(() => undefined);
@@ -1154,7 +1527,7 @@ function App() {
       window.removeEventListener('beforeunload', flush);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [cells, trigMode, notebookName, notebookId]);
+  }, [cells, trigMode, defaultMathRenderMode, notebookName, notebookId]);
 
   const confirmDiscard = () => {
     if (!dirty) return true;
@@ -1164,14 +1537,15 @@ function App() {
   const handleNewNotebook = () => {
     if (!confirmDiscard()) return;
     const nextId = createNotebookId();
-    const nextCells = [createInitialCell()];
+    const nextCells: CellModel[] = [];
     setNotebookId(nextId);
     setNotebookName('Untitled');
     setTrigMode('deg');
+    setDefaultMathRenderMode('exact');
     setCells(nextCells);
     setActiveCellId(nextCells[0]?.id ?? null);
     setLastSavedAt(null);
-    lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'Untitled', nextId);
+    lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'exact', 'Untitled', nextId);
     setDirty(false);
   };
 
@@ -1180,6 +1554,7 @@ function App() {
       id: notebookId,
       name: notebookName,
       trigMode,
+      defaultMathRenderMode,
       cells
     });
     const rawName = (notebookName || 'Untitled').trim();
@@ -1193,6 +1568,7 @@ function App() {
       id: notebookId,
       name: notebookName,
       trigMode,
+      defaultMathRenderMode,
       cells
     });
     const filename = `${notebookName || 'Untitled'}.ipynb`;
@@ -1215,6 +1591,7 @@ function App() {
       id: notebookId,
       name: notebookName,
       trigMode,
+      defaultMathRenderMode,
       cells
     });
     try {
@@ -1227,10 +1604,11 @@ function App() {
         id: notebookId,
         name: notebookName,
         trigMode,
+        defaultMathRenderMode,
         cells,
         silent: true
       });
-      const snapshot = buildSnapshot(cells, trigMode, notebookName, notebookId);
+      const snapshot = buildSnapshot(cells, trigMode, defaultMathRenderMode, notebookName, notebookId);
       lastSnapshot.current = snapshot;
       setLastSavedAt(new Date().toISOString());
       setDirty(false);
@@ -1249,7 +1627,13 @@ function App() {
     if (!confirmDiscard()) return;
     try {
       const text = await readFileAsText(file);
-      let next: { id: string; name: string; trigMode: 'deg' | 'rad'; cells: CellModel[] } | null = null;
+      let next: {
+        id: string;
+        name: string;
+        trigMode: 'deg' | 'rad';
+        defaultMathRenderMode: 'exact' | 'decimal';
+        cells: CellModel[];
+      } | null = null;
       if (file.name.endsWith('.ipynb')) {
         next = deserializeIpynb(JSON.parse(text));
       } else {
@@ -1266,17 +1650,29 @@ function App() {
       setNotebookId(next.id);
       setNotebookName(next.name || 'Untitled');
       setTrigMode(next.trigMode);
+      setDefaultMathRenderMode(next.defaultMathRenderMode);
       setCells(safeCells);
       setActiveCellId(safeCells[0]?.id ?? null);
       const payload = serializeSugarPy({
         id: next.id,
         name: next.name || 'Untitled',
         trigMode: next.trigMode,
+        defaultMathRenderMode: next.defaultMathRenderMode,
         cells: safeCells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok && !localAutosaveWarningShown.current) {
+        console.warn(`Local autosave skipped after import: ${saved.reason}`);
+        localAutosaveWarningShown.current = true;
+      }
       setLastSavedAt(payload.updatedAt);
-      lastSnapshot.current = buildSnapshot(safeCells, next.trigMode, next.name || 'Untitled', next.id);
+      lastSnapshot.current = buildSnapshot(
+        safeCells,
+        next.trigMode,
+        next.defaultMathRenderMode,
+        next.name || 'Untitled',
+        next.id
+      );
       setDirty(false);
     } catch (err) {
       window.alert('Failed to import notebook.');
@@ -1309,7 +1705,12 @@ function App() {
   const runCellById = async (cell: CellModel) => {
     if (cell.type === 'markdown') return;
     if (cell.type === 'math') {
-      await runMathCell(cell.id, cell.source, cell.mathRenderMode ?? 'exact');
+      await runMathCell(
+        cell.id,
+        cell.source,
+        cell.mathRenderMode ?? defaultMathRenderMode,
+        cell.mathTrigMode ?? trigMode
+      );
       return;
     }
     if (cell.type === 'stoich') {
@@ -1336,10 +1737,12 @@ function App() {
               {isRunningAll ? 'Running…' : 'Run All'}
             </button>
             <button
+              ref={assistantToggleRef}
               className="button secondary"
-              onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+              data-testid="assistant-toggle"
+              onClick={() => setAssistantOpen((prev) => !prev)}
             >
-              Trig: {trigMode === 'deg' ? 'Deg' : 'Rad'}
+              Assistant
             </button>
             <div className={`conn-pill status-${status}`}>
               <span className={`conn-dot ${status}`} />
@@ -1349,12 +1752,7 @@ function App() {
                   ? statusDetail || 'Initializing environment...'
                   : status}
             </div>
-            <div className={`save-status ${dirty ? 'dirty' : 'clean'}`}>
-              {lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : 'Not saved'}
-              {dirty ? ' · editing…' : ''}
-              {syncMessage ? ` · ${syncMessage}` : ''}
-            </div>
-            <div className="header-menu-wrap">
+            <div className="header-menu-wrap" ref={headerMenuRef}>
               <button
                 className="menu-button"
                 onClick={() => setHeaderMenuOpen((prev) => !prev)}
@@ -1364,8 +1762,25 @@ function App() {
               </button>
               {headerMenuOpen ? (
                 <div className="header-menu">
+                  <div className="menu-section-label">Notebook</div>
+                  <div className={`save-status menu-save-status ${dirty ? 'dirty' : 'clean'}`}>
+                    {lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString()}` : 'Not saved'}
+                    {dirty ? ' · editing…' : ''}
+                    {syncMessage ? ` · ${syncMessage}` : ''}
+                  </div>
                   <button className="menu-item" onClick={connectKernel}>
                     {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
+                  </button>
+                  <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
+                    Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}
+                  </button>
+                  <button
+                    className="menu-item"
+                    onClick={() =>
+                      setDefaultMathRenderMode((prev) => (prev === 'decimal' ? 'exact' : 'decimal'))
+                    }
+                  >
+                    Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
                   <button
                     className="menu-item"
@@ -1389,12 +1804,14 @@ function App() {
                       />
                     </div>
                   ) : null}
+                  <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
                   <button className="menu-item" onClick={handleDownloadIpynb}>Download .ipynb</button>
                   <button className="menu-item" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
                   <button className="menu-item" onClick={handleImportClick}>Import</button>
                   <button className="menu-item" onClick={handleNewNotebook}>New Notebook</button>
+                  <div className="menu-section-label">Reference</div>
                   <a className="menu-item" href="/wiki" target="_blank" rel="noreferrer">
                     Open Wiki
                   </a>
@@ -1416,7 +1833,7 @@ function App() {
           <div className="notebook-stack">
             {cells.length === 0 ? (
               <div className="cell-empty">
-                <div className="subtitle">Your notebook is empty.</div>
+                <div className="cell-empty-title">This notebook is empty.</div>
                 <div className="divider-menu open">
                   <button className="divider-btn" onClick={() => insertCellAt(0, 'code')}>Code</button>
                   <button className="divider-btn" onClick={() => insertCellAt(0, 'markdown')}>Text</button>
@@ -1448,7 +1865,12 @@ function App() {
                         onChange={(value) => updateCell(cells[index].id, value)}
                         onRun={(value) => runCell(cells[index].id, value)}
                         onRunMath={(value) =>
-                          runMathCell(cells[index].id, value, cells[index].mathRenderMode ?? 'exact')
+                          runMathCell(
+                            cells[index].id,
+                            value,
+                            cells[index].mathRenderMode ?? defaultMathRenderMode,
+                            cells[index].mathTrigMode ?? trigMode
+                          )
                         }
                         onRunStoich={(state) => runStoichCell(cells[index].id, state)}
                         onChangeStoich={(state) => updateStoichState(cells[index].id, state)}
@@ -1462,13 +1884,30 @@ function App() {
                         trigMode={trigMode}
                         kernelReady={!!activeKernel}
                         onSetMathRenderMode={(mode) =>
+                          {
+                            setCells((prev) =>
+                              prev.map((cell) =>
+                                cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
+                              )
+                            );
+                          }
+                        }
+                        onSetMathTrigMode={(mode) => {
                           setCells((prev) =>
                             prev.map((cell) =>
-                              cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
+                              cell.id === cells[index].id ? { ...cell, mathTrigMode: mode } : cell
                             )
-                          )
-                        }
-                        onToggleTrigMode={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+                          );
+                          if (cells[index].source.trim()) {
+                            void runMathCell(
+                              cells[index].id,
+                              cells[index].source,
+                              cells[index].mathRenderMode ?? defaultMathRenderMode,
+                              mode,
+                              true
+                            );
+                          }
+                        }}
                       />
                     ) : null}
                   </React.Fragment>
@@ -1506,28 +1945,43 @@ function App() {
                 type="button"
                 className="mobile-cell-action-btn"
                 onClick={() =>
-                  setCells((prev) =>
-                    prev.map((cell) =>
-                      cell.id === mobileActionCell.id
-                        ? {
-                            ...cell,
-                            mathRenderMode: cell.mathRenderMode === 'decimal' ? 'exact' : 'decimal'
-                          }
-                        : cell
-                    )
-                  )
+                  {
+                    const currentMode = mobileActionCell.mathRenderMode ?? defaultMathRenderMode;
+                    const nextMode = currentMode === 'decimal' ? 'exact' : 'decimal';
+                    setCells((prev) =>
+                      prev.map((cell) =>
+                        cell.id === mobileActionCell.id ? { ...cell, mathRenderMode: nextMode } : cell
+                      )
+                    );
+                  }
                 }
               >
-                {mobileActionCell.mathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
+                {(mobileActionCell.mathRenderMode ?? defaultMathRenderMode) === 'decimal' ? 'Decimal' : 'Exact'}
               </button>
             ) : null}
             {mobileActionCell.type === 'math' ? (
               <button
                 type="button"
                 className="mobile-cell-action-btn"
-                onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}
+                onClick={() => {
+                  const nextMode = (mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'rad' : 'deg';
+                  setCells((prev) =>
+                    prev.map((cell) =>
+                      cell.id === mobileActionCell.id ? { ...cell, mathTrigMode: nextMode } : cell
+                    )
+                  );
+                  if (mobileActionCell.source.trim()) {
+                    void runMathCell(
+                      mobileActionCell.id,
+                      mobileActionCell.source,
+                      mobileActionCell.mathRenderMode ?? defaultMathRenderMode,
+                      nextMode,
+                      true
+                    );
+                  }
+                }}
               >
-                {trigMode === 'deg' ? 'Deg' : 'Rad'}
+                {(mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'Deg' : 'Rad'}
               </button>
             ) : null}
             <button
@@ -1557,6 +2011,38 @@ function App() {
             </button>
           </div>
         ) : null}
+        <div ref={assistantDrawerRef}>
+          <AssistantDrawer
+            open={assistantOpen}
+            apiKey={assistantApiKey}
+            model={assistantModel}
+            scope={assistantScope}
+            preference={assistantPreference}
+            prompt={assistantPrompt}
+            loading={assistantLoading}
+            error={assistantError}
+            status={assistantStatus}
+            activity={assistantActivity}
+            plan={assistantPlan}
+            canUndo={assistantUndoStack.length > 0}
+            onClose={() => setAssistantOpen(false)}
+            onChangeApiKey={setAssistantApiKey}
+            onChangeModel={setAssistantModel}
+            onChangeScope={setAssistantScope}
+            onChangePreference={setAssistantPreference}
+            onChangePrompt={setAssistantPrompt}
+            onGenerate={() => {
+              void runAssistant();
+            }}
+            onApply={() => {
+              void applyAssistantPlan(false);
+            }}
+            onApplyAndRun={() => {
+              void applyAssistantPlan(true);
+            }}
+            onUndo={undoAssistantPlan}
+          />
+        </div>
       </div>
     </ErrorBoundary>
   );

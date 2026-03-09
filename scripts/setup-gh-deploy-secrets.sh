@@ -16,7 +16,7 @@ fi
 
 DEPLOY_HOST="${1:-seggver}"
 DEPLOY_USER="${2:-sugarpy}"
-DEPLOY_PATH="${3:-/opt/sugarpy/SugarPy}"
+DEPLOY_PATH="${3:-/opt/sugarpy/current}"
 DEPLOY_PORT="${4:-22}"
 DEPLOY_JUPYTER_TOKEN="${5:-sugarpy}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519}"

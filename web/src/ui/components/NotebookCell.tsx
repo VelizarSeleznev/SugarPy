@@ -27,7 +27,7 @@ type Props = {
   trigMode: 'deg' | 'rad';
   kernelReady: boolean;
   onSetMathRenderMode: (mode: 'exact' | 'decimal') => void;
-  onToggleTrigMode: () => void;
+  onSetMathTrigMode: (mode: 'deg' | 'rad') => void;
 };
 
 const statusFromCell = (cell: CellModel) => {
@@ -56,10 +56,11 @@ export function NotebookCell({
   trigMode,
   kernelReady,
   onSetMathRenderMode,
-  onToggleTrigMode
+  onSetMathTrigMode
 }: Props) {
   const cellType = cell.type ?? 'code';
   const mathRenderMode = cell.mathRenderMode ?? 'exact';
+  const mathTrigMode = cell.mathTrigMode ?? trigMode;
   const runHandler =
     cellType === 'markdown' || cellType === 'stoich'
       ? undefined
@@ -78,28 +79,9 @@ export function NotebookCell({
         onMoveDown={onMoveDown}
         onDelete={onDelete}
         onActivate={onActivate}
-        toolbarExtras={
-          cellType === 'math' ? (
-            <div className="cell-toolbar-mode" role="group" aria-label="Math render mode">
-              <button
-                type="button"
-                className="cell-toolbar-mode-btn active"
-                onClick={() => onSetMathRenderMode(mathRenderMode === 'exact' ? 'decimal' : 'exact')}
-                aria-label="Toggle math output mode"
-              >
-                {mathRenderMode === 'exact' ? 'Exact' : 'Decimal'}
-              </button>
-              <button
-                type="button"
-                className="cell-toolbar-mode-btn"
-                onClick={onToggleTrigMode}
-                aria-label="Toggle trig mode"
-              >
-                {trigMode === 'deg' ? 'Deg' : 'Rad'}
-              </button>
-            </div>
-          ) : null
-        }
+        showStatus={cellType === 'code'}
+        inlineToolbar={cellType === 'math'}
+        compactStatus={cellType === 'math'}
       >
         {cellType === 'code' ? (
           <>
@@ -131,7 +113,14 @@ export function NotebookCell({
               completions={mathSuggestions}
               output={cell.mathOutput}
               isRunning={cell.isRunning}
-              trigMode={trigMode}
+              trigMode={mathTrigMode}
+              renderMode={mathRenderMode}
+              onToggleRenderMode={() =>
+                onSetMathRenderMode(mathRenderMode === 'exact' ? 'decimal' : 'exact')
+              }
+              onToggleTrigMode={() =>
+                onSetMathTrigMode(mathTrigMode === 'deg' ? 'rad' : 'deg')
+              }
             />
             <div data-testid="cell-output">
               <OutputArea output={cell.output} />

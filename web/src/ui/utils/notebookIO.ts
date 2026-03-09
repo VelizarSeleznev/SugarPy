@@ -5,12 +5,24 @@ export type SugarPyNotebookV1 = {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode?: 'exact' | 'decimal';
   cells: Array<Omit<CellModel, 'isRunning'>>;
   updatedAt: string;
 };
 
 const STORAGE_PREFIX = 'sugarpy:notebook:v1:';
 const LAST_OPEN_KEY = 'sugarpy:last-open';
+
+export type LocalStorageSaveResult =
+  | {
+      ok: true;
+      stored: 'local-autosave';
+    }
+  | {
+      ok: false;
+      stored: 'none';
+      reason: 'storage-unavailable' | 'quota-exceeded' | 'write-failed';
+    };
 
 const normalizeCells = (cells: CellModel[]): Array<Omit<CellModel, 'isRunning'>> =>
   cells.map(({ isRunning, ...rest }) => rest);
@@ -45,26 +57,90 @@ export const createNotebookId = () => `nb-${Date.now()}`;
 
 export const getStorageKey = (id: string) => `${STORAGE_PREFIX}${id}`;
 
-export const loadLastOpenId = (): string | null => {
+const readStorageItem = (key: string): string | null => {
   if (typeof localStorage === 'undefined') return null;
-  return localStorage.getItem(LAST_OPEN_KEY);
+  try {
+    return localStorage.getItem(key);
+  } catch (_err) {
+    return null;
+  }
+};
+
+export const writeStorageItem = (key: string, value: string): LocalStorageSaveResult => {
+  if (typeof localStorage === 'undefined') {
+    return { ok: false, stored: 'none', reason: 'storage-unavailable' };
+  }
+  try {
+    localStorage.setItem(key, value);
+    return { ok: true, stored: 'local-autosave' };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : '';
+    const message = error instanceof Error ? error.message : String(error);
+    const isQuotaExceeded =
+      name === 'QuotaExceededError' ||
+      name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      message.toLowerCase().includes('exceeded the quota');
+    return {
+      ok: false,
+      stored: 'none',
+      reason: isQuotaExceeded ? 'quota-exceeded' : 'write-failed'
+    };
+  }
+};
+
+export const removeStorageItem = (key: string) => {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.removeItem(key);
+  } catch (_err) {
+    // Ignore storage failures so UI state persistence never becomes fatal.
+  }
+};
+
+export const loadLastOpenId = (): string | null => {
+  return readStorageItem(LAST_OPEN_KEY);
 };
 
 export const saveLastOpenId = (id: string) => {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LAST_OPEN_KEY, id);
+  return writeStorageItem(LAST_OPEN_KEY, id);
+};
+
+const listNotebookStorageKeys = () => {
+  if (typeof localStorage === 'undefined') return [] as string[];
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith(STORAGE_PREFIX)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  } catch (_err) {
+    return [] as string[];
+  }
+};
+
+export const pruneLocalNotebookSnapshots = (keepId?: string | null) => {
+  const keepKey = keepId ? getStorageKey(keepId) : null;
+  for (const key of listNotebookStorageKeys()) {
+    if (keepKey && key === keepKey) continue;
+    removeStorageItem(key);
+  }
 };
 
 export const serializeSugarPy = (params: {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
   cells: CellModel[];
 }): SugarPyNotebookV1 => ({
   version: 1,
   id: params.id,
   name: params.name,
   trigMode: params.trigMode,
+  defaultMathRenderMode: params.defaultMathRenderMode,
   cells: normalizeCells(params.cells),
   updatedAt: new Date().toISOString()
 });
@@ -73,6 +149,7 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   id: data.id,
   name: data.name,
   trigMode: data.trigMode,
+  defaultMathRenderMode: data.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
   cells: data.cells.map((cell) => ({
     ...cell,
     output: normalizeOutput((cell as any).output),
@@ -80,15 +157,32 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   }))
 });
 
-export const saveToLocalStorage = (notebook: SugarPyNotebookV1) => {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(getStorageKey(notebook.id), JSON.stringify(notebook));
-  saveLastOpenId(notebook.id);
+const stripRuntimeOutputs = (cell: Omit<CellModel, 'isRunning'>): Omit<CellModel, 'isRunning'> => {
+  const nextCell: Omit<CellModel, 'isRunning'> = { ...cell };
+  delete nextCell.output;
+  delete nextCell.mathOutput;
+  delete nextCell.stoichOutput;
+  return nextCell;
+};
+
+const createLocalAutosaveSnapshot = (notebook: SugarPyNotebookV1): SugarPyNotebookV1 => ({
+  ...notebook,
+  cells: notebook.cells.map(stripRuntimeOutputs)
+});
+
+export const saveToLocalStorage = (notebook: SugarPyNotebookV1): LocalStorageSaveResult => {
+  const snapshot = createLocalAutosaveSnapshot(notebook);
+  const writeResult = writeStorageItem(getStorageKey(notebook.id), JSON.stringify(snapshot));
+  if (!writeResult.ok) {
+    return writeResult;
+  }
+  pruneLocalNotebookSnapshots(notebook.id);
+  const lastOpenResult = saveLastOpenId(notebook.id);
+  return lastOpenResult.ok ? writeResult : lastOpenResult;
 };
 
 export const loadFromLocalStorage = (id: string): SugarPyNotebookV1 | null => {
-  if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem(getStorageKey(id));
+  const raw = readStorageItem(getStorageKey(id));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as SugarPyNotebookV1;
@@ -161,6 +255,7 @@ export const serializeIpynb = (params: {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
   cells: CellModel[];
 }) => {
   const cells = params.cells.map((cell) => {
@@ -190,7 +285,9 @@ export const serializeIpynb = (params: {
         metadata: {
           sugarpy: {
             type: 'math',
-            mathOutput: cell.mathOutput ?? null
+            mathOutput: cell.mathOutput ?? null,
+            mathRenderMode: cell.mathRenderMode ?? 'exact',
+            mathTrigMode: cell.mathTrigMode ?? params.trigMode
           }
         },
         source: toLines(cell.source)
@@ -233,7 +330,8 @@ export const serializeIpynb = (params: {
         version: 1,
         id: params.id,
         name: params.name,
-        trigMode: params.trigMode
+        trigMode: params.trigMode,
+        defaultMathRenderMode: params.defaultMathRenderMode
       }
     },
     cells
@@ -260,6 +358,13 @@ export const deserializeIpynb = (data: any) => {
         source: fromLines(cell?.source ?? ''),
         type: 'math',
         mathOutput: sugarpy.mathOutput ?? undefined,
+        mathRenderMode:
+          sugarpy.mathRenderMode === 'decimal'
+            ? 'decimal'
+            : metadata.defaultMathRenderMode === 'decimal'
+              ? 'decimal'
+              : 'exact',
+        mathTrigMode: sugarpy.mathTrigMode === 'rad' ? 'rad' : metadata.trigMode === 'rad' ? 'rad' : 'deg',
         isRunning: false
       };
     }
@@ -316,6 +421,7 @@ export const deserializeIpynb = (data: any) => {
     id: metadata.id ?? createNotebookId(),
     name: metadata.name ?? 'Untitled',
     trigMode: metadata.trigMode === 'rad' ? 'rad' : 'deg',
+    defaultMathRenderMode: metadata.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
     cells
   };
 };
