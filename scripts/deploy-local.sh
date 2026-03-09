@@ -19,6 +19,21 @@ SHARED_DIR="${DEPLOY_ROOT}/shared"
 RELEASE_PATH="${RELEASES_DIR}/${RELEASE_ID}"
 RUN_AS_SUGARPY="sudo -u sugarpy /bin/bash -lc"
 
+retry_until_ok() {
+  local description="$1"
+  local command="$2"
+
+  for _ in {1..20}; do
+    if bash -lc "${command}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "${description} did not become healthy in time."
+  bash -lc "${command}"
+}
+
 echo "Local deploy root: ${DEPLOY_ROOT}"
 echo "Release ID: ${RELEASE_ID}"
 
@@ -80,8 +95,8 @@ sudo systemctl restart sugarpy-jupyter.service
 sudo systemctl reload nginx
 
 # 5) Health checks.
-curl -fsS http://127.0.0.1:18081/ >/dev/null
-curl -fsS "http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}" >/dev/null
+retry_until_ok "Frontend health check" "curl -fsS http://127.0.0.1:18081/"
+retry_until_ok "Jupyter health check" "curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}'"
 
 # 6) Prune old releases.
 ${RUN_AS_SUGARPY} "
