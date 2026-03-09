@@ -60,6 +60,7 @@ tar \
   --exclude='notebooks/.sugarpy-autosave' \
   -czf - . \
   | ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+      export PATH=\"\$HOME/.local/bin:\$PATH\"
       set -euo pipefail
       mkdir -p '${RELEASE_PATH}'
       tar -xzf - -C '${RELEASE_PATH}'
@@ -67,6 +68,7 @@ tar \
 
 # 2) Prepare shared runtime state and build the release in isolation.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  export PATH=\"\$HOME/.local/bin:\$PATH\"
   set -euo pipefail
   mkdir -p '${RELEASES_DIR}' '${SHARED_DIR}/notebooks' '${SHARED_DIR}/.ipython'
   if [ -d '${RELEASE_PATH}/notebooks' ]; then
@@ -83,6 +85,7 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "
 
 # 3) Atomically switch current to the new release.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  export PATH=\"\$HOME/.local/bin:\$PATH\"
   set -e
   ln -sfn '${RELEASE_PATH}' '${DEPLOY_ROOT}/.current.next'
   mv -Tf '${DEPLOY_ROOT}/.current.next' '${DEPLOY_PATH}'
@@ -90,20 +93,22 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "
 
 # 4) Reload services.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  export PATH=\"\$HOME/.local/bin:\$PATH\"
   set -e
   sudo systemctl restart sugarpy-jupyter.service
   sudo systemctl reload nginx
 "
 
 # 5) Health checks.
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "curl -fsS http://127.0.0.1:18081/ >/dev/null"
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS http://127.0.0.1:18081/ >/dev/null"
 if [[ -n "${DEPLOY_JUPYTER_TOKEN:-}" ]]; then
   ssh "${SSH_OPTS[@]}" "${REMOTE}" \
-    "curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
+    "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
 fi
 
 # 6) Keep the most recent releases and prune older ones.
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "
+  export PATH=\"\$HOME/.local/bin:\$PATH\"
   set -euo pipefail
   if [ -d '${RELEASES_DIR}' ]; then
     ls -1dt '${RELEASES_DIR}'/* 2>/dev/null | tail -n +$((RELEASES_TO_KEEP + 1)) | xargs -r rm -rf --
