@@ -44,25 +44,13 @@ jobs:
           npm run build
 
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, sugarpy-prod]
     needs: checks
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-
-      - name: Deploy to remote host
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-          DEPLOY_JUPYTER_TOKEN: ${{ secrets.DEPLOY_JUPYTER_TOKEN }}
+      - name: Deploy locally on seggver
         run: |
-          chmod +x scripts/deploy-remote.sh
-          ./scripts/deploy-remote.sh
+          chmod +x scripts/deploy-local.sh
+          ./scripts/deploy-local.sh

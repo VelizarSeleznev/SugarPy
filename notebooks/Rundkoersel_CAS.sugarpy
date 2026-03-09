@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "id": "nb-rundkoersel-cas",
+  "name": "Rundkorsel (CAS-first, readable)",
+  "trigMode": "deg",
+  "updatedAt": "2026-03-02T00:00:00.000000Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# Rundkorsel (Roundabout) - CAS-first readable solution\n\nThis notebook is structured as short alternating text and math cells.\nGoal: explain every step clearly, not only compute answers.\n\n## Task (quoted, Danish)\n\n> Projektopgaver: Rundkorsel\n> \n> Bestem cirklens ligning for vejbanens inderste cirkel,\n> hvis koordinatsystemet anbringes i rundkorslens midte.\n> \n> Bestem cirklens ligning for den yderste cirkel,\n> der gar igennem punkterne A (3,38) og B (26,25)\n> i det indlagte koordinatsystem.\n> \n> Hvor lang tid vil det tage at kore en hel tur midt i rundkorslen\n> med en anbefalet max hastighed pa 30 km/t?\n> \n> Bestem koordinaterne til punkterne C og D,\n> nar det gives, at Kalundborgvej moder rundkorslen symmetrisk fra B til D.\n> Vinklen imellem de to veje er 91 grader.\n> Bestem herefter vinklen imellem de to tangenter til cirklen\n> i punkterne A og C samt B og D.\n> \n> Bestem den korteste afstand imellem en bilist midt pa vejbanen\n> i rundkorslen og den ventende bla bils midtpunkt P (43,30).\n> \n> Du skal nu projektere en ny vej,\n> hvis linjeforing skal \"ramme\" rundkorslen fra nordostlig retning.\n> Du skal bestemme denne linjeforings rette linje,\n> bestemme punktet hvor linjeforingen rammer den yderste cirkel,\n> samt de to anlobspunkter ved vejens side,\n> der tangerer den yderste cirkel i rundkorslen.\n> Du skal antage, at denne nye vej ankommer til rundkorslen\n> som Kalundborgvej.\n\nAssumptions used in this notebook:\n- `rin = 15`, `rout = 25`, `rmid = 20` (meters).\n- `91` is treated as the central angle `AOC`.\n- Trig mode is `deg`, so `sin(91)` is in degrees."
+    },
+    {
+      "id": "cell-2",
+      "type": "markdown",
+      "source": "## 1) Constants and circle equations in center coordinates\n\nWe start with constants and the three concentric circles in local center coordinates `(u,v)`."
+    },
+    {
+      "id": "cell-3",
+      "type": "math",
+      "source": "Ax := 3\nAy := 38\nBx := 26\nBy := 25\nPx := 43\nPy := 30\n\nrin := 15\nrout := 25\nrmid := 20\n\nu^2 + v^2 = rin^2\nu^2 + v^2 = rout^2\nu^2 + v^2 = rmid^2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-4",
+      "type": "markdown",
+      "source": "## 2) Outer circle in embedded coordinates\n\nFrom points `A`, `B`, and radius `rout`, there are two candidate centers.\nWe pick the one with larger `y` (the black dot in the figure is above A and B)."
+    },
+    {
+      "id": "cell-5",
+      "type": "math",
+      "source": "dx := Bx - Ax\ndy := By - Ay\nDab := (dx^2 + dy^2)^0.5\nmx := (Ax + Bx)/2\nmy := (Ay + By)/2\na := Dab/2\nhalfChordToCenter := (rout^2 - a^2)^0.5\nux := -dy / Dab\nuy := dx / Dab\n\nh1 := mx + ux*halfChordToCenter\nk1 := my + uy*halfChordToCenter\nh2 := mx - ux*halfChordToCenter\nk2 := my - uy*halfChordToCenter\n\nh1N := N(h1, 8)\nk1N := N(k1, 8)\nh2N := N(h2, 8)\nk2N := N(k2, 8)\n(h1N, k1N)\n(h2N, k2N)\n\nh0 := h1N\nk0 := k1N\n\n(x - h0)^2 + (y - k0)^2 = rout^2",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-6",
+      "type": "markdown",
+      "source": "## 3) Find C from angle 91 and D by symmetry\n\n`C` is built by rotating vector `OA` by +91 degrees (east-side solution).\n`D` is reflection of `B` across line `OC`."
+    },
+    {
+      "id": "cell-7",
+      "type": "math",
+      "source": "vAx := Ax - h0\nvAy := Ay - k0\n\nvCpx := vAx*cos(91) - vAy*sin(91)\nvCpy := vAx*sin(91) + vAy*cos(91)\nvCmx := vAx*cos(91) + vAy*sin(91)\nvCmy := -vAx*sin(91) + vAy*cos(91)\n\nCplusx := h0 + vCpx\nCplusy := k0 + vCpy\nCminusx := h0 + vCmx\nCminusy := k0 + vCmy\n\nN(Cplusx)\nN(Cplusy)\nN(Cminusx)\nN(Cminusy)\n\nCx := Cplusx\nCy := Cplusy\n\nvBx := Bx - h0\nvBy := By - k0\ndxC := Cx - h0\ndyC := Cy - k0\ndotBC := vBx*dxC + vBy*dyC\ndotCC := dxC^2 + dyC^2\nprojx := (dotBC/dotCC)*dxC\nprojy := (dotBC/dotCC)*dyC\nvDx := 2*projx - vBx\nvDy := 2*projy - vBy\nDx := h0 + vDx\nDy := k0 + vDy\n\nN(Cx)\nN(Cy)\nN(Dx)\nN(Dy)\n\ncheckC := simplify((Cx - h0)^2 + (Cy - k0)^2 - rout^2)\ncheckD := simplify((Dx - h0)^2 + (Dy - k0)^2 - rout^2)\ncheckC\ncheckD",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-8",
+      "type": "markdown",
+      "source": "## 4) Angles between tangents\n\nFor points `A` and `C`: tangent angle is `180 - 91 = 89`.\nFor points `B` and `D`: compute central angle `BOD`, then tangent angle is `180 - BOD`."
+    },
+    {
+      "id": "cell-9",
+      "type": "math",
+      "source": "phiAC := 180 - 91\nthetaBD := (180/pi) * acos((vBx*vDx + vBy*vDy)/rout^2)\nphiBD := 180 - thetaBD\n\nphiAC\nN(thetaBD)\nN(phiBD)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-10",
+      "type": "markdown",
+      "source": "## 5) Travel time and shortest distance to P\n\nLap length on midline is `2*pi*rmid`.\nSpeed is `30 km/h = 30000/3600 m/s`.\nShortest distance from point `P` to midline circle is `|OP - rmid|`."
+    },
+    {
+      "id": "cell-11",
+      "type": "math",
+      "source": "L := 2*pi*rmid\nspeed := 30000/3600\nT := L / speed\n\nOP := ((Px - h0)^2 + (Py - k0)^2)^0.5\ndmin := abs(OP - rmid)\n\nN(T)\nN(dmin)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-12",
+      "type": "markdown",
+      "source": "## 6) New road from northeast (45 degrees)\n\nRoad centerline goes through `O=(h0,k0)` with slope `tan(45)=1`.\nWe reuse Kalundborg approach half-angle `alpha = angle(BOC)` to get edge contact points `E1`, `E2`.\nThen we compute tangent lines at `E1`, `E2` in slope-intercept form (numeric)."
+    },
+    {
+      "id": "cell-13",
+      "type": "math",
+      "source": "uNEx := cos(45)\nuNEy := sin(45)\nmNE := tan(45)\nbNE := k0 - mNE*h0\n\nEx := h0 + rout*uNEx\nEy := k0 + rout*uNEy\n\nalpha := (180/pi) * acos((vBx*(Cx - h0) + vBy*(Cy - k0))/rout^2)\nalphaN := N(alpha, 8)\n\nu1x := uNEx*cos(alphaN) - uNEy*sin(alphaN)\nu1y := uNEx*sin(alphaN) + uNEy*cos(alphaN)\nu2x := uNEx*cos(alphaN) + uNEy*sin(alphaN)\nu2y := -uNEx*sin(alphaN) + uNEy*cos(alphaN)\n\nE1x := h0 + rout*u1x\nE1y := k0 + rout*u1y\nE2x := h0 + rout*u2x\nE2y := k0 + rout*u2y\n\nmT1 := -(E1x - h0)/(E1y - k0)\nmT2 := -(E2x - h0)/(E2y - k0)\nbT1 := E1y - mT1*E1x\nbT2 := E2y - mT2*E2x\n\nN(Ex)\nN(Ey)\nalphaN\n\nN(E1x)\nN(E1y)\nN(E2x)\nN(E2y)\n\nN(mNE)\nN(bNE)\nN(mT1)\nN(bT1)\nN(mT2)\nN(bT2)",
+      "mathOutput": null
+    },
+    {
+      "id": "cell-14",
+      "type": "markdown",
+      "source": "## 7) Compact final summary\n\nThis final cell prints key numeric results in short lines.\nWe intentionally skip heavy plotting here to keep notebook layout compact on laptop screens."
+    },
+    {
+      "id": "cell-15",
+      "type": "math",
+      "source": "N(h0)\nN(k0)\nN(Cx)\nN(Cy)\nN(Dx)\nN(Dy)\nN(phiAC)\nN(phiBD)\nN(T)\nN(dmin)",
+      "mathOutput": null
+    }
+  ]
+}

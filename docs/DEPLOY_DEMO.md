@@ -91,24 +91,35 @@ Check status at any time:
 sudo tailscale funnel status
 ```
 
-## GitHub Actions deployment (no browser flow required)
-This repository includes CI/CD in `.github/workflows/deploy.yml`:
-- Runs backend tests (`pytest tests/backend/`) and frontend build.
-- Deploys to a remote host over SSH only after checks pass.
+## GitHub Actions deployment via self-hosted runner
+This repository uses a split CI/CD flow in `.github/workflows/deploy.yml`:
+- `checks` run on GitHub-hosted `ubuntu-latest`.
+- `deploy` runs on a self-hosted runner on `seggver` with label `sugarpy-prod`.
 
-Set required GitHub repository secrets from terminal:
+Why:
+- `seggver` is reachable only from the Tailnet/local environment, not from GitHub-hosted runners.
+- The self-hosted runner performs a local release build and atomic symlink switch on the server.
+
+Runner requirements on `seggver`:
+- Install the GitHub Actions runner under user `egg`.
+- Register it to this repo with labels `self-hosted,sugarpy-prod`.
+- Keep the runner service enabled.
+- Allow user `egg` to run the local deploy path non-interactively:
+  - `sudo -u sugarpy /bin/bash -lc ...`
+  - `sudo systemctl restart sugarpy-jupyter.service`
+  - `sudo systemctl reload nginx`
+
+The deploy job now uses:
 ```bash
-./scripts/setup-gh-deploy-secrets.sh seggver sugarpy /opt/sugarpy/current 22 sugarpy
+./scripts/deploy-local.sh
 ```
 
-Required secrets:
-- `DEPLOY_HOST`
-- `DEPLOY_USER`
-- `DEPLOY_PATH`
-- `DEPLOY_PORT`
-- `DEPLOY_SSH_KEY` (private key used by Actions)
-- `DEPLOY_SSH_KNOWN_HOSTS`
-- `DEPLOY_JUPYTER_TOKEN` (for post-deploy API health check)
+This script:
+- builds a fresh release under `/opt/sugarpy/releases/<sha>`
+- reuses `/opt/sugarpy/shared/.venv` and `/opt/sugarpy/shared/notebooks`
+- atomically switches `/opt/sugarpy/current`
+- reloads `sugarpy-jupyter.service` and `nginx`
+- verifies local health endpoints after deploy
 
 Manual deploy from local terminal (same mechanism as CI):
 ```bash
@@ -118,6 +129,13 @@ DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_PORT=22 \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-remote.sh
+```
+
+Manual local deploy directly on `seggver`:
+```bash
+DEPLOY_PATH=/opt/sugarpy/current \
+DEPLOY_JUPYTER_TOKEN=sugarpy \
+./scripts/deploy-local.sh
 ```
 
 ## Notes and limitations
