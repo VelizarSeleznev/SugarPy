@@ -5,6 +5,7 @@ export type SugarPyNotebookV1 = {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode?: 'exact' | 'decimal';
   cells: Array<Omit<CellModel, 'isRunning'>>;
   updatedAt: string;
 };
@@ -59,12 +60,14 @@ export const serializeSugarPy = (params: {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
   cells: CellModel[];
 }): SugarPyNotebookV1 => ({
   version: 1,
   id: params.id,
   name: params.name,
   trigMode: params.trigMode,
+  defaultMathRenderMode: params.defaultMathRenderMode,
   cells: normalizeCells(params.cells),
   updatedAt: new Date().toISOString()
 });
@@ -73,6 +76,7 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   id: data.id,
   name: data.name,
   trigMode: data.trigMode,
+  defaultMathRenderMode: data.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
   cells: data.cells.map((cell) => ({
     ...cell,
     output: normalizeOutput((cell as any).output),
@@ -161,6 +165,7 @@ export const serializeIpynb = (params: {
   id: string;
   name: string;
   trigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
   cells: CellModel[];
 }) => {
   const cells = params.cells.map((cell) => {
@@ -190,7 +195,9 @@ export const serializeIpynb = (params: {
         metadata: {
           sugarpy: {
             type: 'math',
-            mathOutput: cell.mathOutput ?? null
+            mathOutput: cell.mathOutput ?? null,
+            mathRenderMode: cell.mathRenderMode ?? 'exact',
+            mathTrigMode: cell.mathTrigMode ?? params.trigMode
           }
         },
         source: toLines(cell.source)
@@ -233,7 +240,8 @@ export const serializeIpynb = (params: {
         version: 1,
         id: params.id,
         name: params.name,
-        trigMode: params.trigMode
+        trigMode: params.trigMode,
+        defaultMathRenderMode: params.defaultMathRenderMode
       }
     },
     cells
@@ -260,6 +268,13 @@ export const deserializeIpynb = (data: any) => {
         source: fromLines(cell?.source ?? ''),
         type: 'math',
         mathOutput: sugarpy.mathOutput ?? undefined,
+        mathRenderMode:
+          sugarpy.mathRenderMode === 'decimal'
+            ? 'decimal'
+            : metadata.defaultMathRenderMode === 'decimal'
+              ? 'decimal'
+              : 'exact',
+        mathTrigMode: sugarpy.mathTrigMode === 'rad' ? 'rad' : metadata.trigMode === 'rad' ? 'rad' : 'deg',
         isRunning: false
       };
     }
@@ -316,6 +331,7 @@ export const deserializeIpynb = (data: any) => {
     id: metadata.id ?? createNotebookId(),
     name: metadata.name ?? 'Untitled',
     trigMode: metadata.trigMode === 'rad' ? 'rad' : 'deg',
+    defaultMathRenderMode: metadata.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
     cells
   };
 };

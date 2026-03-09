@@ -17,7 +17,10 @@ type Props = {
   language?: any;
   placeholderText?: string;
   autoFocus?: boolean;
+  shortcutItems?: { label: string; snippet: string }[];
 };
+
+const CURSOR_MARKER = '__CURSOR__';
 
 export function CodeEditor({
   value,
@@ -28,7 +31,8 @@ export function CodeEditor({
   onSlashCommand,
   language,
   placeholderText,
-  autoFocus
+  autoFocus,
+  shortcutItems = []
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -146,5 +150,38 @@ export function CodeEditor({
     });
   }, [completions, slashCommands]);
 
-  return <div ref={containerRef} />;
+  const insertSnippet = (snippet: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const selection = view.state.selection.main;
+    const markerIndex = snippet.indexOf(CURSOR_MARKER);
+    const insertText = markerIndex >= 0 ? snippet.replace(CURSOR_MARKER, '') : snippet;
+    const cursorOffset = markerIndex >= 0 ? markerIndex : insertText.length;
+    view.dispatch({
+      changes: { from: selection.from, to: selection.to, insert: insertText },
+      selection: { anchor: selection.from + cursorOffset }
+    });
+    view.focus();
+  };
+
+  return (
+    <div className="editor-shell">
+      <div ref={containerRef} />
+      {shortcutItems.length > 0 ? (
+        <div className="editor-shortcuts" role="toolbar" aria-label="Editor shortcuts">
+          {shortcutItems.map((item) => (
+            <button
+              key={`${item.label}-${item.snippet}`}
+              type="button"
+              className="editor-shortcut-btn"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => insertSnippet(item.snippet)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
