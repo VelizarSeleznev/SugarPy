@@ -24,10 +24,13 @@ import {
   downloadBlob,
   loadFromLocalStorage,
   loadLastOpenId,
+  pruneLocalNotebookSnapshots,
+  removeStorageItem,
   readFileAsText,
   saveToLocalStorage,
   serializeIpynb,
-  serializeSugarPy
+  serializeSugarPy,
+  writeStorageItem
 } from './utils/notebookIO';
 
 export type CellModel = {
@@ -81,12 +84,6 @@ export type CellOutput =
       ename: string;
       evalue: string;
     };
-
-const defaultCell: CellModel = {
-  id: 'cell-1',
-  source: '',
-  type: 'code'
-};
 
 const createStoichState = (reaction = ''): StoichState => ({
   reaction,
@@ -190,6 +187,14 @@ const isEditableElement = (element: Element | null) => {
   return false;
 };
 
+const readOptionalStorageItem = (key: string) => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_err) {
+    return null;
+  }
+};
+
 function App() {
   const defaultServerUrl = resolveDefaultServerUrl();
   const [serverUrl, setServerUrl] = useState(defaultServerUrl);
@@ -198,7 +203,7 @@ function App() {
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [kernel, setKernel] = useState<any>(null);
-  const [cells, setCells] = useState<CellModel[]>([defaultCell]);
+  const [cells, setCells] = useState<CellModel[]>([]);
   const { allFunctions } = useFunctionLibrary();
   const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
@@ -257,6 +262,7 @@ function App() {
   const connectOnce = useRef(false);
   const autosaveTimer = useRef<number | undefined>(undefined);
   const autosaveServerTimer = useRef<number | undefined>(undefined);
+  const localAutosaveWarningShown = useRef(false);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
   const contentsRef = useRef<ContentsManager | null>(null);
@@ -642,6 +648,7 @@ function App() {
     let cancelled = false;
     const hydrate = async () => {
       const lastId = loadLastOpenId();
+      pruneLocalNotebookSnapshots(lastId);
       if (!lastId) {
         hydrated.current = true;
         return;
@@ -665,7 +672,7 @@ function App() {
       }
 
       const decoded = deserializeSugarPy(selected);
-      const nextCells = decoded.cells.length > 0 ? decoded.cells : [defaultCell];
+      const nextCells = decoded.cells;
       setNotebookId(decoded.id);
       setNotebookName(decoded.name);
       setTrigMode(decoded.trigMode);
@@ -1111,8 +1118,6 @@ function App() {
     };
   };
 
-  const createInitialCell = () => createCell('code');
-
   const getCellDisplayText = (cell: CellModel) => {
     if (cell.type === 'stoich') {
       return cell.stoichState?.reaction ?? '';
@@ -1226,10 +1231,10 @@ function App() {
   };
 
   useEffect(() => {
-    const storedKey = window.localStorage.getItem(ASSISTANT_API_KEY_STORAGE);
-    const storedModel = window.localStorage.getItem(ASSISTANT_MODEL_STORAGE);
-    const storedScope = window.localStorage.getItem(ASSISTANT_SCOPE_STORAGE);
-    const storedPreference = window.localStorage.getItem(ASSISTANT_PREFERENCE_STORAGE);
+    const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
+    const storedModel = readOptionalStorageItem(ASSISTANT_MODEL_STORAGE);
+    const storedScope = readOptionalStorageItem(ASSISTANT_SCOPE_STORAGE);
+    const storedPreference = readOptionalStorageItem(ASSISTANT_PREFERENCE_STORAGE);
     if (storedKey) setAssistantApiKey(storedKey);
     if (storedModel) setAssistantModel(storedModel);
     if (storedScope === 'active' || storedScope === 'notebook') {
@@ -1242,22 +1247,22 @@ function App() {
 
   useEffect(() => {
     if (assistantApiKey) {
-      window.localStorage.setItem(ASSISTANT_API_KEY_STORAGE, assistantApiKey);
+      writeStorageItem(ASSISTANT_API_KEY_STORAGE, assistantApiKey);
     } else {
-      window.localStorage.removeItem(ASSISTANT_API_KEY_STORAGE);
+      removeStorageItem(ASSISTANT_API_KEY_STORAGE);
     }
   }, [assistantApiKey]);
 
   useEffect(() => {
-    window.localStorage.setItem(ASSISTANT_MODEL_STORAGE, assistantModel);
+    writeStorageItem(ASSISTANT_MODEL_STORAGE, assistantModel);
   }, [assistantModel]);
 
   useEffect(() => {
-    window.localStorage.setItem(ASSISTANT_SCOPE_STORAGE, assistantScope);
+    writeStorageItem(ASSISTANT_SCOPE_STORAGE, assistantScope);
   }, [assistantScope]);
 
   useEffect(() => {
-    window.localStorage.setItem(ASSISTANT_PREFERENCE_STORAGE, assistantPreference);
+    writeStorageItem(ASSISTANT_PREFERENCE_STORAGE, assistantPreference);
   }, [assistantPreference]);
 
   const runAssistant = async () => {
@@ -1456,7 +1461,15 @@ function App() {
         defaultMathRenderMode,
         cells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok) {
+        if (!localAutosaveWarningShown.current) {
+          console.warn(`Local autosave skipped: ${saved.reason}`);
+          localAutosaveWarningShown.current = true;
+        }
+      } else {
+        localAutosaveWarningShown.current = false;
+      }
       setLastSavedAt(payload.updatedAt);
       lastSnapshot.current = snapshot;
       setDirty(false);
@@ -1490,7 +1503,11 @@ function App() {
         defaultMathRenderMode,
         cells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok && !localAutosaveWarningShown.current) {
+        console.warn(`Local autosave skipped during flush: ${saved.reason}`);
+        localAutosaveWarningShown.current = true;
+      }
       setLastSavedAt(payload.updatedAt);
       saveServerAutosave({
         id: notebookId,
@@ -1520,7 +1537,7 @@ function App() {
   const handleNewNotebook = () => {
     if (!confirmDiscard()) return;
     const nextId = createNotebookId();
-    const nextCells = [createInitialCell()];
+    const nextCells: CellModel[] = [];
     setNotebookId(nextId);
     setNotebookName('Untitled');
     setTrigMode('deg');
@@ -1643,7 +1660,11 @@ function App() {
         defaultMathRenderMode: next.defaultMathRenderMode,
         cells: safeCells
       });
-      saveToLocalStorage(payload);
+      const saved = saveToLocalStorage(payload);
+      if (!saved.ok && !localAutosaveWarningShown.current) {
+        console.warn(`Local autosave skipped after import: ${saved.reason}`);
+        localAutosaveWarningShown.current = true;
+      }
       setLastSavedAt(payload.updatedAt);
       lastSnapshot.current = buildSnapshot(
         safeCells,
@@ -1812,7 +1833,7 @@ function App() {
           <div className="notebook-stack">
             {cells.length === 0 ? (
               <div className="cell-empty">
-                <div className="subtitle">Your notebook is empty.</div>
+                <div className="cell-empty-title">This notebook is empty.</div>
                 <div className="divider-menu open">
                   <button className="divider-btn" onClick={() => insertCellAt(0, 'code')}>Code</button>
                   <button className="divider-btn" onClick={() => insertCellAt(0, 'markdown')}>Text</button>

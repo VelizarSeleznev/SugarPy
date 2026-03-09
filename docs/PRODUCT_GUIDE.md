@@ -208,12 +208,15 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Standard notebook format: `.ipynb`
 
 ### Autosave layers
-- Local autosave in browser `localStorage`.
+- Lightweight local autosave in browser `localStorage` for notebook structure and cell source/state.
+- SugarPy retains only the current local notebook snapshot and prunes older local notebook autosaves.
 - Server autosave in `notebooks/sugarpy-autosave/<notebook-id>.sugarpy`.
 
 ### Restore policy
 - On startup, SugarPy restores the newer snapshot between local and server autosave.
 - Autosave is refreshed during editing and on browser lifecycle events.
+- Local autosave intentionally skips heavy runtime outputs so large plots do not exceed browser quota.
+- If browser storage is full or unavailable, SugarPy continues without local autosave and relies on server autosave.
 
 ### Serialization details
 - `.sugarpy` preserves SugarPy-specific cell types and state directly.

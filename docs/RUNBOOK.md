@@ -31,15 +31,19 @@ Recommended Gemini models:
 - `gemini-3.1-pro-preview`: last-resort escalation model.
 
 ## Notebook persistence (autosave + recovery)
-- The UI now keeps a local autosave in browser `localStorage` for crash/reload recovery.
+- The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.
+- Local autosave stores notebook structure and cell source/state, but skips heavy runtime outputs so large plots do not exhaust browser storage.
+- SugarPy keeps only the current local notebook snapshot; older local notebook autosaves are pruned automatically.
 - The UI also writes a server autosave (`.sugarpy`) to:
   `notebooks/sugarpy-autosave/<notebook-id>.sugarpy`
 - On startup, SugarPy restores the newest version between local autosave and server autosave.
+- If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
 - Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
 - The optional Gemini assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
+- New notebooks open empty and show centered `Code | Text | Math` creation controls.
 - New cells are created from the single bottom `+ Add Cell` control.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).

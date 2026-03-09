@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
 
+const addCodeCellToEmptyNotebook = async (page: any) => {
+  const emptyState = page.locator('.cell-empty');
+  if (await emptyState.isVisible()) {
+    await emptyState.getByRole('button', { name: 'Code' }).click();
+  }
+};
+
 const setCodeInFirstCell = async (page: any, code: string) => {
+  await addCodeCellToEmptyNotebook(page);
   const firstCell = page.locator('[data-testid="cell-row-code"]').first();
   await expect(firstCell).toBeVisible();
 
@@ -13,6 +21,7 @@ const setCodeInFirstCell = async (page: any, code: string) => {
 };
 
 const addMathCellAfterFirstCode = async (page: any) => {
+  await addCodeCellToEmptyNotebook(page);
   const divider = page.getByTestId('cell-divider-1');
   await divider.hover();
   await divider.getByRole('button', { name: 'Math' }).click();
@@ -250,7 +259,7 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-activity')).toBeVisible();
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
     await page.getByTestId('assistant-apply-run').click();
-    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
     await expect(page.getByTestId('cell-output').last()).toContainText('4');
     await expectNoGlobalErrors(page, guards);
   });
@@ -270,5 +279,83 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.locator('.assistant-drawer.open')).toHaveCount(0);
 
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Local autosave quota: notebook stays usable when browser storage is full', async ({ page }) => {
+    await page.addInitScript(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key: string, value: string) {
+        if (String(key).startsWith('sugarpy:notebook:v1:')) {
+          throw new DOMException(
+            `Setting the value of '${key}' exceeded the quota.`,
+            'QuotaExceededError'
+          );
+        }
+        return originalSetItem.call(this, key, value);
+      };
+    });
+
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setCodeInFirstCell(page, '2 + 2');
+    await expect(page.getByTestId('cell-output').first()).toContainText('4');
+    await page.waitForTimeout(1200);
+    await expect(page.getByText('SugarPy failed to load')).toHaveCount(0);
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Local autosave cleanup: old notebook snapshots are pruned on load', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'sugarpy:notebook:v1:nb-current',
+        JSON.stringify({
+          version: 1,
+          id: 'nb-current',
+          name: 'Current notebook',
+          trigMode: 'deg',
+          defaultMathRenderMode: 'exact',
+          cells: [{ id: 'cell-1', source: '2 + 2', type: 'code' }],
+          updatedAt: '2026-03-09T10:00:00.000Z'
+        })
+      );
+      window.localStorage.setItem(
+        'sugarpy:notebook:v1:nb-old-1',
+        JSON.stringify({
+          version: 1,
+          id: 'nb-old-1',
+          name: 'Old notebook 1',
+          trigMode: 'deg',
+          defaultMathRenderMode: 'exact',
+          cells: [{ id: 'cell-1', source: '1 + 1', type: 'code' }],
+          updatedAt: '2026-03-08T10:00:00.000Z'
+        })
+      );
+      window.localStorage.setItem(
+        'sugarpy:notebook:v1:nb-old-2',
+        JSON.stringify({
+          version: 1,
+          id: 'nb-old-2',
+          name: 'Old notebook 2',
+          trigMode: 'deg',
+          defaultMathRenderMode: 'exact',
+          cells: [{ id: 'cell-1', source: '3 + 3', type: 'code' }],
+          updatedAt: '2026-03-07T10:00:00.000Z'
+        })
+      );
+      window.localStorage.setItem('sugarpy:last-open', 'nb-current');
+    });
+
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await expect(page.locator('.file-name-input')).toHaveValue('Current notebook');
+    const notebookKeys = await page.evaluate(() =>
+      Object.keys(window.localStorage)
+        .filter((key) => key.startsWith('sugarpy:notebook:v1:'))
+        .sort()
+    );
+    expect(notebookKeys).toEqual(['sugarpy:notebook:v1:nb-current']);
+    expect(guards.pageErrors).toEqual([]);
+    const errors = await page.evaluate(() => (window as any).__sugarpy_errors || []);
+    expect(errors).toEqual([]);
   });
 });
