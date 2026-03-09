@@ -5,13 +5,19 @@ It intentionally excludes secrets (passwords, private keys, tokens, account data
 
 ## Host and paths
 - Host: `seggver` (Debian Linux)
-- App root: `/opt/sugarpy/SugarPy`
+- App root: `/opt/sugarpy`
+- Active release symlink: `/opt/sugarpy/current`
+- Release directory root: `/opt/sugarpy/releases`
+- Shared runtime state: `/opt/sugarpy/shared`
 - Runtime user: `sugarpy`
 
 ## Network layout
-- Jupyter server: `127.0.0.1:8888` with `base_url=/jupyter/` (not exposed directly)
-- Nginx: `:18081` (used because `:80` and `:8080` are occupied by other services)
-- Cloudflare Quick Tunnel: forwards external HTTPS traffic to `http://localhost:18081`
+- Jupyter server: `127.0.0.1:8888` with `base_url=/jupyter/`
+- Nginx: listens on `:80` and `:18081`
+- Cloudflare Tunnel: forwards external HTTPS traffic to `http://127.0.0.1:80`
+- Public demo URL: `https://sugarpy.tech`
+- Canonical host: `https://sugarpy.tech`
+- Secondary host: `https://www.sugarpy.tech` (redirects to canonical host)
 
 ## Services
 - `sugarpy-jupyter.service`
@@ -41,5 +47,6 @@ All three services are expected to be `active` in systemd.
 4. Deleting created kernels succeeds.
 
 ## Notes
-- Quick Tunnel URL is ephemeral and changes on restart.
+- `/jupyter/` is publicly reachable behind the same origin and currently depends on a shared token.
 - This setup is demo-oriented (shared token, no per-user account isolation).
+- Deploys should target `/opt/sugarpy/current` and build a fresh release under `/opt/sugarpy/releases/<sha>` before switching the symlink.
