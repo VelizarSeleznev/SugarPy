@@ -91,6 +91,7 @@ What the release command does:
 - Pushes the current work branch to GitHub.
 - Merges the branch into `master`.
 - Pushes `master`, which triggers the deployment workflow.
+- The deployment workflow now expects a self-hosted runner on `seggver` with label `sugarpy-prod`.
 
 ## Update code on the demo server
 When a change is intended to affect the live demo, do not stop at local edits.
@@ -104,6 +105,13 @@ DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_PORT=22 \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-remote.sh
+```
+
+Local deploy from a self-hosted runner or an interactive shell on `seggver`:
+```bash
+DEPLOY_PATH=/opt/sugarpy/current \
+DEPLOY_JUPYTER_TOKEN=sugarpy \
+./scripts/deploy-local.sh
 ```
 
 After deploy:
