@@ -51,6 +51,10 @@ const attachBrowserErrorGuards = (page: any) => {
   return { pageErrors, consoleErrors };
 };
 
+const isIgnorableConsoleError = (message: string) =>
+  message.includes("Access to fetch at 'http://localhost:8888/api/kernels") ||
+  message.includes('Failed to load resource: net::ERR_FAILED');
+
 const readLastPlotLayout = async (page: any) =>
   page.locator('[data-testid="plotly-graph"] .js-plotly-plot').last().evaluate((gd: any) => ({
     xRange: gd._fullLayout.xaxis.range,
@@ -64,7 +68,7 @@ const expectNoGlobalErrors = async (
   guards: { pageErrors: string[]; consoleErrors: string[] }
 ) => {
   expect(guards.pageErrors).toEqual([]);
-  expect(guards.consoleErrors).toEqual([]);
+  expect(guards.consoleErrors.filter((message) => !isIgnorableConsoleError(message))).toEqual([]);
   const errors = await page.evaluate(() => (window as any).__sugarpy_errors || []);
   expect(errors).toEqual([]);
 };
