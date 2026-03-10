@@ -1,6 +1,6 @@
 import React from 'react';
 
-const quickStartExamples = ['x^2 = 2', 'solve(x^2 = 2, x)', 'a := 5', 'sin(30)', 'plot(sin(x), xmin=-6, xmax=6)'];
+const quickStartExamples = ['x^2 = 2', 'solve(x^2 = 2, x)', 'a := 5', 'sin(30)', 'plot(sin(x), x = -6..6)'];
 
 const casPatterns = [
   'expand((x - 1)(x + 2))',
@@ -23,15 +23,14 @@ const geometryTaskSteps = [
 const plotStarter = [
   'plot(',
   '  sin(x),',
-  '  xmin=-6,',
-  '  xmax=6,',
+  '  x = -6..6,',
   "  title='Sine curve'",
   ')'
 ];
 
 const plotGeometry = [
   'circle := (x - 2)^2 + (y - 30)^2 = 60',
-  'plot(circle, xmin=-8, xmax=12)'
+  'plot(circle, x = -8..12, y = 20..40, equal_axes=True)'
 ];
 
 const plotGeometryBranches = [
@@ -40,8 +39,7 @@ const plotGeometryBranches = [
   '  -1 - sqrt(9 - (x - 3)^2),',
   '  1 + sqrt(4 - (x - 4)^2),',
   '  1 - sqrt(4 - (x - 4)^2),',
-  '  xmin=0,',
-  '  xmax=8,',
+  '  x = 0..8,',
   '  equal_axes=True,',
   "  title='Circle check'",
   ')'
@@ -55,8 +53,9 @@ const ipadPatterns = [
 ];
 
 const plotRules = [
-  '`xmin` / `xmax`: set the initial visible x-range.',
-  '`ymin` / `ymax`: optionally pin the initial visible y-range.',
+  '`x = a..b`: preferred Math-cell way to set the visible x-range.',
+  '`y = c..d`: optionally pin the visible y-range for implicit plots and geometry.',
+  '`xmin` / `xmax` / `ymin` / `ymax`: Python-friendly alternatives that still work.',
   '`title`: optional plot title. Leave it out for a cleaner graph.',
   '`equal_axes=True`: keep one unit on x equal to one unit on y. Use this for circles, geometry, and distance problems.',
   '`showlegend=True|False`: force the legend on or off.'
@@ -162,7 +161,7 @@ export function WikiPage() {
       <div className="wiki-grid">
         <WikiCard title="Practical plotting tips">
           <ul>
-            <li>Always set `xmin` and `xmax` so the first view is informative.</li>
+            <li>In Math cells, prefer `x = a..b` and `y = c..d` for the first view.</li>
             <li>For restricted domains like `sqrt(...)`, missing pieces usually mean the expression is outside its domain.</li>
             <li>Use a title only when it helps the reader; otherwise the cleaner default looks better.</li>
             <li>If the legend adds noise, set `showlegend=False`.</li>
@@ -183,7 +182,7 @@ export function WikiPage() {
           <li>If execution fails, check that Jupyter is running at `http://localhost:8888`.</li>
           <li>If Math parsing fails, check brackets and use a single top-level `=`.</li>
           <li>If the graph shape looks wrong for geometry, add `equal_axes=True`.</li>
-          <li>If the first view is unhelpful, tighten `xmin` / `xmax` and optionally `ymin` / `ymax`.</li>
+          <li>If the first view is unhelpful, tighten `x = a..b` and optionally `y = c..d`.</li>
         </ul>
       </WikiCard>
     </div>

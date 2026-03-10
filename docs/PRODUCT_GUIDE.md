@@ -90,6 +90,7 @@ Use it together with:
 - Clicking the card reopens the raw CAS editor.
 - Simple duplicate source previews are hidden to reduce clutter.
 - Multi-statement cells render a symbolic trace with per-line grouping.
+- Cell execution is guarded by a hard UI timeout; if the kernel stalls, SugarPy interrupts it and shows an explicit timeout error instead of leaving the cell spinning indefinitely.
 - A compact shortcut row supports:
   - `^2`
   - `sqrt(...)`
@@ -118,6 +119,7 @@ Use it together with:
 - Math cells can call `plot(...)` directly.
 
 ### Plot options
+- Preferred in Math cells: `x = a..b`, optionally `y = c..d`.
 - `xmin`, `xmax`: initial visible x-range.
 - `ymin`, `ymax`: optional initial y-range.
 - `equal_axes=True`: preserve 1:1 scale for geometry.

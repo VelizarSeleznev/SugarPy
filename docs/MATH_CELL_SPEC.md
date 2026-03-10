@@ -100,6 +100,8 @@ to see how intermediate values were produced without duplicating the full raw ed
 `plot(...)` can be called from Math cells. The Plotly graph renders under the Math cell output.
 
 Current plotting options:
+- In Math cells, the preferred range syntax is Maple-style:
+  `plot(expr, x = -6..6, y = -4..4, equal_axes=True)`.
 - `xmin`, `xmax` set the initial visible x-range.
 - `ymin`, `ymax` optionally pin the visible y-range.
 - `equal_axes=True` locks one unit on x to one unit on y, which is useful for circles and geometry.
@@ -107,6 +109,9 @@ Current plotting options:
 - `title='...'` adds an optional title. If omitted, SugarPy keeps the plot header visually quiet.
 - In Math cells, range sugar is also supported:
   `plot(circle1, circle2, x = -10..40, y = 0..60, equal_axes = True)`.
+- Compatibility forms are also accepted:
+  `plot(circle, (x, -8, 12), (y, 20, 40), equal_axes=True)` and
+  `plot(circle, x, -8, 12, y, 20, 40, equal_axes=True)`.
 
 Simple geometry workflow:
 - You can store a circle or other geometric relation as an equation assignment such as
