@@ -423,6 +423,40 @@ def test_math_plot_range_sugar_renders_two_implicit_circles():
     assert figure["layout"]["yaxis"]["scaleratio"] == 1
 
 
+def test_math_plot_flat_positional_ranges_render_implicit_curve():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        render_math_cell("squircle := x^4 + y^4 - 1")
+        plotted = render_math_cell(
+            "plot(squircle, x, -1.5, 1.5, y, -1.5, 1.5, equal_axes=True)"
+        )
+
+    assert plotted["ok"]
+    figure = plotted["plotly_figure"]
+    assert figure is not None
+    assert len(figure["data"]) >= 1
+    assert figure["layout"]["xaxis"]["range"] == [-1.5, 1.5]
+    assert figure["layout"]["yaxis"]["scaleanchor"] == "x"
+    assert figure["layout"]["yaxis"]["scaleratio"] == 1
+
+
+def test_plot_accepts_tuple_range_specs():
+    with patch("sugarpy.startup.display"):
+        circle = (x - 2) ** 2 + (y - 30) ** 2 - 60
+        figure = plot(circle, (x, -8, 12), (y, 20, 40), equal_axes=True)
+
+    layout = figure["layout"]
+    assert layout["xaxis"]["range"] == [-8.0, 12.0]
+    assert layout["yaxis"]["range"][0] <= 20.0
+    assert layout["yaxis"]["range"][1] >= 40.0
+    assert layout["yaxis"]["scaleanchor"] == "x"
+    assert layout["yaxis"]["scaleratio"] == 1
+
+
 def test_plot_accepts_circle_expression_stored_from_equation_assignment():
     with patch("sugarpy.startup.display"):
         circle = (x - 2) ** 2 + (y - 30) ** 2 - 60

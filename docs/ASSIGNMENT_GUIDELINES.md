@@ -64,8 +64,7 @@ This is primarily intended for long calls such as `plot(...)`.
 Example:
 - `plot(`
 - `  sin(x),`
-- `  xmin=-2,`
-- `  xmax=2,`
+- `  x = -2..2,`
 - `  title='demo'`
 - `)`
 
@@ -73,7 +72,7 @@ Example:
 When a task benefits from a visual check:
 - include a plot in the “numeric + plot” Math cell,
 - keep the plotted expressions close to the symbolic objects defined earlier,
-- set `xmin`/`xmax` (and optionally `title`) so the default view is informative.
+- in Math cells, prefer `x = a..b` (and optionally `y = c..d`, `title`) so the default view is informative.
 
 Note: for functions with restricted domain (e.g. `sqrt(...)`), values outside the domain may
 produce `NaN` points. This is expected; the plot is still a valid visual check on the domain.

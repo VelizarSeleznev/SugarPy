@@ -327,6 +327,43 @@ def _parse_plot_option_arg(arg: str) -> list[str] | None:
     return None
 
 
+def _parse_plot_tuple_range_arg(arg: str) -> list[str] | None:
+    stripped = arg.strip()
+    if not stripped or stripped[0] not in "([{" or stripped[-1] not in ")]}":
+        return None
+    inner = _strip_enclosing_group(stripped)
+    parts = _split_top_level_commas(inner)
+    if len(parts) != 3:
+        return None
+    target = parts[0].strip()
+    range_start = parts[1].strip()
+    range_end = parts[2].strip()
+    if not _ASSIGN_TARGET_RE.match(target) or not range_start or not range_end:
+        return None
+    if target == "x":
+        return [f"xmin={range_start}", f"xmax={range_end}"]
+    if target == "y":
+        return [f"ymin={range_start}", f"ymax={range_end}"]
+    return [f"var={target}", f"start={range_start}", f"end={range_end}"]
+
+
+def _parse_plot_positional_range_args(args: list[str], idx: int) -> tuple[list[str], int] | None:
+    if idx + 2 >= len(args):
+        return None
+    target = args[idx].strip()
+    if target not in {"x", "y"}:
+        return None
+    range_start = args[idx + 1].strip()
+    range_end = args[idx + 2].strip()
+    if not range_start or not range_end:
+        return None
+    if _parse_plot_option_arg(range_start) is not None or _parse_plot_option_arg(range_end) is not None:
+        return None
+    if target == "x":
+        return (["xmin=" + range_start, "xmax=" + range_end], idx + 3)
+    return (["ymin=" + range_start, "ymax=" + range_end], idx + 3)
+
+
 def _rewrite_plot_call_source(source: str) -> str:
     trimmed = source.strip()
     prefix = "plot("
@@ -340,14 +377,28 @@ def _rewrite_plot_call_source(source: str) -> str:
     inner = trimmed[len(prefix):close_idx]
     args = _split_top_level_commas(inner)
     rewritten_args: list[str] = []
-    for arg in args:
-        stripped_arg = arg.strip()
+    idx = 0
+    while idx < len(args):
+        stripped_arg = args[idx].strip()
         option_args = _parse_plot_option_arg(stripped_arg)
         if option_args is not None:
             rewritten_args.extend(option_args)
+            idx += 1
+            continue
+        tuple_option_args = _parse_plot_tuple_range_arg(stripped_arg)
+        if tuple_option_args is not None:
+            rewritten_args.extend(tuple_option_args)
+            idx += 1
+            continue
+        positional_range = _parse_plot_positional_range_args(args, idx)
+        if positional_range is not None:
+            range_args, next_idx = positional_range
+            rewritten_args.extend(range_args)
+            idx = next_idx
             continue
         rewritten_arg = _rewrite_plot_call_source(stripped_arg) if stripped_arg.startswith("plot(") else _rewrite_inline_equations(stripped_arg, nested=True)
         rewritten_args.append(rewritten_arg)
+        idx += 1
     return f"plot({', '.join(rewritten_args)})"
 
 

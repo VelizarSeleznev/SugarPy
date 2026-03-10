@@ -15,6 +15,41 @@ x, y, z, t = symbols("x y z t")
 init_printing()
 
 
+def _plot_range_kwargs_from_symbol(name: str, start: object, end: object) -> dict[str, float | Symbol]:
+    if name == "x":
+        return {"xmin": float(start), "xmax": float(end)}
+    if name == "y":
+        return {"ymin": float(start), "ymax": float(end)}
+    return {"var": Symbol(name), "start": float(start), "end": float(end)}
+
+
+def _extract_positional_plot_options(expressions: list[object]) -> tuple[list[object], dict[str, float | Symbol]]:
+    filtered: list[object] = []
+    extracted: dict[str, float | Symbol] = {}
+    idx = 0
+    while idx < len(expressions):
+        expr = expressions[idx]
+        if isinstance(expr, (tuple, list, sp.Tuple)) and len(expr) == 3:
+            target, start, end = expr
+            if isinstance(target, Symbol):
+                extracted.update(_plot_range_kwargs_from_symbol(target.name, start, end))
+                idx += 1
+                continue
+        if isinstance(expr, Symbol) and idx + 2 < len(expressions):
+            start = expressions[idx + 1]
+            end = expressions[idx + 2]
+            if expr.name in {"x", "y"}:
+                try:
+                    extracted.update(_plot_range_kwargs_from_symbol(expr.name, start, end))
+                    idx += 3
+                    continue
+                except Exception:
+                    pass
+        filtered.append(expr)
+        idx += 1
+    return filtered, extracted
+
+
 def _pick_plot_symbol(expressions: list[object], fallback: Symbol = x) -> Symbol:
     for expr in expressions:
         free = getattr(expr, "free_symbols", None)
@@ -162,6 +197,10 @@ def plot(*args, **kwargs):
         expressions = list(args[1:])
     else:
         expressions = list(args)
+
+    expressions, positional_options = _extract_positional_plot_options(expressions)
+    for key, value in positional_options.items():
+        kwargs.setdefault(key, value)
 
     if variable is None:
         variable = _pick_plot_symbol(expressions)

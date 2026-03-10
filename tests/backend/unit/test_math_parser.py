@@ -127,3 +127,51 @@ def test_plot_range_sugar_and_kwargs_are_passed_as_plot_kwargs():
         "ymax": 60,
         "equal_axes": True,
     }
+
+
+def test_plot_tuple_range_args_are_rewritten_to_plot_kwargs():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(circle, (x, -8, 12), (y, -4, 20), equal_axes=True)",
+        mode="deg",
+        user_ns={"plot": plot, "circle": 1},
+    )
+
+    assert captured["args"] == (1,)
+    assert captured["kwargs"] == {
+        "xmin": -8,
+        "xmax": 12,
+        "ymin": -4,
+        "ymax": 20,
+        "equal_axes": True,
+    }
+
+
+def test_plot_flat_positional_range_args_are_rewritten_to_plot_kwargs():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(squircle, x, -1.5, 1.5, y, -1.5, 1.5, equal_axes=True)",
+        mode="deg",
+        user_ns={"plot": plot, "squircle": 1},
+    )
+
+    assert captured["args"] == (1,)
+    assert captured["kwargs"] == {
+        "xmin": -1.5,
+        "xmax": 1.5,
+        "ymin": -1.5,
+        "ymax": 1.5,
+        "equal_axes": True,
+    }

@@ -250,6 +250,7 @@ const COMPACT_REFERENCE = [
   '- Notebook defaults include trig mode (deg/rad) and render mode (exact/decimal).',
   '- Each Math cell may override trig/render mode.',
   '- Math plotting uses plot(...).',
+  '- In Math cells, prefer Maple-style plot ranges: x = a..b and y = c..d.',
   '- Safe plotting defaults for geometry: prefer implicit equations or directly plottable expressions.',
   '- For circles and geometry, prefer circle := equation and then plot(circle, ..., equal_axes=True).',
   '- Do not rely on trig parameterizations unless the user explicitly asks for them.',
@@ -281,9 +282,11 @@ const REFERENCE_SECTIONS = {
   plotting: [
     'Plotting reference:',
     '- plot(...) works in Code and Math cells.',
+    '- In Math cells, prefer Maple-style ranges: plot(expr, x = a..b, y = c..d, ...).',
+    '- Also supported: xmin/xmax/ymin/ymax kwargs, and compatibility range tuples like (x, a, b).',
     '- Supported options include xmin, xmax, ymin, ymax, equal_axes, showlegend, title.',
     '- Geometry-safe pattern: store an implicit equation assignment, then call plot(name, ...).',
-    '- Example: circle := (x-2)^2 + (y+10)^2 = 25; plot(circle, xmin=-5, xmax=9, equal_axes=True).',
+    '- Example: circle := (x-2)^2 + (y+10)^2 = 25; plot(circle, x = -5..9, y = 3..17, equal_axes=True).',
     '- Do not assume parametric plotting support from plot(x(t), y(t), t=...).',
     '- Trig-based plotting in Math cells depends on the Deg/Rad mode.',
     '- If a non-trig form exists, prefer it.'
@@ -394,7 +397,7 @@ const buildDirectCircleSolvePlan = (request: string): AssistantPlan | null => {
           'c2 := solutions[1]',
           'circle1 := (x - c1[0])^2 + (y - c1[1])^2 = r^2',
           'circle2 := (x - c2[0])^2 + (y - c2[1])^2 = r^2',
-          `plot(circle1, circle2, (x, ${xmin}, ${xmax}), (y, ${ymin}, ${ymax}), equal_axes=True)`
+          `plot(circle1, circle2, x = ${xmin}..${xmax}, y = ${ymin}..${ymax}, equal_axes=True)`
         ].join('\n'),
         reason: 'Build both circle equations from the solved centers and plot them.'
       }

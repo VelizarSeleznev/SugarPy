@@ -241,6 +241,14 @@ const isDeadKernelError = (error: unknown) => {
   return message.toLowerCase().includes('kernel is dead');
 };
 
+const CELL_EXECUTION_TIMEOUT_MS = 20_000;
+
+const isExecutionTimeoutError = (error: unknown) => {
+  if (!error) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('Cell execution timed out after');
+};
+
 const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
   let timer: number | null = null;
   try {
@@ -252,6 +260,22 @@ const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): 
     if (timer) {
       window.clearTimeout(timer);
     }
+  }
+};
+
+const awaitFutureDoneWithTimeout = async (future: any, kernel: any) => {
+  try {
+    return await withTimeout(future.done, CELL_EXECUTION_TIMEOUT_MS, 'Cell execution');
+  } catch (error) {
+    if (!isExecutionTimeoutError(error)) {
+      throw error;
+    }
+    try {
+      await kernel?.interrupt();
+    } catch {
+      // Keep the timeout visible even if kernel interruption fails.
+    }
+    throw new Error(`Cell execution timed out after ${CELL_EXECUTION_TIMEOUT_MS}ms. The kernel was interrupted.`);
   }
 };
 
@@ -993,22 +1017,29 @@ function App() {
     };
     let reply: any = null;
     try {
-      reply = await future.done;
+      reply = await awaitFutureDoneWithTimeout(future, activeKernel);
     } catch (error) {
       if (isDeadKernelError(error)) {
         setStatus('error');
         setErrorMsg('Kernel is dead. Reconnect to continue.');
       }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
         throw error;
       }
+      const evalue = isExecutionTimeoutError(error)
+        ? String(error instanceof Error ? error.message : error)
+        : 'Kernel execution was canceled.';
       if (showOutput) {
         setCells((prev) =>
           prev.map((c) =>
             c.id === cellId
               ? {
                   ...c,
-                  output: { type: 'error', ename: 'ExecutionCanceled', evalue: 'Kernel execution was canceled.' },
+                  output: {
+                    type: 'error',
+                    ename: isExecutionTimeoutError(error) ? 'ExecutionTimeout' : 'ExecutionCanceled',
+                    evalue
+                  },
                   isRunning: false
                 }
               : c
@@ -1169,13 +1200,13 @@ function App() {
       }
     };
     try {
-      await future.done;
+      await awaitFutureDoneWithTimeout(future, activeKernel);
     } catch (error) {
       if (isDeadKernelError(error)) {
         setStatus('error');
         setErrorMsg('Kernel is dead. Reconnect to continue.');
       }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
         throw error;
       }
       setCells((prev) =>
@@ -1187,7 +1218,9 @@ function App() {
                 mathOutput: {
                   kind: 'expression',
                   steps: [],
-                  error: 'Kernel execution was canceled.',
+                  error: isExecutionTimeoutError(error)
+                    ? String(error instanceof Error ? error.message : error)
+                    : 'Kernel execution was canceled.',
                   mode,
                   warnings: []
                 }
@@ -1255,16 +1288,22 @@ function App() {
     };
 
     try {
-      await future.done;
+      await awaitFutureDoneWithTimeout(future, activeKernel);
     } catch (error) {
       if (isDeadKernelError(error)) {
         setStatus('error');
         setErrorMsg('Kernel is dead. Reconnect to continue.');
       }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error)) {
+      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
         throw error;
       }
-      parsed = { ok: false, error: 'Kernel execution was canceled.', species: [] };
+      parsed = {
+        ok: false,
+        error: isExecutionTimeoutError(error)
+          ? String(error instanceof Error ? error.message : error)
+          : 'Kernel execution was canceled.',
+        species: []
+      };
     }
     if (!parsed) {
       parsed = { ok: false, error: 'No structured output received.', species: [] };
