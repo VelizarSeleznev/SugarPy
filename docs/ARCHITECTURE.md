@@ -6,8 +6,12 @@
 - Python domain logic lives in `src/sugarpy/`.
 - Assistant orchestration for model calls and structured notebook edits lives in `web/src/ui/utils/assistant.ts`.
   - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
+- Shared assistant keys can be held server-side by the Jupyter extension in `src/sugarpy/server_extension.py`.
+  - The frontend only learns provider availability and default model, not the server key value.
+  - OpenAI streaming and Gemini requests can be proxied through Jupyter under `/sugarpy/assistant/*`.
 - Assistant sandbox execution for isolated self-checks lives in `web/src/ui/utils/assistantSandbox.ts`.
 - The frontend talks to the local Jupyter server for execution and notebook behavior.
+- The assistant can also use the Jupyter server as a same-origin proxy for model calls when shared server keys are configured.
 - Frontend has two page entrypoints:
   - `/` for the notebook app (kernel-aware runtime).
   - `/wiki` for the standalone documentation page (no kernel dependency).

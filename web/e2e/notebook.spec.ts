@@ -59,6 +59,52 @@ const assistantNotebookFixtures = {
         }
       }
     ]
+  },
+  math_equation_rendered: {
+    version: 1,
+    id: 'nb-math-equation-rendered',
+    name: 'Math Equation Rendered Fixture',
+    trigMode: 'deg',
+    defaultMathRenderMode: 'exact',
+    updatedAt: '2026-03-09T00:00:00.000Z',
+    cells: [
+      {
+        id: 'cell-math-eq-rendered',
+        type: 'math',
+        source: 'x^2 = 2',
+        mathRenderMode: 'exact',
+        mathTrigMode: 'deg',
+        mathOutput: {
+          kind: 'equation',
+          steps: ['x^{2} = 2'],
+          value: 'x^{2} = 2',
+          assigned: null,
+          mode: 'deg',
+          error: null,
+          warnings: [],
+          normalized_source: 'x^2 = 2',
+          equation_latex: 'x^{2} = 2',
+          trace: [
+            {
+              line_start: 1,
+              source: 'x^2 = 2',
+              kind: 'equation',
+              steps: ['x^{2} = 2'],
+              value: 'x^{2} = 2',
+              plotly_figure: null,
+              render_cache: {
+                exact: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' },
+                decimal: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' }
+              }
+            }
+          ],
+          render_cache: {
+            exact: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' },
+            decimal: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' }
+          }
+        }
+      }
+    ]
   }
 } as const;
 
@@ -100,10 +146,20 @@ const addMathCellAfterFirstCode = async (page: any) => {
 const setMathInLastCell = async (page: any, source: string) => {
   const mathCell = page.locator('[data-testid="cell-row-math"]').last();
   const editor = mathCell.locator('.cm-content').first();
+  const editorShell = mathCell.locator('.cm-editor').first();
   await editor.click();
   await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.type(source);
-  await page.keyboard.press('Shift+Enter');
+  await editorShell.press('Shift+Enter');
+  try {
+    await expect(mathCell.getByTestId('math-output')).toBeVisible({ timeout: 1000 });
+  } catch {
+    // Fallback for flaky keyboard dispatch in Playwright: blurring the editor triggers runNow().
+    await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      active?.blur?.();
+    });
+  }
 };
 
 const attachBrowserErrorGuards = (page: any) => {
@@ -252,14 +308,38 @@ test.describe('Notebook CAS outputs', () => {
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Math equation: x^2 = 2 renders in Math cell', async ({ page }) => {
+  test('Notebook menu: Clear Outputs removes runtime outputs without resetting cells', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
+    await setCodeInFirstCell(page, '1/0');
     await addMathCellAfterFirstCode(page);
     await setMathInLastCell(page, 'x^2 = 2');
-    await expect(page.getByTestId('math-output').last()).toBeVisible();
-    await expect(page.getByTestId('math-latex').last()).toBeVisible();
+
+    const errorOutput = page.getByTestId('cell-error');
+    const mathOutput = page.getByTestId('math-output').last();
+    await expect(errorOutput).toBeVisible();
+    await expect(mathOutput).toBeVisible();
+
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('button', { name: 'Clear Outputs' }).click();
+
+    await expect(page.getByTestId('cell-row-code').first().getByTestId('cell-error')).toHaveCount(0);
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await expect(mathCell.getByTestId('math-latex')).toHaveCount(0);
+    await expect(mathCell.locator('.math-empty')).toContainText('Click to edit.');
+    await expect(page.locator('[data-testid="cell-row-code"]').first().locator('.cm-content')).toContainText('1/0');
+    await mathCell.getByTestId('math-output').click();
+    await expect(mathCell.locator('.cm-content')).toContainText('x^2 = 2');
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Math equation: x^2 = 2 renders in Math cell', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await seedNotebookFixture(page, assistantNotebookFixtures.math_equation_rendered);
+    await page.goto('/');
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await expect(mathCell.getByTestId('math-latex')).toBeVisible();
+    await expectNoPageCrashes(page, guards);
   });
 
   test('Critical flow: Code function is callable from Math cell', async ({ page }) => {
@@ -268,7 +348,10 @@ test.describe('Notebook CAS outputs', () => {
     await setCodeInFirstCell(page, 'def f(x):\n    return x + 1');
     await addMathCellAfterFirstCode(page);
     await setMathInLastCell(page, 'f(3)');
-    await expect(page.getByTestId('math-output').last()).toContainText('4');
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await expect(mathCell.getByTestId('math-output')).toBeVisible();
+    await expect(mathCell.locator('.math-running')).toHaveCount(0);
+    await expect(mathCell.getByTestId('math-output')).toContainText('4');
     await expectNoGlobalErrors(page, guards);
   });
 

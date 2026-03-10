@@ -122,6 +122,17 @@ export type AssistantSandboxRunner = (
   onActivity?: (item: AssistantActivity) => void
 ) => Promise<AssistantSandboxResult>;
 
+export type AssistantTransport =
+  | {
+      mode: 'direct';
+      apiKey: string;
+    }
+  | {
+      mode: 'server-proxy';
+      proxyBaseUrl: string;
+      token?: string;
+    };
+
 export const DEFAULT_ASSISTANT_MODEL = 'gpt-5.1-codex-mini';
 
 export const ASSISTANT_MODEL_PRESETS = [
@@ -993,8 +1004,16 @@ const buildOpenAIReasoningEffort = (model: string, thinkingLevel: AssistantThink
   return normalizedLevel;
 };
 
+const buildProxyUrl = (transport: Extract<AssistantTransport, { mode: 'server-proxy' }>, path: string) => {
+  const url = new URL(path.replace(/^\//, ''), transport.proxyBaseUrl.replace(/\/?$/, '/'));
+  if (transport.token) {
+    url.searchParams.set('token', transport.token);
+  }
+  return url.toString();
+};
+
 const callGemini = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   body: Record<string, unknown>,
   retries = 3,
@@ -1035,7 +1054,11 @@ const callGemini = async (
         ...baseGenerationConfig,
         ...(buildThinkingConfig(model, thinkingLevel) ?? {})
       };
-      const response = await fetch(`${API_ROOT}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      const response = await fetch(
+        transport.mode === 'server-proxy'
+          ? buildProxyUrl(transport, `/gemini/models/${encodeURIComponent(model)}:generateContent`)
+          : `${API_ROOT}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(transport.apiKey)}`,
+        {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -1146,7 +1169,7 @@ const callGemini = async (
 };
 
 const callOpenAIResponses = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   body: Record<string, unknown>,
   retries = 3,
@@ -1178,23 +1201,50 @@ const callOpenAIResponses = async (
       onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
       inactivityTimeout.touch();
       const effort = buildOpenAIReasoningEffort(model, thinkingLevel);
-      const response = await fetch('https://api.openai.com/v1/responses', {
+      const requestPayload = {
+        ...body,
+        model,
+        stream: transport.mode === 'server-proxy' ? false : true,
+        ...(effort ? { reasoning: { effort } } : {})
+      };
+      const response = await fetch(
+        transport.mode === 'server-proxy'
+          ? buildProxyUrl(transport, '/openai/responses')
+          : 'https://api.openai.com/v1/responses',
+        {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
+          ...(transport.mode === 'direct' ? { Authorization: `Bearer ${transport.apiKey}` } : {})
         },
-        body: JSON.stringify({
-          ...body,
-          model,
-          stream: true,
-          ...(effort ? { reasoning: { effort } } : {})
-        }),
+        body: JSON.stringify(requestPayload),
         signal: requestController.signal
       });
       lastActivity = 'response_headers';
       inactivityTimeout.touch();
       onNetworkEvent?.({ phase: 'response', attempt: attempt + 1, stage, status: response.status });
+      if (transport.mode === 'server-proxy') {
+        const parsed = (await response.json()) as OpenAIResponsesResponse;
+        if (!response.ok) {
+          const message = parsed?.error?.message || `OpenAI proxy error ${response.status}`;
+          onNetworkEvent?.({
+            phase: 'error',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: message
+          });
+          throw new Error(`OpenAI API error ${response.status}: ${message}`);
+        }
+        onResponseTrace?.({
+          attempt: attempt + 1,
+          provider: 'openai',
+          stage,
+          text: extractOpenAIText(parsed),
+          toolCalls: parseOpenAIToolCalls(parsed).map((toolCall) => ({ name: toolCall.name, args: toolCall.args }))
+        });
+        return parsed;
+      }
       const contentType = response.headers.get('content-type') || '';
       const streamToolCalls = new Map<number, { id?: string; call_id?: string; name?: string; arguments: string }>();
       const readStreamResponse = async (): Promise<OpenAIResponsesResponse> => {
@@ -1439,7 +1489,7 @@ const buildInspectionPrompt = (
 };
 
 const runGeminiToolLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   request: string,
   scope: AssistantScope,
@@ -1472,7 +1522,7 @@ const runGeminiToolLoop = async (
       label: 'Waiting for model',
       detail: `Inspection round ${round + 1}`
     });
-    const response = await callGemini(apiKey, model, {
+    const response = await callGemini(transport, model, {
       systemInstruction: {
         parts: [
           {
@@ -1574,7 +1624,7 @@ const runGeminiToolLoop = async (
 };
 
 const runOpenAIToolLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   request: string,
   scope: AssistantScope,
@@ -1610,7 +1660,7 @@ const runOpenAIToolLoop = async (
       detail: `Inspection round ${round + 1}`
     });
     const response = await callOpenAIResponses(
-      apiKey,
+      transport,
       model,
       {
         instructions,
@@ -1696,7 +1746,7 @@ const runOpenAIToolLoop = async (
 };
 
 const runToolLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   request: string,
   scope: AssistantScope,
@@ -1725,7 +1775,7 @@ const runToolLoop = async (
   }
   return detectAssistantProvider(model) === 'openai'
     ? runOpenAIToolLoop(
-        apiKey,
+        transport,
         model,
         request,
         scope,
@@ -1738,7 +1788,7 @@ const runToolLoop = async (
         onResponseTrace
       )
     : runGeminiToolLoop(
-        apiKey,
+        transport,
         model,
         request,
         scope,
@@ -1793,7 +1843,7 @@ const VALIDATION_REQUIRED_REMINDER = [
 ].join('\n');
 
 const runGeminiValidationLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   request: string,
   context: NotebookAssistantContext,
@@ -1822,7 +1872,7 @@ const runGeminiValidationLoop = async (
       detail: `Validation round ${round + 1}`
     });
     const response = await callGemini(
-      apiKey,
+      transport,
       model,
       {
         systemInstruction: {
@@ -1890,7 +1940,7 @@ const runGeminiValidationLoop = async (
 };
 
 const runOpenAIValidationLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   request: string,
   context: NotebookAssistantContext,
@@ -1915,7 +1965,7 @@ const runOpenAIValidationLoop = async (
       detail: `Validation round ${round + 1}`
     });
     const response = await callOpenAIResponses(
-      apiKey,
+      transport,
       model,
       {
         instructions: validationSystemPrompt,
@@ -1977,7 +2027,7 @@ const runOpenAIValidationLoop = async (
 };
 
 const runOpenAIPlanningLoop = async (
-  apiKey: string,
+  transport: AssistantTransport,
   model: string,
   planningSystemPrompt: string,
   planningPayload: string,
@@ -1993,7 +2043,7 @@ const runOpenAIPlanningLoop = async (
 
   for (let round = 0; round < MAX_PLANNING_ROUNDS; round += 1) {
     const response = await callOpenAIResponses(
-      apiKey,
+      transport,
       model,
       {
         instructions: planningSystemPrompt,
@@ -2160,7 +2210,7 @@ const normalizePlan = (raw: any): AssistantPlan => {
 };
 
 export async function planNotebookChanges(params: {
-  apiKey: string;
+  transport: AssistantTransport;
   model: string;
   request: string;
   scope: AssistantScope;
@@ -2176,7 +2226,7 @@ export async function planNotebookChanges(params: {
   onSandboxExecution?: (trace: AssistantSandboxExecutionTrace) => void;
 }) {
   const {
-    apiKey,
+    transport,
     model,
     request,
     scope,
@@ -2193,7 +2243,7 @@ export async function planNotebookChanges(params: {
   } = params;
   onActivity?.({ kind: 'phase', label: 'Preparing context' });
   const inspection = await runToolLoop(
-    apiKey,
+    transport,
     model,
     request,
     scope,
@@ -2314,7 +2364,7 @@ export async function planNotebookChanges(params: {
   const runPlanning = async (systemPrompt: string) => {
     if (provider === 'openai') {
       return runOpenAIPlanningLoop(
-        apiKey,
+        transport,
         model,
         systemPrompt,
         planningPayload,
@@ -2327,7 +2377,7 @@ export async function planNotebookChanges(params: {
     const rawText = stripCodeFence(
       extractText(
         await callGemini(
-          apiKey,
+          transport,
           model,
           {
             systemInstruction: {
@@ -2412,7 +2462,7 @@ export async function planNotebookChanges(params: {
     plan =
       provider === 'openai'
         ? await runOpenAIValidationLoop(
-            apiKey,
+            transport,
             model,
             request,
             context,
@@ -2427,7 +2477,7 @@ export async function planNotebookChanges(params: {
             onSandboxExecution
           )
         : await runGeminiValidationLoop(
-            apiKey,
+            transport,
             model,
             request,
             context,

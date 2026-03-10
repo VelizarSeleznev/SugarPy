@@ -138,6 +138,45 @@ DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-local.sh
 ```
 
+## Shared assistant keys on the demo host
+To let the deployed site use the assistant without asking each browser for its own key,
+store the shared provider keys in the Jupyter service environment instead of in
+`notebooks/`.
+
+Recommended file:
+```bash
+sudo mkdir -p /etc/sugarpy
+sudo chmod 700 /etc/sugarpy
+sudo tee /etc/sugarpy/assistant.env >/dev/null <<'EOF'
+SUGARPY_ASSISTANT_OPENAI_API_KEY=your-openai-key
+SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
+EOF
+sudo chmod 600 /etc/sugarpy/assistant.env
+```
+
+The bundled `deploy/systemd/sugarpy-jupyter.service` reads that file with:
+- `EnvironmentFile=-/etc/sugarpy/assistant.env`
+
+If you cannot edit the systemd unit yet, SugarPy also supports a user-owned fallback file:
+```bash
+mkdir -p ~/.config/sugarpy
+chmod 700 ~/.config/sugarpy
+cat > ~/.config/sugarpy/assistant.env <<'EOF'
+SUGARPY_ASSISTANT_OPENAI_API_KEY=your-openai-key
+SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
+EOF
+chmod 600 ~/.config/sugarpy/assistant.env
+```
+
+After updating the env file:
+```bash
+sudo systemctl restart sugarpy-jupyter.service
+```
+
+SugarPy will then expose only provider availability and default model to the browser,
+while the actual OpenAI/Gemini key stays on the server and model calls are proxied
+through Jupyter under `/jupyter/sugarpy/assistant/*`.
+
 ## Notes and limitations
 - This is a demo configuration (shared token, no per-user account isolation).
 - `/jupyter/` is publicly reachable through the same origin and currently relies on

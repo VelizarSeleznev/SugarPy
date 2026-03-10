@@ -15,6 +15,7 @@ import {
   AssistantNetworkEvent,
   AssistantResponseTrace,
   AssistantSandboxExecutionTrace,
+  AssistantTransport,
   DEFAULT_ASSISTANT_MODEL,
   detectAssistantProvider,
   normalizeThinkingLevel,
@@ -124,6 +125,15 @@ const asText = (value: unknown) => {
   return String(value);
 };
 
+const clearRuntimeStateFromCell = (cell: CellModel): CellModel => ({
+  ...cell,
+  output: undefined,
+  mathOutput: undefined,
+  stoichOutput: undefined,
+  execCount: undefined,
+  isRunning: false
+});
+
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
 const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
@@ -147,6 +157,10 @@ type AssistantSnapshot = {
 type AssistantRuntimeConfig = {
   apiKey?: string;
   model?: string;
+  providers?: {
+    openai: boolean;
+    gemini: boolean;
+  };
 };
 
 const matchesAssistantProvider = (apiKey: string, model: string) => {
@@ -297,6 +311,11 @@ const readOptionalStorageItem = (key: string) => {
   }
 };
 
+const buildAssistantProxyBaseUrl = (rawServerUrl: string) => {
+  const { baseUrl } = resolveServerConfig(rawServerUrl);
+  return new URL('sugarpy/assistant/', baseUrl).toString();
+};
+
 function App() {
   const defaultServerUrl = resolveDefaultServerUrl();
   const [serverUrl, setServerUrl] = useState(defaultServerUrl);
@@ -331,6 +350,10 @@ function App() {
   const [assistantDefaultApiKey, setAssistantDefaultApiKey] = useState(
     import.meta.env.VITE_ASSISTANT_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || ''
   );
+  const [assistantServerProviders, setAssistantServerProviders] = useState<{ openai: boolean; gemini: boolean }>({
+    openai: false,
+    gemini: false
+  });
   const [assistantModel, setAssistantModel] = useState(
     import.meta.env.VITE_ASSISTANT_MODEL || import.meta.env.VITE_OPENAI_MODEL || import.meta.env.VITE_GEMINI_MODEL || DEFAULT_ASSISTANT_MODEL
   );
@@ -552,7 +575,39 @@ function App() {
     return contentsRef.current;
   };
 
+  const loadAssistantProxyConfig = async (): Promise<AssistantRuntimeConfig | null> => {
+    try {
+      const response = await fetch(
+        `${buildAssistantProxyBaseUrl(serverUrl)}config?token=${encodeURIComponent(token)}`,
+        {
+          method: 'GET'
+        }
+      );
+      if (!response.ok) return null;
+      const parsed = await response.json();
+      if (!parsed || typeof parsed !== 'object') return null;
+      const runtimeModel = typeof parsed.model === 'string' ? parsed.model.trim() : '';
+      const providers =
+        parsed.providers && typeof parsed.providers === 'object'
+          ? {
+              openai: Boolean((parsed.providers as Record<string, unknown>).openai),
+              gemini: Boolean((parsed.providers as Record<string, unknown>).gemini)
+            }
+          : { openai: false, gemini: false };
+      return {
+        model: runtimeModel || undefined,
+        providers
+      };
+    } catch (_err) {
+      return null;
+    }
+  };
+
   const loadAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
+    const proxyConfig = await loadAssistantProxyConfig();
+    if (proxyConfig?.providers?.openai || proxyConfig?.providers?.gemini) {
+      return proxyConfig;
+    }
     const contents = ensureContents();
     try {
       const directory = await contents.get('notebooks', { content: true });
@@ -575,7 +630,11 @@ function App() {
             : '';
       return {
         apiKey: apiKey || undefined,
-        model: runtimeModel || undefined
+        model: runtimeModel || undefined,
+        providers: {
+          openai: Boolean(apiKey && apiKey.startsWith('sk-')),
+          gemini: Boolean(apiKey && apiKey.startsWith('AIza'))
+        }
       };
     } catch (_err) {
       return null;
@@ -719,6 +778,8 @@ function App() {
 
   useEffect(() => {
     contentsRef.current = null;
+    assistantRuntimeConfigAttemptedRef.current = false;
+    setAssistantServerProviders({ openai: false, gemini: false });
   }, [serverUrl, token]);
 
   useEffect(() => {
@@ -1618,9 +1679,18 @@ function App() {
 
   const hydrateAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
     if (assistantRuntimeConfigAttemptedRef.current) {
-      return assistantDefaultApiKey.trim()
-        ? { apiKey: assistantDefaultApiKey.trim(), model: assistantModel.trim() || undefined }
-        : null;
+      if (
+        assistantDefaultApiKey.trim() ||
+        assistantServerProviders.openai ||
+        assistantServerProviders.gemini
+      ) {
+        return {
+          apiKey: assistantDefaultApiKey.trim() || undefined,
+          model: assistantModel.trim() || undefined,
+          providers: assistantServerProviders
+        };
+      }
+      return null;
     }
     const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
     const storedModel =
@@ -1644,6 +1714,9 @@ function App() {
     if (runtimeConfig.apiKey) {
       setAssistantDefaultApiKey(runtimeConfig.apiKey);
     }
+    if (runtimeConfig.providers) {
+      setAssistantServerProviders(runtimeConfig.providers);
+    }
     if (!storedModel && !envModel && runtimeConfig.model) {
       setAssistantModel(runtimeConfig.model);
     }
@@ -1665,19 +1738,25 @@ function App() {
     }
     const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
     const defaultApiKey = (runtimeConfig?.apiKey?.trim() || assistantDefaultApiKey.trim()).trim();
+    const effectiveProviders = runtimeConfig?.providers ?? assistantServerProviders;
     const effectiveApiKey = matchesAssistantProvider(overrideApiKey, effectiveModel)
       ? overrideApiKey
       : matchesAssistantProvider(defaultApiKey, effectiveModel)
         ? defaultApiKey
         : '';
+    const provider = detectAssistantProvider(effectiveModel);
+    const useServerProxy = !effectiveApiKey && Boolean(effectiveProviders[provider]);
     if (!effectiveApiKey) {
-      const provider = detectAssistantProvider(effectiveModel);
-      setAssistantError(
-        provider === 'openai'
-          ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
-          : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
-      );
-      return;
+      if (useServerProxy) {
+        // Continue with server-side proxy transport.
+      } else {
+        setAssistantError(
+          provider === 'openai'
+            ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
+            : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
+        );
+        return;
+      }
     }
     if (!assistantDraft.trim()) {
       setAssistantError('Write a request for the assistant first.');
@@ -1761,9 +1840,16 @@ function App() {
     setAssistantDraft('');
     const controller = new AbortController();
     assistantAbortRef.current = controller;
+    const assistantTransport: AssistantTransport = effectiveApiKey
+      ? { mode: 'direct', apiKey: effectiveApiKey }
+      : {
+          mode: 'server-proxy',
+          proxyBaseUrl: buildAssistantProxyBaseUrl(serverUrl),
+          token
+        };
     try {
       const plan = await planNotebookChanges({
-        apiKey: effectiveApiKey,
+        transport: assistantTransport,
         model: effectiveModel,
         request: prompt,
         scope: ASSISTANT_SCOPE,
@@ -2200,6 +2286,11 @@ function App() {
     fileInputRef.current?.click();
   };
 
+  const handleClearOutputs = () => {
+    setCells((prev) => prev.map(clearRuntimeStateFromCell));
+    setHeaderMenuOpen(false);
+  };
+
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2355,6 +2446,9 @@ function App() {
                   </div>
                   <button className="menu-item" onClick={connectKernel}>
                     {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
+                  </button>
+                  <button className="menu-item" onClick={handleClearOutputs}>
+                    Clear Outputs
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}
@@ -2600,7 +2694,10 @@ function App() {
           <AssistantDrawer
             open={assistantOpen}
             apiKey={assistantApiKey}
-            hasDefaultApiKey={matchesAssistantProvider(assistantDefaultApiKey, assistantModel)}
+            hasDefaultApiKey={
+              matchesAssistantProvider(assistantDefaultApiKey, assistantModel) ||
+              assistantServerProviders[detectAssistantProvider(assistantModel)]
+            }
             model={assistantModel}
             thinkingLevel={assistantThinkingLevel}
             draft={assistantDraft}

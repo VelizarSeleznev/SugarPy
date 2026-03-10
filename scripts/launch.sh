@@ -25,6 +25,7 @@ jupyter server \
   --no-browser \
   --ServerApp.port=8888 \
   --ServerApp.port_retries=0 \
+  --ServerApp.jpserver_extensions="{'sugarpy.server_extension': True}" \
   --IdentityProvider.token="$JUPYTER_TOKEN" \
   --ServerApp.log_level=ERROR \
   --LabApp.log_level=ERROR \
