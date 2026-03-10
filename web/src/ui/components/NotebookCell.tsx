@@ -107,6 +107,7 @@ export function NotebookCell({
         {cellType === 'math' ? (
           <>
             <MathEditor
+              key={`${cell.id}-${cell.mathOutput ? 'with-output' : 'no-output'}`}
               value={cell.source}
               onChange={onChange}
               onRun={onRunMath}

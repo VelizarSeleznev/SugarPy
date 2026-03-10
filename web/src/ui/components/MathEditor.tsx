@@ -125,6 +125,12 @@ export function MathEditor({
     setDirty(false);
   }, [value]);
 
+  useEffect(() => {
+    if (!output) {
+      setEditing(true);
+    }
+  }, [output]);
+
   const withBreakHints = (latex: string) => {
     // Help KaTeX break very long lines at readable separators.
     return latex
