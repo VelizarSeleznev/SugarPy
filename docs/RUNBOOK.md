@@ -93,6 +93,7 @@ Assistant regression checks:
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
 - Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
+- The `⋮` menu also includes `Clear Outputs`, which removes current code/math/stoich runtime results without deleting cells or notebook content.
 - The optional AI assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.

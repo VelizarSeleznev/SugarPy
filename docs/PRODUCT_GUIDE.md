@@ -39,6 +39,10 @@ Use it together with:
 - `⋮` menu for notebook, file, and reference actions.
 - Header overlays dismiss on outside click or `Escape`.
 
+### Notebook actions
+- `Clear Outputs`: removes current code, Math, and stoichiometry results without deleting cells or cell source.
+- `Clear Outputs` is intended as a quick reset when the notebook UI is cluttered or you want to rerun cells from a visibly clean state.
+
 ### File actions
 - `Save to Server`: writes an `.ipynb` file under `notebooks/` and refreshes server autosave.
 - `Export PDF`

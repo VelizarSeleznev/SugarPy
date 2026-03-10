@@ -73,9 +73,13 @@ class AssistantOpenAIProxyHandler(APIHandler):
         client = AsyncHTTPClient()
         headers_started = False
 
-        def header_callback(line: bytes) -> None:
+        def header_callback(line: bytes | str) -> None:
             nonlocal headers_started
-            text = line.decode("utf-8", errors="replace").strip()
+            text = (
+                line.decode("utf-8", errors="replace")
+                if isinstance(line, bytes)
+                else line
+            ).strip()
             if not text:
                 if not headers_started:
                     self.set_status(502)
