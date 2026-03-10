@@ -719,6 +719,145 @@ test.describe('Notebook CAS outputs', () => {
     await expectNoGlobalErrors(page, guards);
   });
 
+  test('Assistant sandbox: wrapped validation plan is unwrapped into preview operations', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    let requestCount = 0;
+    await page.route('https://api.openai.com/**', async (route) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_wrapped_plan_1',
+            output: [
+              {
+                type: 'message',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: 'Inspection complete.'
+                  }
+                ]
+              }
+            ]
+          })
+        });
+        return;
+      }
+      if (requestCount === 2) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_wrapped_plan_2',
+            output: [
+              {
+                type: 'function_call',
+                name: 'set_plan_metadata',
+                arguments: JSON.stringify({
+                  summary: 'Add a code cell that computes 2 + 2.',
+                  userMessage: 'Preview ready.',
+                  warnings: []
+                }),
+                call_id: 'set-plan-wrapped-1'
+              },
+              {
+                type: 'function_call',
+                name: 'add_plan_operation',
+                arguments: JSON.stringify({
+                  type: 'insert_cell',
+                  index: 1,
+                  cellType: 'code',
+                  source: '2 + 2',
+                  cellId: null,
+                  trigMode: null,
+                  renderMode: null,
+                  reason: 'Add the requested computation.'
+                }),
+                call_id: 'add-plan-wrapped-1'
+              },
+              {
+                type: 'function_call',
+                name: 'finalize_plan',
+                arguments: '{}',
+                call_id: 'finalize-plan-wrapped-1'
+              }
+            ]
+          })
+        });
+        return;
+      }
+      if (requestCount === 3) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_wrapped_plan_3',
+            output: [
+              {
+                type: 'function_call',
+                name: 'run_code_in_sandbox',
+                arguments: JSON.stringify({
+                  code: '2 + 2',
+                  contextPreset: 'bootstrap-only',
+                  selectedCellIds: [],
+                  timeoutMs: 5000
+                }),
+                call_id: 'sandbox-wrapped-plan-call'
+              }
+            ]
+          })
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'resp_wrapped_plan_4',
+          output: [
+            {
+              type: 'message',
+              content: [
+                {
+                  type: 'output_text',
+                  text: JSON.stringify({
+                    plan: {
+                      summary: 'Add a code cell that computes 2 + 2.',
+                      userMessage: 'Preview ready after validation.',
+                      warnings: [],
+                      operations: [
+                        {
+                          type: 'insert_cell',
+                          index: 1,
+                          cellType: 'code',
+                          source: '2 + 2',
+                          reason: 'Add the requested computation.'
+                        }
+                      ]
+                    }
+                  })
+                }
+              ]
+            }
+          ]
+        })
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('assistant-toggle').click();
+    await page.getByTestId('assistant-settings-toggle').click();
+    await page.getByTestId('assistant-api-key').fill('sk-test');
+    await page.getByTestId('assistant-prompt').fill('Add a code cell that computes 2 + 2 and run it.');
+    await page.getByTestId('assistant-generate').click();
+    await expect(page.getByTestId('assistant-preview')).toBeVisible();
+    await expect(page.locator('.assistant-op-title')).toContainText('Insert code cell at 2');
+    await expect(page.locator('.assistant-op-source code')).toContainText('2 + 2');
+    await expectNoGlobalErrors(page, guards);
+  });
+
   test('Assistant OpenAI payload: sends valid Responses API tool schema', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     const seenBodies: any[] = [];

@@ -1774,13 +1774,22 @@ const validationSystemPrompt = [
   'You are validating a drafted SugarPy notebook change set.',
   COMPACT_REFERENCE,
   'The live notebook has not been changed yet.',
-  'You may use run_code_in_sandbox only to self-check Python code that appears in code-cell insert/update operations.',
+  'You must use run_code_in_sandbox to self-check every Python code snippet that appears in code-cell insert/update operations before returning the final plan.',
   'Sandbox execution is isolated and never mutates the notebook.',
+  'A successful sandbox check means the code is valid for preview; actual notebook execution happens later when the user chooses Apply and Run.',
+  'Do not claim that code execution is unavailable if sandbox validation succeeded.',
   'Default to contextPreset bootstrap-only unless the draft truly depends on notebook code state.',
   'Use imports-only, selected-cells, or full-notebook-replay only when that context is required.',
   'Do not use sandbox execution for Math or Stoich cells.',
   'If the sandbox reports an error or timeout, revise the draft plan or add a warning that validation failed.',
   'Return the full final AssistantPlan JSON and nothing else.'
+].join('\n');
+
+const VALIDATION_REQUIRED_REMINDER = [
+  'Your previous validation response did not call run_code_in_sandbox.',
+  'Before returning the final plan, validate every inserted or updated code cell with run_code_in_sandbox.',
+  'If validation succeeds, return the updated AssistantPlan without warnings about execution being unavailable.',
+  'If validation fails, revise the code or add a precise validation warning.'
 ].join('\n');
 
 const runGeminiValidationLoop = async (
@@ -1804,6 +1813,7 @@ const runGeminiValidationLoop = async (
       parts: [{ text: buildValidationPrompt(request, context, draftPlan, conversationHistory) }]
     }
   ];
+  let sawSandboxValidation = false;
 
   for (let round = 0; round < MAX_VALIDATION_ROUNDS; round += 1) {
     onActivity?.({
@@ -1847,6 +1857,13 @@ const runGeminiValidationLoop = async (
       });
     }
     if (toolCalls.length === 0) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        contents.push({
+          role: 'user',
+          parts: [{ text: VALIDATION_REQUIRED_REMINDER }]
+        });
+        continue;
+      }
       return normalizePlan(JSON.parse(stripCodeFence(extractText(response)) || '{}'));
     }
 
@@ -1854,6 +1871,7 @@ const runGeminiValidationLoop = async (
     for (const toolCall of toolCalls) {
       const sandboxRequest = normalizeSandboxRequest(toolCall.args);
       const result = await sandboxRunner(sandboxRequest, onActivity);
+      sawSandboxValidation = true;
       onSandboxExecution?.(summarizeSandboxExecution(sandboxRequest, result));
       toolResponses.push({
         functionResponse: {
@@ -1888,6 +1906,7 @@ const runOpenAIValidationLoop = async (
 ): Promise<AssistantPlan> => {
   let previousResponseId: string | undefined;
   let nextInput: unknown = buildValidationPrompt(request, context, draftPlan, conversationHistory);
+  let sawSandboxValidation = false;
 
   for (let round = 0; round < MAX_VALIDATION_ROUNDS; round += 1) {
     onActivity?.({
@@ -1915,11 +1934,23 @@ const runOpenAIValidationLoop = async (
     previousResponseId = response.id || previousResponseId;
     const submittedPlan = extractSubmittedPlan(response);
     if (submittedPlan) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        nextInput = VALIDATION_REQUIRED_REMINDER;
+        continue;
+      }
       return submittedPlan;
     }
     const toolCalls = parseOpenAIToolCalls(response);
     if (toolCalls.length === 0) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        nextInput = VALIDATION_REQUIRED_REMINDER;
+        continue;
+      }
       return normalizePlan(JSON.parse(stripCodeFence(extractOpenAIText(response)) || '{}'));
+    }
+    if (!sawSandboxValidation && toolCalls.some((toolCall) => toolCall.name === 'submit_plan') && round < MAX_VALIDATION_ROUNDS - 1) {
+      nextInput = VALIDATION_REQUIRED_REMINDER;
+      continue;
     }
 
     const toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }> = [];
@@ -1931,6 +1962,7 @@ const runOpenAIValidationLoop = async (
       if (toolCall.name !== 'run_code_in_sandbox') continue;
       const sandboxRequest = normalizeSandboxRequest(toolCall.args);
       const result = await sandboxRunner(sandboxRequest, onActivity);
+      sawSandboxValidation = true;
       onSandboxExecution?.(summarizeSandboxExecution(sandboxRequest, result));
       toolOutputs.push({
         type: 'function_call_output',
@@ -2071,11 +2103,12 @@ const runOpenAIPlanningLoop = async (
 };
 
 const normalizePlan = (raw: any): AssistantPlan => {
-  const operations = Array.isArray(raw?.operations) ? raw.operations : [];
+  const payload = raw && typeof raw === 'object' && raw.plan && typeof raw.plan === 'object' ? raw.plan : raw;
+  const operations = Array.isArray(payload?.operations) ? payload.operations : [];
   return {
-    summary: String(raw?.summary ?? 'Prepared a notebook change set.'),
-    userMessage: String(raw?.userMessage ?? ''),
-    warnings: Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item)) : [],
+    summary: String(payload?.summary ?? 'Prepared a notebook change set.'),
+    userMessage: String(payload?.userMessage ?? ''),
+    warnings: Array.isArray(payload?.warnings) ? payload.warnings.map((item: unknown) => String(item)) : [],
     operations: operations
       .map((item: any) => {
         const type = String(item?.type ?? '');
