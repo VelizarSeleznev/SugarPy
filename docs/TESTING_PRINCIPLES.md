@@ -62,6 +62,21 @@ For UI or execution-flow changes, completion requires all of:
 - Project smoke/full gate (`./scripts/ui-check.sh` or `./scripts/test-all.sh`).
 - Browser result report (including console/page errors status).
 
+## Assistant and LLM validation
+For assistant, agent, streaming, or model-integration changes, mocked tests are necessary but not sufficient.
+
+Required completion rules:
+- Keep mocked/unit/integration coverage for deterministic regression protection.
+- Run a real browser notebook flow at the end of the task when runtime credentials and services are available.
+- The real run must exercise the changed assistant path with a live model response, not mocked network fixtures.
+- Do not treat build success, mocked Playwright success, or trace-shape checks as proof that live assistant behavior works.
+- Report the result of the live run separately from mocked test results.
+
+If the live run fails:
+- Inspect the latest assistant trace and identify the actual failure stage.
+- Report whether the failure happened before response creation, during streaming, during tool/function-call generation, during sandbox execution, or during preview/apply.
+- Do not claim the assistant flow is fixed if only mocked coverage passes.
+
 ## Refactor safety checks (dangling references)
 After removing or renaming state/props/handlers/selectors:
 - Search for stale references (`rg`) and resolve all unintended matches.
@@ -73,6 +88,8 @@ Every production bug must produce a regression test:
 - First add a failing/representative test for the reproduced scenario.
 - Then implement the fix.
 - Keep the test to prevent recurrence.
+
+For assistant/runtime bugs, pair that regression test with a final live-browser verification when possible.
 
 ## Context discipline for contributors and agents
 When working in this repository, keep testing policy in active context:

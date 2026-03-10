@@ -18,6 +18,21 @@ _TRANSFORMS = standard_transformations + (convert_xor, implicit_multiplication_a
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 _ASSIGN_TARGET_RE = re.compile(r"^[A-Za-z_]\w*$")
 _CALL_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_PLOT_KWARG_NAMES = {
+    "xmin",
+    "xmax",
+    "ymin",
+    "ymax",
+    "start",
+    "end",
+    "samples",
+    "num",
+    "title",
+    "overscan",
+    "equal_axes",
+    "showlegend",
+    "var",
+}
 _BLOCKED_IDENTIFIERS = {
     "import",
     "exec",
@@ -44,6 +59,7 @@ class ParsedMathInput:
     rhs_source: str | None = None
     assigned_name: str | None = None
     assigned_names: tuple[str, ...] = ()
+    assignment_target_tree: Any = None
     function_name: str | None = None
     function_args: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
@@ -166,21 +182,207 @@ def _split_top_level_commas(source: str) -> list[str]:
     return [part for part in parts if part]
 
 
-def _parse_assignment_targets(lhs: str) -> tuple[str, ...]:
-    trimmed = lhs.strip()
-    if trimmed.startswith("(") and trimmed.endswith(")"):
+def _strip_enclosing_group(source: str) -> str:
+    trimmed = source.strip()
+    while trimmed and trimmed[0] in "([{" and _find_matching_bracket(trimmed, 0) == len(trimmed) - 1:
         trimmed = trimmed[1:-1].strip()
-    targets = tuple(_split_top_level_commas(trimmed))
+    return trimmed
+
+
+def _find_matching_bracket(source: str, start: int) -> int:
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    opener = source[start]
+    closer = pairs.get(opener)
+    if closer is None:
+        raise MathParseError("Unsupported bracket.")
+
+    depth = 1
+    quote: str | None = None
+    escaped = False
+    i = start + 1
+    while i < len(source):
+        ch = source[i]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            i += 1
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise MathParseError("Unclosed bracket in expression.")
+
+
+def _wrap_equation_expression(source: str) -> str:
+    try:
+        parsed = parse_math_input(source)
+    except MathParseError:
+        return source
+    if parsed.kind != "equation":
+        return source
+    lhs = parsed.lhs_source or ""
+    rhs = parsed.rhs_source or ""
+    return f"Eq({lhs}, {rhs})"
+
+
+def _rewrite_inline_equations(source: str, *, nested: bool = False) -> str:
+    parts = _split_top_level_commas(source)
+    rewritten_parts: list[str] = []
+
+    for part in parts:
+        buf: list[str] = []
+        i = 0
+        while i < len(part):
+            ch = part[i]
+            if ch in "([{":
+                close_idx = _find_matching_bracket(part, i)
+                inner = part[i + 1 : close_idx]
+                rewritten_inner = _rewrite_inline_equations(inner, nested=True)
+                buf.append(ch)
+                buf.append(rewritten_inner)
+                buf.append(part[close_idx])
+                i = close_idx + 1
+                continue
+            buf.append(ch)
+            i += 1
+        rewritten = "".join(buf).strip()
+        if nested:
+            rewritten = _wrap_equation_expression(rewritten)
+        rewritten_parts.append(rewritten)
+
+    return ", ".join(rewritten_parts)
+
+
+def _find_top_level_range(source: str) -> int | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    i = 0
+    while i < len(source) - 1:
+        ch = source[i]
+        nxt = source[i + 1]
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+            i += 1
+            continue
+        if ch in ")]}":
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0 and ch == "." and nxt == ".":
+            return i
+        i += 1
+    return None
+
+
+def _parse_plot_option_arg(arg: str) -> list[str] | None:
+    marks = _scan_top_level(arg)
+    if len(marks["equation"]) != 1 or marks["assignment"]:
+        return None
+    idx = marks["equation"][0]
+    lhs = arg[:idx].strip()
+    rhs = arg[idx + 1 :].strip()
+    if not _ASSIGN_TARGET_RE.match(lhs) or not rhs:
+        return None
+
+    range_idx = _find_top_level_range(rhs)
+    if range_idx is not None:
+        range_start = rhs[:range_idx].strip()
+        range_end = rhs[range_idx + 2 :].strip()
+        if not range_start or not range_end:
+            return None
+        if lhs == "x":
+            return [f"xmin={range_start}", f"xmax={range_end}"]
+        if lhs == "y":
+            return [f"ymin={range_start}", f"ymax={range_end}"]
+        return [f"var={lhs}", f"start={range_start}", f"end={range_end}"]
+
+    if lhs in _PLOT_KWARG_NAMES:
+        return [f"{lhs}={rhs}"]
+    return None
+
+
+def _rewrite_plot_call_source(source: str) -> str:
+    trimmed = source.strip()
+    prefix = "plot("
+    if not trimmed.startswith(prefix) or not trimmed.endswith(")"):
+        return source
+
+    close_idx = _find_matching_bracket(trimmed, len(prefix) - 1)
+    if close_idx != len(trimmed) - 1:
+        return source
+
+    inner = trimmed[len(prefix):close_idx]
+    args = _split_top_level_commas(inner)
+    rewritten_args: list[str] = []
+    for arg in args:
+        stripped_arg = arg.strip()
+        option_args = _parse_plot_option_arg(stripped_arg)
+        if option_args is not None:
+            rewritten_args.extend(option_args)
+            continue
+        rewritten_arg = _rewrite_plot_call_source(stripped_arg) if stripped_arg.startswith("plot(") else _rewrite_inline_equations(stripped_arg, nested=True)
+        rewritten_args.append(rewritten_arg)
+    return f"plot({', '.join(rewritten_args)})"
+
+
+def _flatten_assignment_target_tree(target_tree: Any) -> tuple[str, ...]:
+    if isinstance(target_tree, str):
+        return (target_tree,)
+    flattened: list[str] = []
+    for item in target_tree:
+        flattened.extend(_flatten_assignment_target_tree(item))
+    return tuple(flattened)
+
+
+def _parse_assignment_target_tree(lhs: str) -> Any:
+    trimmed = lhs.strip()
+    if not trimmed:
+        raise MathParseError("Left side of ':=' must define at least one variable name.")
+    ungrouped = _strip_enclosing_group(trimmed)
+    parts = _split_top_level_commas(ungrouped)
+    if len(parts) > 1:
+        return tuple(_parse_assignment_target_tree(part) for part in parts)
+    if _ASSIGN_TARGET_RE.match(ungrouped):
+        return ungrouped
+    raise MathParseError(
+        "Left side of ':=' must be a variable name or comma-separated variable names."
+    )
+
+
+def _parse_assignment_targets(lhs: str) -> tuple[tuple[str, ...], Any]:
+    target_tree = _parse_assignment_target_tree(lhs)
+    targets = _flatten_assignment_target_tree(target_tree)
     if not targets:
         raise MathParseError("Left side of ':=' must define at least one variable name.")
-    for target in targets:
-        if not _ASSIGN_TARGET_RE.match(target):
-            raise MathParseError(
-                "Left side of ':=' must be a variable name or comma-separated variable names."
-            )
     if len(set(targets)) != len(targets):
         raise MathParseError("Duplicate names are not allowed on assignment left side.")
-    return targets
+    return targets, target_tree
 
 
 def _parse_function_target(lhs: str) -> tuple[str, tuple[str, ...]] | None:
@@ -237,7 +439,7 @@ def parse_math_input(source: str) -> ParsedMathInput:
                 function_name=function_name,
                 function_args=function_args,
             )
-        targets = _parse_assignment_targets(lhs)
+        targets, target_tree = _parse_assignment_targets(lhs)
         return ParsedMathInput(
             kind="assignment",
             source=raw,
@@ -246,6 +448,7 @@ def parse_math_input(source: str) -> ParsedMathInput:
             rhs_source=rhs,
             assigned_name=targets[0],
             assigned_names=targets,
+            assignment_target_tree=target_tree,
         )
 
     if len(marks["equation"]) > 1:
@@ -344,10 +547,34 @@ def build_math_locals(
             return {_normalize_equations_for_solve(item) for item in value}
         return value
 
+    def _is_symbol_spec(value: Any) -> bool:
+        if isinstance(value, sp.Symbol):
+            return True
+        if isinstance(value, (list, tuple, set)):
+            return bool(value) and all(_is_symbol_spec(item) for item in value)
+        return False
+
     def solve(equations: Any, *args: Any, **kwargs: Any) -> Any:
-        normalized = _normalize_equations_for_solve(equations)
+        grouped_equations = [equations]
+        remaining_args: list[Any] = []
+        collecting_equations = not _is_symbol_spec(equations)
+
+        for arg in args:
+            if collecting_equations and not _is_symbol_spec(arg):
+                grouped_equations.append(arg)
+                continue
+            collecting_equations = False
+            remaining_args.append(arg)
+
+        normalized_input: Any
+        if len(grouped_equations) == 1:
+            normalized_input = grouped_equations[0]
+        else:
+            normalized_input = tuple(grouped_equations)
+
+        normalized = _normalize_equations_for_solve(normalized_input)
         try:
-            return sp.solve(normalized, *args, **kwargs)
+            return sp.solve(normalized, *remaining_args, **kwargs)
         except Exception as exc:
             # SymPy can fail with `CoercionFailed: nan is not in any domain` for exact polynomial systems.
             # Fallback to polynomial solver when possible to preserve exact symbolic output.
@@ -358,10 +585,10 @@ def build_math_locals(
                 raise
             if not isinstance(normalized, (list, tuple)):
                 raise
-            if not args:
+            if not remaining_args:
                 raise
 
-            raw_vars = args[0]
+            raw_vars = remaining_args[0]
             if isinstance(raw_vars, (list, tuple, set)):
                 vars_seq = tuple(raw_vars)
             else:
@@ -450,10 +677,14 @@ def build_math_locals(
 
 
 def parse_sympy_expression(source: str, *, mode: str, user_ns: Dict[str, Any]) -> Any:
+    if source.strip().startswith("plot("):
+        rewritten_source = _rewrite_plot_call_source(source)
+    else:
+        rewritten_source = _rewrite_inline_equations(source)
     try:
         return parse_expr(
-            source,
-            local_dict=build_math_locals([source], mode=mode, user_ns=user_ns),
+            rewritten_source,
+            local_dict=build_math_locals([rewritten_source], mode=mode, user_ns=user_ns),
             transformations=_TRANSFORMS,
             evaluate=False,
         )

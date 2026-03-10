@@ -79,8 +79,51 @@ def test_assignment_unpack_targets_are_parsed():
     assert parsed.rhs_source == "solO[1]"
 
 
+def test_assignment_nested_unpack_targets_are_parsed():
+    parsed = parse_math_input("(h1, k1), (h2, k2) := solutions")
+    assert parsed.kind == "assignment"
+    assert parsed.assigned_names == ("h1", "k1", "h2", "k2")
+    assert parsed.assigned_name == "h1"
+    assert parsed.assignment_target_tree == (("h1", "k1"), ("h2", "k2"))
+    assert parsed.rhs_source == "solutions"
+
+
 def test_function_assignment_is_parsed():
     parsed = parse_math_input("dist(P, Q) := sqrt((P[0]-Q[0])^2 + (P[1]-Q[1])^2)")
     assert parsed.kind == "function_assignment"
     assert parsed.function_name == "dist"
     assert parsed.function_args == ("P", "Q")
+
+
+def test_inline_equations_inside_solve_expression_are_supported():
+    expr = parse_sympy_expression(
+        "solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))",
+        mode="deg",
+        user_ns={},
+    )
+    assert isinstance(expr, list)
+    assert len(expr) == 2
+
+
+def test_plot_range_sugar_and_kwargs_are_passed_as_plot_kwargs():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(circle1, circle2, x = -10..40, y = 0..60, equal_axes = True)",
+        mode="deg",
+        user_ns={"plot": plot, "circle1": 1, "circle2": 2},
+    )
+
+    assert captured["args"] == (1, 2)
+    assert captured["kwargs"] == {
+        "xmin": -10,
+        "xmax": 40,
+        "ymin": 0,
+        "ymax": 60,
+        "equal_axes": True,
+    }

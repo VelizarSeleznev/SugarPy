@@ -11,12 +11,24 @@ import { moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   AssistantActivity,
+  AssistantConversationEntry,
+  AssistantNetworkEvent,
+  AssistantResponseTrace,
+  AssistantSandboxExecutionTrace,
+  DEFAULT_ASSISTANT_MODEL,
+  detectAssistantProvider,
+  normalizeThinkingLevel,
   AssistantOperation,
   AssistantPlan,
-  AssistantPreference,
-  AssistantScope,
+  AssistantThinkingLevel,
   planNotebookChanges
-} from './utils/geminiAssistant';
+} from './utils/assistant';
+import {
+  AssistantSandboxNotebookCell,
+  AssistantSandboxRequest,
+  buildAssistantBootstrapCode,
+  runAssistantSandbox as runIsolatedAssistantSandbox
+} from './utils/assistantSandbox';
 import {
   createNotebookId,
   deserializeIpynb,
@@ -115,10 +127,15 @@ const asText = (value: unknown) => {
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
 const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
-const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:gemini:key';
-const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:gemini:model';
-const ASSISTANT_SCOPE_STORAGE = 'sugarpy:assistant:scope';
-const ASSISTANT_PREFERENCE_STORAGE = 'sugarpy:assistant:preference';
+const ASSISTANT_TRACE_SERVER_DIR = 'notebooks/sugarpy-assistant-traces';
+const ASSISTANT_SERVER_CONFIG_PATH = 'notebooks/sugarpy-assistant-config.json';
+const ASSISTANT_HISTORY_STORAGE_PREFIX = 'sugarpy:assistant:history:v1:';
+const ASSISTANT_TRACE_STORAGE_PREFIX = 'sugarpy:assistant:traces:v1:';
+const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:api:key';
+const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:model';
+const ASSISTANT_THINKING_STORAGE = 'sugarpy:assistant:thinking';
+const ASSISTANT_SCOPE: 'notebook' = 'notebook';
+const ASSISTANT_PREFERENCE: 'auto' = 'auto';
 
 type AssistantSnapshot = {
   cells: CellModel[];
@@ -126,6 +143,91 @@ type AssistantSnapshot = {
   defaultMathRenderMode: 'exact' | 'decimal';
   activeCellId: string | null;
 };
+
+type AssistantRuntimeConfig = {
+  apiKey?: string;
+  model?: string;
+};
+
+const matchesAssistantProvider = (apiKey: string, model: string) => {
+  const trimmed = apiKey.trim();
+  if (!trimmed) return false;
+  const provider = detectAssistantProvider(model);
+  if (provider === 'openai') {
+    return trimmed.startsWith('sk-');
+  }
+  return trimmed.startsWith('AIza');
+};
+
+type AssistantChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  status?: 'loading' | 'ready' | 'error' | 'stopped' | 'applied' | 'dismissed';
+  activity?: AssistantActivity[];
+  plan?: AssistantPlan | null;
+  error?: string;
+};
+
+type AssistantChatSession = {
+  id: string;
+  title: string;
+  messages: AssistantChatMessage[];
+  updatedAt: string;
+};
+
+type AssistantRunTrace = {
+  id: string;
+  chatId: string;
+  messageId: string;
+  notebookId: string;
+  notebookName: string;
+  prompt: string;
+  model: string;
+  thinkingLevel: AssistantThinkingLevel;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+  status: 'running' | 'completed' | 'error' | 'stopped';
+  error?: string;
+  context: {
+    cellCount: number;
+    activeCellId: string | null;
+    defaults: {
+      trigMode: 'deg' | 'rad';
+      renderMode: 'exact' | 'decimal';
+    };
+  };
+  conversationHistory: AssistantConversationEntry[];
+  activity: AssistantActivity[];
+  network: AssistantNetworkEvent[];
+  responses: AssistantResponseTrace[];
+  sandboxExecutions: AssistantSandboxExecutionTrace[];
+  result?: {
+    summary: string;
+    warningCount: number;
+    operationCount: number;
+  };
+};
+
+const previewAssistantLabel = (value: string, fallback: string) => {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return fallback;
+  return compact.length <= 36 ? compact : `${compact.slice(0, 35)}…`;
+};
+
+const createAssistantChat = (title = 'New chat'): AssistantChatSession => {
+  const now = new Date().toISOString();
+  return {
+    id: `assistant-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title,
+    messages: [],
+    updatedAt: now
+  };
+};
+
+const getAssistantTraceStorageKey = (id: string) => `${ASSISTANT_TRACE_STORAGE_PREFIX}${id}`;
 
 const isCanceledFutureError = (error: unknown) => {
   if (!error) return false;
@@ -225,18 +327,20 @@ function App() {
   const [mobileVisualTop, setMobileVisualTop] = useState(0);
   const [mobileVisualHeight, setMobileVisualHeight] = useState(window.innerHeight);
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [assistantApiKey, setAssistantApiKey] = useState(import.meta.env.VITE_GEMINI_API_KEY || '');
-  const [assistantModel, setAssistantModel] = useState(
-    import.meta.env.VITE_GEMINI_MODEL || 'gemini-3.1-flash-lite-preview'
+  const [assistantApiKey, setAssistantApiKey] = useState('');
+  const [assistantDefaultApiKey, setAssistantDefaultApiKey] = useState(
+    import.meta.env.VITE_ASSISTANT_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || ''
   );
-  const [assistantScope, setAssistantScope] = useState<AssistantScope>('notebook');
-  const [assistantPreference, setAssistantPreference] = useState<AssistantPreference>('auto');
-  const [assistantPrompt, setAssistantPrompt] = useState('');
+  const [assistantModel, setAssistantModel] = useState(
+    import.meta.env.VITE_ASSISTANT_MODEL || import.meta.env.VITE_OPENAI_MODEL || import.meta.env.VITE_GEMINI_MODEL || DEFAULT_ASSISTANT_MODEL
+  );
+  const [assistantThinkingLevel, setAssistantThinkingLevel] = useState<AssistantThinkingLevel>('dynamic');
+  const [assistantDraft, setAssistantDraft] = useState('');
+  const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState('');
-  const [assistantStatus, setAssistantStatus] = useState('');
-  const [assistantActivity, setAssistantActivity] = useState<AssistantActivity[]>([]);
-  const [assistantPlan, setAssistantPlan] = useState<AssistantPlan | null>(null);
+  const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
+  const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
   const [assistantUndoStack, setAssistantUndoStack] = useState<AssistantSnapshot[]>([]);
   const mathSuggestions = useMemo(
     () => [
@@ -270,6 +374,13 @@ function App() {
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
+  const assistantRuntimeConfigAttemptedRef = useRef(false);
+  const assistantHistoryNotebookRef = useRef<string | null>(null);
+  const assistantAbortRef = useRef<AbortController | null>(null);
+  const assistantTracePendingRef = useRef<Map<string, AssistantRunTrace>>(new Map());
+  const assistantTraceFlushRef = useRef<Map<string, Promise<void>>>(new Map());
+  const ensuredServerDirsRef = useRef<Set<string>>(new Set());
+  const ensuringServerDirsRef = useRef<Map<string, Promise<void>>>(new Map());
   const connectingRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const kernelRef = useRef<any>(null);
@@ -294,6 +405,7 @@ function App() {
     ],
     [allFunctions, userFunctions]
   );
+  const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
   const connectKernel = async () => {
     if (connectingRef.current) return;
@@ -415,6 +527,8 @@ function App() {
   };
 
   const getAutosavePath = (id: string) => `${SERVER_AUTOSAVE_DIR}/${id}.sugarpy`;
+  const getAssistantTraceServerPath = (trace: AssistantRunTrace) =>
+    `${ASSISTANT_TRACE_SERVER_DIR}/${trace.notebookId}/${trace.id}.json`;
 
   const buildSnapshot = (
     nextCells: CellModel[],
@@ -438,19 +552,118 @@ function App() {
     return contentsRef.current;
   };
 
+  const loadAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
+    const contents = ensureContents();
+    try {
+      const directory = await contents.get('notebooks', { content: true });
+      const entries = Array.isArray(directory.content) ? directory.content : [];
+      const hasConfig = entries.some(
+        (entry: any) => entry?.type === 'file' && entry?.path === ASSISTANT_SERVER_CONFIG_PATH
+      );
+      if (!hasConfig) return null;
+      const model = await contents.get(ASSISTANT_SERVER_CONFIG_PATH, { content: true });
+      const raw = typeof model.content === 'string' ? model.content : '';
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+      const runtimeModel =
+        typeof parsed.model === 'string'
+          ? parsed.model.trim()
+          : typeof parsed.defaultModel === 'string'
+            ? parsed.defaultModel.trim()
+            : '';
+      return {
+        apiKey: apiKey || undefined,
+        model: runtimeModel || undefined
+      };
+    } catch (_err) {
+      return null;
+    }
+  };
+
   const ensureServerDir = async (path: string) => {
     const contents = ensureContents();
     const parts = path.split('/').filter(Boolean);
     let current = '';
     for (const part of parts) {
       current = current ? `${current}/${part}` : part;
+      if (ensuredServerDirsRef.current.has(current)) {
+        continue;
+      }
+      const pending = ensuringServerDirsRef.current.get(current);
+      if (pending) {
+        await pending;
+        continue;
+      }
+      const ensurePromise = (async () => {
+        try {
+          await contents.save(current, { type: 'directory' as any });
+        } catch (_err) {
+          // Directory may already exist or server may return noisy 4xx for nested checks.
+          // Fall through: later writes will surface real failures if path is unusable.
+        }
+        ensuredServerDirsRef.current.add(current);
+      })();
+      ensuringServerDirsRef.current.set(current, ensurePromise);
       try {
-        await contents.save(current, { type: 'directory' as any });
-      } catch (_err) {
-        // Directory may already exist or server may return noisy 4xx for nested checks.
-        // Fall through: later writes will surface real failures if path is unusable.
+        await ensurePromise;
+      } finally {
+        ensuringServerDirsRef.current.delete(current);
       }
     }
+  };
+
+  const persistAssistantTrace = async (trace: AssistantRunTrace) => {
+    const localKey = `${getAssistantTraceStorageKey(trace.notebookId)}`;
+    try {
+      const existingRaw = readOptionalStorageItem(localKey);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const next = Array.isArray(existing)
+        ? [
+            trace,
+            ...existing.filter((entry: any) => entry && typeof entry === 'object' && entry.id !== trace.id)
+          ].slice(0, 25)
+        : [trace];
+      writeStorageItem(localKey, JSON.stringify(next));
+    } catch (_err) {
+      // ignore local trace persistence failures
+    }
+
+    assistantTracePendingRef.current.set(trace.id, trace);
+    if (assistantTraceFlushRef.current.has(trace.id)) {
+      return;
+    }
+
+    const flushTrace = async () => {
+      while (assistantTracePendingRef.current.has(trace.id)) {
+        const nextTrace = assistantTracePendingRef.current.get(trace.id);
+        assistantTracePendingRef.current.delete(trace.id);
+        if (!nextTrace) continue;
+        try {
+          const notebookTraceDir = `${ASSISTANT_TRACE_SERVER_DIR}/${nextTrace.notebookId}`;
+          await ensureServerDir(ASSISTANT_TRACE_SERVER_DIR);
+          await ensureServerDir(notebookTraceDir);
+          await ensureContents().save(getAssistantTraceServerPath(nextTrace), {
+            type: 'file' as any,
+            format: 'text' as any,
+            content: JSON.stringify(nextTrace, null, 2)
+          });
+        } catch (_err) {
+          // trace persistence must never block assistant execution
+        }
+      }
+    };
+
+    const flushPromise = flushTrace().finally(() => {
+      assistantTraceFlushRef.current.delete(trace.id);
+      const pendingTrace = assistantTracePendingRef.current.get(trace.id);
+      if (pendingTrace) {
+        void persistAssistantTrace(pendingTrace);
+      }
+    });
+    assistantTraceFlushRef.current.set(trace.id, flushPromise);
+    await flushPromise;
   };
 
   const loadServerAutosave = async (id: string) => {
@@ -1156,6 +1369,25 @@ function App() {
     }))
   });
 
+  const buildAssistantSandboxCells = (): AssistantSandboxNotebookCell[] =>
+    cells.map((cell) => ({
+      id: cell.id,
+      type: cell.type ?? 'code',
+      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source
+    }));
+
+  const runAssistantSandbox = async (
+    request: AssistantSandboxRequest,
+    onActivity?: (item: AssistantActivity) => void
+  ) =>
+    runIsolatedAssistantSandbox({
+      request,
+      serverSettings: getServerSettings(),
+      notebookCells: buildAssistantSandboxCells(),
+      bootstrapCode: assistantBootstrapCode,
+      onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
+    });
+
   const captureAssistantSnapshot = (): AssistantSnapshot => ({
     cells: cells.map((cell) => ({
       ...cell,
@@ -1195,6 +1427,53 @@ function App() {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
   };
 
+  const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
+    setAssistantChats((prev) =>
+      prev.map((chat) => {
+        if (chat.id !== chatId) return chat;
+        const next = updater(chat);
+        return {
+          ...next,
+          updatedAt: new Date().toISOString()
+        };
+      })
+    );
+  };
+
+  const updateAssistantMessage = (
+    chatId: string,
+    messageId: string,
+    updater: (message: AssistantChatMessage) => AssistantChatMessage
+  ) => {
+    updateAssistantChat(chatId, (chat) => ({
+      ...chat,
+      messages: chat.messages.map((message) => (message.id === messageId ? updater(message) : message))
+    }));
+  };
+
+  const ensureAssistantChat = () => {
+    if (assistantActiveChatId && assistantChats.some((chat) => chat.id === assistantActiveChatId)) {
+      return assistantActiveChatId;
+    }
+    const nextChat = createAssistantChat();
+    setAssistantChats([nextChat]);
+    setAssistantActiveChatId(nextChat.id);
+    return nextChat.id;
+  };
+
+  const createNewAssistantChat = () => {
+    const nextChat = createAssistantChat();
+    setAssistantChats((prev) => [nextChat, ...prev].slice(0, 5));
+    setAssistantActiveChatId(nextChat.id);
+    setAssistantError('');
+    return nextChat.id;
+  };
+
+  const activeAssistantChat =
+    assistantChats.find((chat) => chat.id === assistantActiveChatId) ??
+    assistantChats[0] ??
+    null;
+
   const handleSlashCommand = (cellId: string, command: string) => {
     const entry = slashCommandMap.get(command);
     if (!entry) return false;
@@ -1232,16 +1511,19 @@ function App() {
 
   useEffect(() => {
     const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
-    const storedModel = readOptionalStorageItem(ASSISTANT_MODEL_STORAGE);
-    const storedScope = readOptionalStorageItem(ASSISTANT_SCOPE_STORAGE);
-    const storedPreference = readOptionalStorageItem(ASSISTANT_PREFERENCE_STORAGE);
+    const storedModel =
+      readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ?? readOptionalStorageItem('sugarpy:assistant:gemini:model');
+    const storedThinking = readOptionalStorageItem(ASSISTANT_THINKING_STORAGE);
     if (storedKey) setAssistantApiKey(storedKey);
     if (storedModel) setAssistantModel(storedModel);
-    if (storedScope === 'active' || storedScope === 'notebook') {
-      setAssistantScope(storedScope);
-    }
-    if (storedPreference === 'auto' || storedPreference === 'cas' || storedPreference === 'python' || storedPreference === 'explain') {
-      setAssistantPreference(storedPreference);
+    if (
+      storedThinking === 'dynamic' ||
+      storedThinking === 'minimal' ||
+      storedThinking === 'low' ||
+      storedThinking === 'medium' ||
+      storedThinking === 'high'
+    ) {
+      setAssistantThinkingLevel(storedThinking);
     }
   }, []);
 
@@ -1258,52 +1540,358 @@ function App() {
   }, [assistantModel]);
 
   useEffect(() => {
-    writeStorageItem(ASSISTANT_SCOPE_STORAGE, assistantScope);
-  }, [assistantScope]);
+    writeStorageItem(ASSISTANT_THINKING_STORAGE, assistantThinkingLevel);
+  }, [assistantThinkingLevel]);
 
   useEffect(() => {
-    writeStorageItem(ASSISTANT_PREFERENCE_STORAGE, assistantPreference);
-  }, [assistantPreference]);
+    const normalized = normalizeThinkingLevel(assistantModel, assistantThinkingLevel);
+    if (normalized !== assistantThinkingLevel) {
+      setAssistantThinkingLevel(normalized);
+    }
+  }, [assistantModel, assistantThinkingLevel]);
 
-  const runAssistant = async () => {
-    if (!assistantApiKey.trim()) {
-      setAssistantError('Gemini API key is required.');
+  useEffect(() => {
+    if (assistantHistoryNotebookRef.current !== notebookId) return;
+    const storageKey = `${ASSISTANT_HISTORY_STORAGE_PREFIX}${notebookId}`;
+    writeStorageItem(storageKey, JSON.stringify(assistantChats.slice(0, 5)));
+  }, [assistantChats, notebookId]);
+
+  useEffect(() => {
+    assistantHistoryNotebookRef.current = null;
+    setAssistantDraft('');
+    setAssistantError('');
+    const storageKey = `${ASSISTANT_HISTORY_STORAGE_PREFIX}${notebookId}`;
+    const raw = readOptionalStorageItem(storageKey);
+    if (!raw) {
+      const nextChat = createAssistantChat();
+      setAssistantChats([nextChat]);
+      setAssistantActiveChatId(nextChat.id);
+      assistantHistoryNotebookRef.current = notebookId;
       return;
     }
-    if (!assistantPrompt.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        const nextChat = createAssistantChat();
+        setAssistantChats([nextChat]);
+        setAssistantActiveChatId(nextChat.id);
+        return;
+      }
+      const normalized = parsed
+        .slice(0, 5)
+        .filter((entry: any) => entry && typeof entry === 'object')
+        .map((entry: any) => ({
+          id: typeof entry.id === 'string' ? entry.id : createAssistantChat().id,
+          title: typeof entry.title === 'string' ? entry.title : 'Chat',
+          updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : new Date().toISOString(),
+          messages: Array.isArray(entry.messages)
+            ? entry.messages
+                .filter((message: any) => message && typeof message === 'object')
+                .map((message: any) => ({
+                  id: typeof message.id === 'string' ? message.id : `assistant-message-${Date.now()}`,
+                  role: message.role === 'assistant' ? 'assistant' : 'user',
+                  content: typeof message.content === 'string' ? message.content : '',
+                  createdAt: typeof message.createdAt === 'string' ? message.createdAt : new Date().toISOString(),
+                  status: typeof message.status === 'string' ? message.status : undefined,
+                  activity: Array.isArray(message.activity) ? message.activity : [],
+                  plan: message.plan ?? null,
+                  error: typeof message.error === 'string' ? message.error : undefined
+                }))
+            : []
+        })) as AssistantChatSession[];
+      setAssistantChats(normalized);
+      setAssistantActiveChatId(normalized[0]?.id ?? null);
+      assistantHistoryNotebookRef.current = notebookId;
+    } catch (_err) {
+      const nextChat = createAssistantChat();
+      setAssistantChats([nextChat]);
+      setAssistantActiveChatId(nextChat.id);
+      assistantHistoryNotebookRef.current = notebookId;
+    }
+  }, [notebookId]);
+
+  useEffect(() => {
+    return () => {
+      assistantAbortRef.current?.abort();
+    };
+  }, [notebookId]);
+
+  const hydrateAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
+    if (assistantRuntimeConfigAttemptedRef.current) {
+      return assistantDefaultApiKey.trim()
+        ? { apiKey: assistantDefaultApiKey.trim(), model: assistantModel.trim() || undefined }
+        : null;
+    }
+    const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
+    const storedModel =
+      readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ?? readOptionalStorageItem('sugarpy:assistant:gemini:model');
+    const envApiKey = (
+      import.meta.env.VITE_ASSISTANT_API_KEY ||
+      import.meta.env.VITE_OPENAI_API_KEY ||
+      import.meta.env.VITE_GEMINI_API_KEY ||
+      ''
+    ).trim();
+    const envModel = (
+      import.meta.env.VITE_ASSISTANT_MODEL ||
+      import.meta.env.VITE_OPENAI_MODEL ||
+      import.meta.env.VITE_GEMINI_MODEL ||
+      ''
+    ).trim();
+    if (storedKey || envApiKey) return null;
+    assistantRuntimeConfigAttemptedRef.current = true;
+    const runtimeConfig = await loadAssistantRuntimeConfig();
+    if (!runtimeConfig) return null;
+    if (runtimeConfig.apiKey) {
+      setAssistantDefaultApiKey(runtimeConfig.apiKey);
+    }
+    if (!storedModel && !envModel && runtimeConfig.model) {
+      setAssistantModel(runtimeConfig.model);
+    }
+    return runtimeConfig;
+  };
+
+  const runAssistant = async () => {
+    const runtimeConfig = await hydrateAssistantRuntimeConfig();
+    const chatId = ensureAssistantChat();
+    const effectiveModel = (
+      runtimeConfig?.model?.trim() ||
+      assistantModel.trim() ||
+      readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ||
+      readOptionalStorageItem('sugarpy:assistant:gemini:model') ||
+      DEFAULT_ASSISTANT_MODEL
+    ).trim();
+    if (effectiveModel && effectiveModel !== assistantModel) {
+      setAssistantModel(effectiveModel);
+    }
+    const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
+    const defaultApiKey = (runtimeConfig?.apiKey?.trim() || assistantDefaultApiKey.trim()).trim();
+    const effectiveApiKey = matchesAssistantProvider(overrideApiKey, effectiveModel)
+      ? overrideApiKey
+      : matchesAssistantProvider(defaultApiKey, effectiveModel)
+        ? defaultApiKey
+        : '';
+    if (!effectiveApiKey) {
+      const provider = detectAssistantProvider(effectiveModel);
+      setAssistantError(
+        provider === 'openai'
+          ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
+          : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
+      );
+      return;
+    }
+    if (!assistantDraft.trim()) {
       setAssistantError('Write a request for the assistant first.');
       return;
     }
+    const prompt = assistantDraft.trim();
+    const effectiveThinkingLevel = normalizeThinkingLevel(effectiveModel, assistantThinkingLevel);
+    const activeChat =
+      assistantChats.find((chat) => chat.id === chatId) ??
+      activeAssistantChat;
+    const previousConversation: AssistantConversationEntry[] = (activeChat?.messages ?? [])
+      .filter((message) => message.status !== 'dismissed')
+      .map((message) => ({
+        role: message.role,
+        content:
+          message.role === 'assistant'
+            ? [message.content, message.plan?.summary].filter(Boolean).join('\n')
+            : message.content
+      }))
+      .filter((entry) => entry.content.trim())
+      .slice(-6);
+    const userMessageId = `assistant-user-${Date.now()}`;
+    const assistantMessageId = `assistant-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const traceId = `assistant-trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = new Date().toISOString();
+    const userMessage: AssistantChatMessage = {
+      id: userMessageId,
+      role: 'user',
+      content: prompt,
+      createdAt: timestamp,
+      status: 'ready'
+    };
+    const assistantMessage: AssistantChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      createdAt: timestamp,
+      status: 'loading',
+      activity: []
+    };
+
+    updateAssistantChat(chatId, (chat) => ({
+      ...chat,
+      title: chat.messages.length > 0 ? chat.title : previewAssistantLabel(prompt, 'New chat'),
+      messages: [...chat.messages, userMessage, assistantMessage]
+    }));
+
+    const baseTrace: AssistantRunTrace = {
+      id: traceId,
+      chatId,
+      messageId: assistantMessageId,
+      notebookId,
+      notebookName,
+      prompt,
+      model: effectiveModel,
+      thinkingLevel: effectiveThinkingLevel,
+      startedAt: timestamp,
+      status: 'running',
+      context: {
+        cellCount: cells.length,
+        activeCellId,
+        defaults: {
+          trigMode,
+          renderMode: defaultMathRenderMode
+        }
+      },
+      conversationHistory: [...previousConversation, { role: 'user', content: prompt }].slice(-6),
+      activity: [],
+      network: [],
+      responses: [],
+      sandboxExecutions: []
+    };
+    const collectedActivity: AssistantActivity[] = [];
+    const collectedNetwork: AssistantNetworkEvent[] = [];
+    const collectedResponses: AssistantResponseTrace[] = [];
+    const collectedSandboxExecutions: AssistantSandboxExecutionTrace[] = [];
+    void persistAssistantTrace(baseTrace);
+
     setAssistantLoading(true);
     setAssistantError('');
-    setAssistantStatus('Inspecting notebook…');
-    setAssistantActivity([]);
+    setAssistantDraft('');
+    const controller = new AbortController();
+    assistantAbortRef.current = controller;
     try {
       const plan = await planNotebookChanges({
-        apiKey: assistantApiKey.trim(),
-        model: assistantModel.trim(),
-        request: assistantPrompt.trim(),
-        scope: assistantScope,
-        preference: assistantPreference,
+        apiKey: effectiveApiKey,
+        model: effectiveModel,
+        request: prompt,
+        scope: ASSISTANT_SCOPE,
+        preference: ASSISTANT_PREFERENCE,
         context: buildAssistantContext(),
+        signal: controller.signal,
+        conversationHistory: [...previousConversation, { role: 'user', content: prompt }].slice(-6),
+        thinkingLevel: effectiveThinkingLevel,
+        sandboxRunner: runAssistantSandbox,
+        onNetworkEvent: (event) => {
+          collectedNetwork.push(event);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions]
+          });
+        },
+        onResponseTrace: (trace) => {
+          collectedResponses.push(trace);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions]
+          });
+        },
+        onSandboxExecution: (trace) => {
+          collectedSandboxExecutions.push(trace);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions]
+          });
+        },
         onActivity: (item) => {
-          setAssistantActivity((prev) => [...prev, item]);
+          collectedActivity.push(item);
+          updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+            ...message,
+            activity: [...(message.activity ?? []), item]
+          }));
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions]
+          });
         }
       });
-      setAssistantPlan(plan);
-      setAssistantStatus(
-        plan.operations.length > 0 ? `Prepared ${plan.operations.length} notebook change(s).` : 'No notebook changes proposed.'
-      );
+      updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+        ...message,
+        content: plan.userMessage || plan.summary,
+        plan,
+        status: 'ready'
+      }));
+      void persistAssistantTrace({
+        ...baseTrace,
+        activity: [...collectedActivity],
+        network: [...collectedNetwork],
+        responses: [...collectedResponses],
+        sandboxExecutions: [...collectedSandboxExecutions],
+        status: 'completed',
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - Date.parse(timestamp),
+        result: {
+          summary: plan.summary,
+          warningCount: plan.warnings.length,
+          operationCount: plan.operations.length
+        }
+      });
     } catch (error) {
-      setAssistantError(error instanceof Error ? error.message : 'Assistant request failed.');
-      setAssistantStatus('');
+      const wasAborted =
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        (error instanceof Error && error.name === 'AbortError');
+      if (wasAborted) {
+        updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+          ...message,
+          content: 'Generation stopped.',
+          status: 'stopped'
+        }));
+        void persistAssistantTrace({
+          ...baseTrace,
+          activity: [...collectedActivity],
+          network: [...collectedNetwork],
+          responses: [...collectedResponses],
+          sandboxExecutions: [...collectedSandboxExecutions],
+          status: 'stopped',
+          finishedAt: new Date().toISOString(),
+          durationMs: Date.now() - Date.parse(timestamp)
+        });
+      } else {
+        const message = error instanceof Error ? error.message : 'Assistant request failed.';
+        updateAssistantMessage(chatId, assistantMessageId, (entry) => ({
+          ...entry,
+          content: 'Assistant request failed.',
+          error: message,
+          status: 'error'
+        }));
+        setAssistantError(message);
+        void persistAssistantTrace({
+          ...baseTrace,
+          activity: [...collectedActivity],
+          network: [...collectedNetwork],
+          responses: [...collectedResponses],
+          sandboxExecutions: [...collectedSandboxExecutions],
+          status: 'error',
+          error: message,
+          finishedAt: new Date().toISOString(),
+          durationMs: Date.now() - Date.parse(timestamp)
+        });
+      }
     } finally {
+      assistantAbortRef.current = null;
       setAssistantLoading(false);
     }
   };
 
-  const applyAssistantPlan = async (runAfterApply = false) => {
-    if (!assistantPlan) return;
+  const stopAssistant = () => {
+    assistantAbortRef.current?.abort();
+  };
+
+  const applyAssistantPlan = async (messageId: string, plan: AssistantPlan, runAfterApply = false) => {
     const snapshot = captureAssistantSnapshot();
     const newCellIds: string[] = [];
     let nextCells = [...cells];
@@ -1326,7 +1914,7 @@ function App() {
       return createCell(operation.cellType, operation.source, operation.index + 1);
     };
 
-    assistantPlan.operations.forEach((operation) => {
+    plan.operations.forEach((operation) => {
       if (operation.type === 'insert_cell') {
         const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
         const nextCell = createFromOperation(operation);
@@ -1385,13 +1973,18 @@ function App() {
     setTrigMode(nextTrigMode);
     setDefaultMathRenderMode(nextRenderMode);
     setActiveCellId(nextActiveCellId);
-    setAssistantStatus(runAfterApply ? 'Applied changes. Running updated cells…' : 'Applied assistant changes.');
+    if (assistantActiveChatId) {
+      updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
+        ...message,
+        status: 'applied'
+      }));
+    }
 
     if (runAfterApply) {
       const runTargets = nextCells.filter(
         (cell) =>
           newCellIds.includes(cell.id) ||
-          assistantPlan.operations.some(
+          plan.operations.some(
             (operation) => operation.type === 'update_cell' && operation.cellId === cell.id
           )
       );
@@ -1399,7 +1992,6 @@ function App() {
         if (cell.type === 'markdown') continue;
         await runCellById(cell);
       }
-      setAssistantStatus('Applied assistant changes and ran updated cells.');
     }
   };
 
@@ -1408,42 +2000,29 @@ function App() {
     if (!snapshot) return;
     restoreAssistantSnapshot(snapshot);
     setAssistantUndoStack((prev) => prev.slice(0, -1));
-    setAssistantStatus('Reverted last assistant change.');
+  };
+
+  const dismissAssistantPlan = (messageId: string) => {
+    if (!assistantActiveChatId) return;
+    updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
+      ...message,
+      status: 'dismissed'
+    }));
   };
 
   useEffect(() => {
     const bootstrap = async () => {
       if (!activeKernel || bootstrapLoaded) return;
+      if (!assistantBootstrapCode) return;
       try {
-        await runCell(`bootstrap-math-${Date.now()}`, 'import math', false, false);
-      } catch (_error) {
-        return;
-      }
-      const defs = allFunctions
-        .map((fn) => {
-          const lines = fn.snippet.split('\n');
-          const start = lines.findIndex((line) => line.startsWith('def '));
-          if (start === -1) return '';
-          const block: string[] = [];
-          for (let i = start; i < lines.length; i += 1) {
-            const line = lines[i];
-            if (i > start && line.trim() !== '' && !line.startsWith(' ') && !line.startsWith('\t')) break;
-            block.push(line);
-          }
-          return block.join('\n').trim();
-        })
-        .filter((block) => block.startsWith('def '))
-        .join('\n\n');
-      if (!defs) return;
-      try {
-        await runCell(`bootstrap-${Date.now()}`, defs, false, false);
+        await runCell(`bootstrap-${Date.now()}`, assistantBootstrapCode, false, false);
       } catch (_error) {
         return;
       }
       setBootstrapLoaded(true);
     };
     bootstrap().catch(() => undefined);
-  }, [activeKernel, bootstrapLoaded, allFunctions]);
+  }, [activeKernel, bootstrapLoaded, assistantBootstrapCode]);
 
   useEffect(() => {
     if (!hydrated.current) return;
@@ -1740,7 +2319,13 @@ function App() {
               ref={assistantToggleRef}
               className="button secondary"
               data-testid="assistant-toggle"
-              onClick={() => setAssistantOpen((prev) => !prev)}
+              onClick={() => {
+                const nextOpen = !assistantOpen;
+                setAssistantOpen(nextOpen);
+                if (nextOpen) {
+                  void hydrateAssistantRuntimeConfig();
+                }
+              }}
             >
               Assistant
             </button>
@@ -2015,32 +2600,42 @@ function App() {
           <AssistantDrawer
             open={assistantOpen}
             apiKey={assistantApiKey}
+            hasDefaultApiKey={matchesAssistantProvider(assistantDefaultApiKey, assistantModel)}
             model={assistantModel}
-            scope={assistantScope}
-            preference={assistantPreference}
-            prompt={assistantPrompt}
+            thinkingLevel={assistantThinkingLevel}
+            draft={assistantDraft}
             loading={assistantLoading}
             error={assistantError}
-            status={assistantStatus}
-            activity={assistantActivity}
-            plan={assistantPlan}
+            chats={assistantChats}
+            activeChatId={assistantActiveChatId}
             canUndo={assistantUndoStack.length > 0}
+            settingsOpen={assistantSettingsOpen}
             onClose={() => setAssistantOpen(false)}
+            onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
             onChangeApiKey={setAssistantApiKey}
             onChangeModel={setAssistantModel}
-            onChangeScope={setAssistantScope}
-            onChangePreference={setAssistantPreference}
-            onChangePrompt={setAssistantPrompt}
-            onGenerate={() => {
+            onChangeThinkingLevel={setAssistantThinkingLevel}
+            onChangeDraft={setAssistantDraft}
+            onSend={() => {
               void runAssistant();
             }}
-            onApply={() => {
-              void applyAssistantPlan(false);
+            onStop={stopAssistant}
+            onApply={(messageId) => {
+              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+              if (!message?.plan || !assistantActiveChatId) return;
+              void applyAssistantPlan(messageId, message.plan, false);
             }}
-            onApplyAndRun={() => {
-              void applyAssistantPlan(true);
+            onApplyAndRun={(messageId) => {
+              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+              if (!message?.plan || !assistantActiveChatId) return;
+              void applyAssistantPlan(messageId, message.plan, true);
             }}
+            onDismiss={dismissAssistantPlan}
             onUndo={undoAssistantPlan}
+            onSelectChat={setAssistantActiveChatId}
+            onNewChat={() => {
+              createNewAssistantChat();
+            }}
           />
         </div>
       </div>

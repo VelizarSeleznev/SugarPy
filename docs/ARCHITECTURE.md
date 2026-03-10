@@ -4,6 +4,9 @@
 - Frontend (`web/`) is a React + Vite app.
 - Backend runtime is a local Jupyter Server launched from `scripts/launch.sh`.
 - Python domain logic lives in `src/sugarpy/`.
+- Assistant orchestration for model calls and structured notebook edits lives in `web/src/ui/utils/assistant.ts`.
+  - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
+- Assistant sandbox execution for isolated self-checks lives in `web/src/ui/utils/assistantSandbox.ts`.
 - The frontend talks to the local Jupyter server for execution and notebook behavior.
 - Frontend has two page entrypoints:
   - `/` for the notebook app (kernel-aware runtime).
@@ -19,6 +22,11 @@
 - `sugarpy.startup` preloads `from sympy import *`, `numpy as np`, defines `x, y, z, t`,
   enables `init_printing()`, and provides a custom `plot()` that emits
   `application/vnd.plotly.v1+json` to frontend MIME output.
+- The notebook UI keeps one long-lived primary kernel for normal cell execution.
+- The assistant may also start a short-lived secondary kernel per validation run.
+  - This sandbox kernel is used only for isolated code checks before preview.
+  - It is always separate from the live notebook kernel.
+  - It is shut down after each assistant validation attempt, including timeouts.
 - Math cell evaluation pipeline:
   - `sugarpy.math_parser.parse_math_input` classifies input as expression/equation/assignment.
   - `sugarpy.math_parser.parse_sympy_expression` parses CAS input with `^` and implicit multiplication.
@@ -37,6 +45,12 @@
 - `./scripts/test-all.sh` is the primary project verification entrypoint.
 - `./scripts/test-all.sh` gate order is: frontend build -> backend pytest -> Playwright E2E.
 - UI changes must be validated by `./scripts/ui-check.sh` (or by `./scripts/test-all.sh`).
+- Assistant changes should also be checked against the targeted browser suite in `web/e2e/notebook.spec.ts` when model payloads or notebook-context assembly change.
+- Assistant sandbox invariants:
+  - `run_code_in_sandbox` may execute Python only through Jupyter kernels, never through shell access.
+  - Default sandbox mode is `bootstrap-only` with a hard 5-second timeout.
+  - Context replay is explicit via presets: `none`, `bootstrap-only`, `imports-only`, `selected-cells`, `full-notebook-replay`.
+  - Sandbox execution must not mutate notebook state, outputs, autosave, or the main kernel namespace.
 - CAS UI behavior for code cells is MIME-first:
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).

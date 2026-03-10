@@ -9,6 +9,7 @@ SugarPy is a local notebook toolkit:
 ## Top-level layout
 - `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading).
 - `web/src/`: frontend app code.
+  Assistant orchestration lives under `web/src/ui/utils/assistant.ts`.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
 - `scripts/`: run/test/dev automation scripts.
 - `deploy/`: demo deployment examples (Nginx + systemd).
@@ -28,6 +29,7 @@ SugarPy is a local notebook toolkit:
 - `scripts/launch.sh`: starts Jupyter server only.
 - `scripts/test-all.sh`: full Python + frontend + UI checks.
 - `scripts/ui-check.sh`: Playwright smoke UI checks (`@smoke`).
+- `web/e2e/notebook.spec.ts`: browser E2E, including assistant regression coverage.
 - `scripts/sync-functions.sh`: syncs user function file (`~/.sugarpy/user_functions.py`) into runtime location.
 - `scripts/start-work.sh`: creates or switches to a `codex/*` work branch from updated `master`.
 - `scripts/checkpoint.sh`: commits and pushes the current work branch to GitHub.

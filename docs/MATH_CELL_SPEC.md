@@ -22,7 +22,16 @@ The Math cell is a CAS-style layer over SymPy:
 2. Equation: `x^2 = 2`
 3. Assignment: `a := 5`, `b := x^2 + 1`
 4. Unpack assignment: `a0, b0 := solO[1]` (Python-style tuple/list unpack)
+   Nested unpack is also supported: `(h1, k1), (h2, k2) := solutions`
 5. Function assignment: `f(x) := x^2 + 1`, `dist(P,Q) := sqrt((P[0]-Q[0])^2 + (P[1]-Q[1])^2)`
+
+Important distinction:
+- `f := x^2 + 2x + 1` assigns one symbolic expression to the name `f`.
+- `f(3)` only makes sense if `f` is already a callable object from Code or from a Math-cell function definition.
+- To define a callable CAS helper in Math cells, use `f(x) := x^2 + 2x + 1`.
+- Use plain `f := ...` when you want to reuse that expression as a symbolic object, for example `solve(f = 0, x)` or `expand(f)`.
+- Inline equations are also accepted inside CAS calls, for example
+  `solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))`.
 
 You can also place multiple statements in one Math cell (one per line).
 They run top-to-bottom and share the same Math namespace.
@@ -96,6 +105,8 @@ Current plotting options:
 - `equal_axes=True` locks one unit on x to one unit on y, which is useful for circles and geometry.
 - `showlegend=True|False` overrides the default legend behavior.
 - `title='...'` adds an optional title. If omitted, SugarPy keeps the plot header visually quiet.
+- In Math cells, range sugar is also supported:
+  `plot(circle1, circle2, x = -10..40, y = 0..60, equal_axes = True)`.
 
 Simple geometry workflow:
 - You can store a circle or other geometric relation as an equation assignment such as
@@ -108,6 +119,7 @@ Plot defaults:
 - For 1-2 traces, the legend is shown by default; for larger multi-branch plots it is hidden by default to reduce clutter.
 - Double-clicking the graph resets back to that initial view.
 - Geometric plots may widen the visible x-range slightly when `equal_axes=True` is active, so that the 1:1 aspect ratio can be preserved in the available screen space.
+- Implicit plots (`f(x, y) = 0`) are rendered as extracted line paths instead of a filled contour layer, so closed curves stay visually stable.
 
 This enables multi-step symbolic workflows directly in Math cells, for example:
 - `c1 := (x-5)^2 + (y-5)^2 - 36`

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from IPython.display import display
 import sympy as sp
+from contourpy import contour_generator
 from sympy import *  # noqa: F401,F403
 from sympy import Symbol, init_printing, lambdify, symbols
 
@@ -114,31 +115,40 @@ def _estimate_implicit_center_and_span(
     return center, span
 
 
-def _make_implicit_trace(
+def _make_implicit_traces(
     expr: object,
     x_symbol: Symbol,
     y_symbol: Symbol,
     x_range: list[float],
     y_range: list[float],
     samples: int,
-) -> dict[str, object]:
+) -> list[dict[str, object]]:
     x_values = np.linspace(x_range[0], x_range[1], samples)
     y_values = np.linspace(y_range[0], y_range[1], samples)
     xx, yy = np.meshgrid(x_values, y_values)
     fn = lambdify((x_symbol, y_symbol), expr, "numpy")
     z_values = np.asarray(fn(xx, yy), dtype=float)
     z_values = np.where(np.isfinite(z_values), z_values, np.nan)
-    return {
-        "type": "contour",
-        "x": x_values.tolist(),
-        "y": y_values.tolist(),
-        "z": z_values.tolist(),
-        "name": str(expr),
-        "hovertemplate": "x=%{x:.6g}<br>y=%{y:.6g}<extra>%{fullData.name}</extra>",
-        "contours": {"start": 0, "end": 0, "size": 1, "coloring": "lines"},
-        "line": {"width": 2.5},
-        "showscale": False,
-    }
+    contour_lines = contour_generator(x=x_values, y=y_values, z=z_values).lines(0.0)
+    traces: list[dict[str, object]] = []
+    curve_name = str(expr)
+    for idx, line_points in enumerate(contour_lines):
+        if len(line_points) < 2:
+            continue
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "lines",
+                "x": line_points[:, 0].tolist(),
+                "y": line_points[:, 1].tolist(),
+                "name": curve_name,
+                "legendgroup": curve_name,
+                "showlegend": idx == 0,
+                "line": {"width": 2.5},
+                "hovertemplate": "x=%{x:.6g}<br>y=%{y:.6g}<extra>%{fullData.name}</extra>",
+            }
+        )
+    return traces
 
 
 def plot(*args, **kwargs):
@@ -248,7 +258,7 @@ def plot(*args, **kwargs):
 
         implicit_samples = max(140, min(320, int(np.sqrt(max(samples, 50))) * 18))
         for implicit_expr, x_symbol, y_symbol in implicit_items:
-            traces.append(_make_implicit_trace(implicit_expr, x_symbol, y_symbol, x_range, y_range, implicit_samples))
+            traces.extend(_make_implicit_traces(implicit_expr, x_symbol, y_symbol, x_range, y_range, implicit_samples))
     elif ymin is not None or ymax is not None:
         y_lower = float(ymin) if ymin is not None else float(visible_y_min if visible_y_min is not None else -1.0)
         y_upper = float(ymax) if ymax is not None else float(visible_y_max if visible_y_max is not None else 1.0)
