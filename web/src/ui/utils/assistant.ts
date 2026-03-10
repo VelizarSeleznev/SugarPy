@@ -1201,6 +1201,12 @@ const callOpenAIResponses = async (
       onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
       inactivityTimeout.touch();
       const effort = buildOpenAIReasoningEffort(model, thinkingLevel);
+      const requestPayload = {
+        ...body,
+        model,
+        stream: transport.mode === 'server-proxy' ? false : true,
+        ...(effort ? { reasoning: { effort } } : {})
+      };
       const response = await fetch(
         transport.mode === 'server-proxy'
           ? buildProxyUrl(transport, '/openai/responses')
@@ -1211,17 +1217,34 @@ const callOpenAIResponses = async (
           'Content-Type': 'application/json',
           ...(transport.mode === 'direct' ? { Authorization: `Bearer ${transport.apiKey}` } : {})
         },
-        body: JSON.stringify({
-          ...body,
-          model,
-          stream: true,
-          ...(effort ? { reasoning: { effort } } : {})
-        }),
+        body: JSON.stringify(requestPayload),
         signal: requestController.signal
       });
       lastActivity = 'response_headers';
       inactivityTimeout.touch();
       onNetworkEvent?.({ phase: 'response', attempt: attempt + 1, stage, status: response.status });
+      if (transport.mode === 'server-proxy') {
+        const parsed = (await response.json()) as OpenAIResponsesResponse;
+        if (!response.ok) {
+          const message = parsed?.error?.message || `OpenAI proxy error ${response.status}`;
+          onNetworkEvent?.({
+            phase: 'error',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: message
+          });
+          throw new Error(`OpenAI API error ${response.status}: ${message}`);
+        }
+        onResponseTrace?.({
+          attempt: attempt + 1,
+          provider: 'openai',
+          stage,
+          text: extractOpenAIText(parsed),
+          toolCalls: parseOpenAIToolCalls(parsed).map((toolCall) => ({ name: toolCall.name, args: toolCall.args }))
+        });
+        return parsed;
+      }
       const contentType = response.headers.get('content-type') || '';
       const streamToolCalls = new Map<number, { id?: string; call_id?: string; name?: string; arguments: string }>();
       const readStreamResponse = async (): Promise<OpenAIResponsesResponse> => {

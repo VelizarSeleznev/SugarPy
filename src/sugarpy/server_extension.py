@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 from urllib.parse import urlencode
@@ -70,73 +71,36 @@ class AssistantOpenAIProxyHandler(APIHandler):
             self.finish({"error": "Server OpenAI key is not configured."})
             return
 
+        try:
+            payload = self.get_json_body() or {}
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["stream"] = False
+
         client = AsyncHTTPClient()
-        headers_started = False
-
-        def header_callback(line: bytes | str) -> None:
-            nonlocal headers_started
-            text = (
-                line.decode("utf-8", errors="replace")
-                if isinstance(line, bytes)
-                else line
-            ).strip()
-            if not text:
-                if not headers_started:
-                    self.set_status(502)
-                self.flush()
-                return
-            if text.startswith("HTTP/"):
-                parts = text.split(" ", 2)
-                status_code = 502
-                if len(parts) > 1:
-                    try:
-                        status_code = int(parts[1])
-                    except ValueError:
-                        status_code = 502
-                self.set_status(status_code)
-                headers_started = True
-                return
-            if ":" not in text:
-                return
-            name, value = text.split(":", 1)
-            lowered = name.lower()
-            if lowered in {
-                "content-type",
-                "cache-control",
-                "x-request-id",
-                "openai-processing-ms",
-            }:
-                self.set_header(name, value.strip())
-
-        async def streaming_callback(chunk: bytes) -> None:
-            self.write(chunk)
-            await self.flush()
-
-        request = HTTPRequest(
-            OPENAI_API_URL,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            body=self.request.body,
-            request_timeout=120,
-            connect_timeout=20,
-            streaming_callback=streaming_callback,
-            header_callback=header_callback,
-            follow_redirects=False,
+        response = await client.fetch(
+            HTTPRequest(
+                OPENAI_API_URL,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                body=json.dumps(payload),
+                request_timeout=120,
+                connect_timeout=20,
+                follow_redirects=False,
+            ),
+            raise_error=False,
         )
-        response = await client.fetch(request, raise_error=False)
-        if not headers_started:
-            self.set_status(response.code or 502)
-            self.set_header(
-                "Content-Type",
-                response.headers.get("Content-Type", "application/json"),
-            )
-            if response.body:
-                self.write(response.body)
-        if not self._finished:
-            self.finish()
+        self.set_status(response.code or 502)
+        self.set_header(
+            "Content-Type",
+            response.headers.get("Content-Type", "application/json"),
+        )
+        self.finish(response.body or b"")
 
 
 class AssistantGeminiProxyHandler(APIHandler):
