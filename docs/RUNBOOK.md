@@ -63,6 +63,7 @@ Runtime server config without exposing secrets to the browser:
   SUGARPY_ASSISTANT_GEMINI_API_KEY=...
   SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
   ```
+- Non-root fallback: the Jupyter extension also reads `~/.config/sugarpy/assistant.env` for the same keys.
 - When one of those keys is present, the frontend auto-detects the shared provider and sends assistant model calls through the Jupyter proxy instead of sending the key to the browser.
 - The settings API-key field remains a user override. If a user pastes their own key, direct browser-to-provider calls are used for that session.
 - Legacy fallback: `notebooks/sugarpy-assistant-config.json` is still supported for local/dev setups, but it is not appropriate for a public deployment because anyone with Jupyter contents access can read it.

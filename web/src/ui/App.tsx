@@ -125,6 +125,15 @@ const asText = (value: unknown) => {
   return String(value);
 };
 
+const clearRuntimeStateFromCell = (cell: CellModel): CellModel => ({
+  ...cell,
+  output: undefined,
+  mathOutput: undefined,
+  stoichOutput: undefined,
+  execCount: undefined,
+  isRunning: false
+});
+
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
 const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
@@ -2277,6 +2286,11 @@ function App() {
     fileInputRef.current?.click();
   };
 
+  const handleClearOutputs = () => {
+    setCells((prev) => prev.map(clearRuntimeStateFromCell));
+    setHeaderMenuOpen(false);
+  };
+
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2432,6 +2446,9 @@ function App() {
                   </div>
                   <button className="menu-item" onClick={connectKernel}>
                     {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
+                  </button>
+                  <button className="menu-item" onClick={handleClearOutputs}>
+                    Clear Outputs
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}

@@ -13,12 +13,44 @@ OPENAI_API_URL = "https://api.openai.com/v1/responses"
 GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 
+def _assistant_secret_file_path() -> str:
+    configured = os.environ.get("SUGARPY_ASSISTANT_ENV_FILE", "").strip()
+    if configured:
+        return os.path.expanduser(configured)
+    return os.path.expanduser("~/.config/sugarpy/assistant.env")
+
+
+def _load_assistant_secret_values() -> dict[str, str]:
+    values: dict[str, str] = {}
+    path = _assistant_secret_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    except FileNotFoundError:
+        return values
+    except OSError:
+        return values
+    return values
+
+
+def _assistant_setting(name: str) -> str:
+    env_value = os.environ.get(name, "").strip()
+    if env_value:
+        return env_value
+    return _load_assistant_secret_values().get(name, "").strip()
+
+
 def _load_assistant_server_config() -> dict[str, Any]:
     return {
-        "model": os.environ.get("SUGARPY_ASSISTANT_MODEL", "").strip() or None,
+        "model": _assistant_setting("SUGARPY_ASSISTANT_MODEL") or None,
         "providers": {
-            "openai": bool(os.environ.get("SUGARPY_ASSISTANT_OPENAI_API_KEY", "").strip()),
-            "gemini": bool(os.environ.get("SUGARPY_ASSISTANT_GEMINI_API_KEY", "").strip()),
+            "openai": bool(_assistant_setting("SUGARPY_ASSISTANT_OPENAI_API_KEY")),
+            "gemini": bool(_assistant_setting("SUGARPY_ASSISTANT_GEMINI_API_KEY")),
         },
     }
 
@@ -32,7 +64,7 @@ class AssistantConfigHandler(APIHandler):
 class AssistantOpenAIProxyHandler(APIHandler):
     @web.authenticated
     async def post(self) -> None:
-        api_key = os.environ.get("SUGARPY_ASSISTANT_OPENAI_API_KEY", "").strip()
+        api_key = _assistant_setting("SUGARPY_ASSISTANT_OPENAI_API_KEY")
         if not api_key:
             self.set_status(503)
             self.finish({"error": "Server OpenAI key is not configured."})
@@ -106,7 +138,7 @@ class AssistantOpenAIProxyHandler(APIHandler):
 class AssistantGeminiProxyHandler(APIHandler):
     @web.authenticated
     async def post(self, model: str) -> None:
-        api_key = os.environ.get("SUGARPY_ASSISTANT_GEMINI_API_KEY", "").strip()
+        api_key = _assistant_setting("SUGARPY_ASSISTANT_GEMINI_API_KEY")
         if not api_key:
             self.set_status(503)
             self.finish({"error": "Server Gemini key is not configured."})

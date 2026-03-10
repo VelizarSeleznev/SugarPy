@@ -157,6 +157,17 @@ sudo chmod 600 /etc/sugarpy/assistant.env
 The bundled `deploy/systemd/sugarpy-jupyter.service` reads that file with:
 - `EnvironmentFile=-/etc/sugarpy/assistant.env`
 
+If you cannot edit the systemd unit yet, SugarPy also supports a user-owned fallback file:
+```bash
+mkdir -p ~/.config/sugarpy
+chmod 700 ~/.config/sugarpy
+cat > ~/.config/sugarpy/assistant.env <<'EOF'
+SUGARPY_ASSISTANT_OPENAI_API_KEY=your-openai-key
+SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
+EOF
+chmod 600 ~/.config/sugarpy/assistant.env
+```
+
 After updating the env file:
 ```bash
 sudo systemctl restart sugarpy-jupyter.service
