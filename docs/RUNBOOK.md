@@ -55,20 +55,17 @@ Assistant UX notes:
   - Validation is Python/code-cell only in v1. Math and Stoich edits still rely on preview plus normal notebook execution.
   - A sandbox timeout or runtime error is returned to the model as structured output so it can revise the draft or warn explicitly.
 
-Runtime server config without committing secrets:
-- Create `notebooks/sugarpy-assistant-config.json` on the server or local Jupyter contents root.
-- Example:
-  ```json
-  {
-    "apiKey": "your-api-key",
-    "model": "gpt-5.1-codex-mini"
-  }
+Runtime server config without exposing secrets to the browser:
+- SugarPy now supports a Jupyter-side assistant proxy for shared server keys.
+- Preferred server env vars:
+  ```bash
+  SUGARPY_ASSISTANT_OPENAI_API_KEY=...
+  SUGARPY_ASSISTANT_GEMINI_API_KEY=...
+  SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
   ```
-- This file is not tracked by git because `notebooks/` is ignored.
-- The frontend will auto-load it and prefill the assistant.
-- The shared server key is used automatically, but it is not copied into the visible settings field.
-- The settings API-key input is treated as a user override.
-- Important: this keeps the key out of GitHub, but not out of browser devtools. To fully hide the key, move model calls behind a backend proxy.
+- When one of those keys is present, the frontend auto-detects the shared provider and sends assistant model calls through the Jupyter proxy instead of sending the key to the browser.
+- The settings API-key field remains a user override. If a user pastes their own key, direct browser-to-provider calls are used for that session.
+- Legacy fallback: `notebooks/sugarpy-assistant-config.json` is still supported for local/dev setups, but it is not appropriate for a public deployment because anyone with Jupyter contents access can read it.
 
 Recommended assistant models:
 - `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.

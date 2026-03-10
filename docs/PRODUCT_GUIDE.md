@@ -197,11 +197,10 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
   - `Gemini 3 Pro`: `dynamic`, `low`, `high`
 - Model requests also use a hard per-request timeout so the UI does not wait indefinitely on a hung model call.
 - The API key can be pasted into the assistant drawer.
-- If `notebooks/sugarpy-assistant-config.json` exists on the connected Jupyter server, the app auto-loads `apiKey` and optional `model` from that runtime file.
-- A server-provided shared key is used implicitly and is not copied into the visible settings field.
+- If the connected Jupyter server has shared assistant env vars configured, the app auto-detects provider availability through the SugarPy assistant proxy and can use the shared key without exposing it in the drawer.
+- `SUGARPY_ASSISTANT_MODEL` can provide the default shared model from the server.
 - The settings input acts as a user override key, not as a mirror of the shared server key.
-- Do not commit that config file to git.
-- Because the models are still called directly from the browser, a server-provided key is hidden from GitHub history but not from an authenticated browser session. Full key secrecy requires a backend proxy.
+- Legacy local/dev fallback still supports `notebooks/sugarpy-assistant-config.json`, but that file should not be treated as secret storage on a public deployment.
 - Each assistant run is persisted as a JSON trace under `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`.
 - Trace payloads include prompt, model, thinking level, activity timeline, low-level HTTP attempt telemetry, compact summaries of successful model responses (tool calls plus returned text), compact summaries of isolated sandbox executions, final status, error text if any, and a compact notebook context summary.
 - On the OpenAI Responses path, trace telemetry now also records stream progress hints so a timeout can say which stream event was last observed before the request stalled.

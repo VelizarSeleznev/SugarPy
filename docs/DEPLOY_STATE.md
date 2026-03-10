@@ -50,3 +50,4 @@ All three services are expected to be `active` in systemd.
 - `/jupyter/` is publicly reachable behind the same origin and currently depends on a shared token.
 - This setup is demo-oriented (shared token, no per-user account isolation).
 - Deploys should target `/opt/sugarpy/current` and build a fresh release under `/opt/sugarpy/releases/<sha>` before switching the symlink.
+- Shared assistant keys, when used, should live in `/etc/sugarpy/assistant.env` and be consumed by the Jupyter service environment, not under `notebooks/`.
