@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { CodeEditor } from './CodeEditor';
 
@@ -115,10 +115,12 @@ export function MathEditor({
   onToggleRenderMode,
   onToggleTrigMode
 }: Props) {
-  const [editing, setEditing] = useState(true);
+  const [editing, setEditing] = useState(!output);
   const [draft, setDraft] = useState(value);
   const [dirty, setDirty] = useState(false);
   const [lastRendered, setLastRendered] = useState(value);
+  const previousIsRunning = useRef(Boolean(isRunning));
+  const previousHasOutput = useRef(Boolean(output));
   useEffect(() => {
     setDraft(value);
     setLastRendered(value);
@@ -130,6 +132,17 @@ export function MathEditor({
       setEditing(true);
     }
   }, [output]);
+
+  useEffect(() => {
+    const wasRunning = previousIsRunning.current;
+    const hasOutput = Boolean(output);
+    const hadOutput = previousHasOutput.current;
+    if ((isRunning && !wasRunning) || (hasOutput && !hadOutput)) {
+      setEditing(false);
+    }
+    previousIsRunning.current = Boolean(isRunning);
+    previousHasOutput.current = hasOutput;
+  }, [isRunning, output]);
 
   const withBreakHints = (latex: string) => {
     // Help KaTeX break very long lines at readable separators.
