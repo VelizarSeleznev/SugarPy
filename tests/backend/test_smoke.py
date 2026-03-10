@@ -215,6 +215,44 @@ def test_math_assignment_with_equation_rhs_smoke():
         assert "14.5" in (numeric["value"] or "")
 
 
+def test_math_assignment_with_inline_solve_equations_smoke():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        result = render_math_cell(
+            "solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))"
+        )
+        assert result["ok"]
+        assert result["kind"] == "assignment"
+        assert dummy.user_ns["solutions"]
+        assert "29" in (result["value"] or "")
+
+
+def test_math_nested_tuple_unpack_assignment_smoke():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        result = render_math_cell(
+            "r := 25\n"
+            "solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))\n"
+            "(h1, k1), (h2, k2) := solutions"
+        )
+        assert result["ok"]
+        assert result["kind"] == "assignment"
+        assert dummy.user_ns["h1"] is not None
+        assert dummy.user_ns["k1"] is not None
+        assert dummy.user_ns["h2"] is not None
+        assert dummy.user_ns["k2"] is not None
+
+
 def test_math_tuple_unpack_assignment_smoke():
     class DummyShell:
         def __init__(self):
@@ -352,6 +390,39 @@ def test_plot_uses_explicit_viewport_and_equal_axes():
     assert layout["yaxis"]["range"][1] > 3.0
 
 
+def test_math_plot_range_sugar_renders_two_implicit_circles():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        render_math_cell(
+            "r := 25\n"
+            "solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))\n"
+            "(h1, k1), (h2, k2) := solutions\n"
+            "circle1 := (x - h1)^2 + (y - k1)^2 = r^2\n"
+            "circle2 := (x - h2)^2 + (y - k2)^2 = r^2"
+        )
+        plotted = render_math_cell(
+            "plot(circle1, circle2, x = -10..40, y = 0..60, equal_axes = True)"
+        )
+
+    assert plotted["ok"]
+    figure = plotted["plotly_figure"]
+    assert figure is not None
+    assert len(figure["data"]) >= 2
+    assert all(trace["type"] == "scatter" for trace in figure["data"])
+    assert {trace["name"] for trace in figure["data"]} == {
+        str(dummy.user_ns["circle1"]),
+        str(dummy.user_ns["circle2"]),
+    }
+    assert figure["layout"]["xaxis"]["range"] == [-10.0, 40.0]
+    assert figure["layout"]["yaxis"]["range"] == [-4.8, 64.8]
+    assert figure["layout"]["yaxis"]["scaleanchor"] == "x"
+    assert figure["layout"]["yaxis"]["scaleratio"] == 1
+
+
 def test_plot_accepts_circle_expression_stored_from_equation_assignment():
     with patch("sugarpy.startup.display"):
         circle = (x - 2) ** 2 + (y - 30) ** 2 - 60
@@ -359,8 +430,7 @@ def test_plot_accepts_circle_expression_stored_from_equation_assignment():
 
     trace = figure["data"][0]
     layout = figure["layout"]
-    assert trace["type"] == "contour"
-    assert trace["contours"]["start"] == 0
+    assert trace["type"] == "scatter"
     assert layout["yaxis"]["scaleanchor"] == "x"
     assert layout["yaxis"]["scaleratio"] == 1
     assert layout["yaxis"]["range"][0] < 30

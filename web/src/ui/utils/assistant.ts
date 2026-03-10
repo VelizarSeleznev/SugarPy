@@ -1,0 +1,2448 @@
+import {
+  AssistantSandboxContextPreset,
+  AssistantSandboxRequest,
+  AssistantSandboxResult
+} from './assistantSandbox';
+
+export type AssistantScope = 'notebook' | 'active';
+export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
+
+export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich';
+
+export type NotebookCellSnapshot = {
+  id: string;
+  type: AssistantCellKind;
+  source: string;
+  mathRenderMode?: 'exact' | 'decimal';
+  mathTrigMode?: 'deg' | 'rad';
+  stoichReaction?: string;
+  outputText?: string;
+  hasError?: boolean;
+};
+
+export type NotebookAssistantContext = {
+  notebookName: string;
+  defaultTrigMode: 'deg' | 'rad';
+  defaultMathRenderMode: 'exact' | 'decimal';
+  cells: NotebookCellSnapshot[];
+  activeCellId: string | null;
+};
+
+export type AssistantOperation =
+  | {
+      type: 'insert_cell';
+      index: number;
+      cellType: AssistantCellKind;
+      source: string;
+      reason?: string;
+    }
+  | {
+      type: 'update_cell';
+      cellId: string;
+      source: string;
+      reason?: string;
+    }
+  | {
+      type: 'delete_cell';
+      cellId: string;
+      reason?: string;
+    }
+  | {
+      type: 'move_cell';
+      cellId: string;
+      index: number;
+      reason?: string;
+    }
+  | {
+      type: 'set_notebook_defaults';
+      trigMode?: 'deg' | 'rad';
+      renderMode?: 'exact' | 'decimal';
+      reason?: string;
+    };
+
+export type AssistantPlan = {
+  summary: string;
+  userMessage: string;
+  warnings: string[];
+  operations: AssistantOperation[];
+};
+
+export type AssistantActivity = {
+  kind: 'phase' | 'tool' | 'reference';
+  label: string;
+  detail?: string;
+};
+
+export type AssistantConversationEntry = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export type AssistantThinkingLevel = 'dynamic' | 'minimal' | 'low' | 'medium' | 'high';
+
+export type AssistantNetworkEvent = {
+  phase: 'request_start' | 'response' | 'retry' | 'error' | 'aborted' | 'timeout' | 'stream';
+  attempt: number;
+  stage?: 'inspection' | 'planning' | 'validation';
+  status?: number;
+  detail?: string;
+};
+
+export type AssistantResponseTrace = {
+  attempt: number;
+  provider?: 'gemini' | 'openai';
+  stage: 'inspection' | 'planning' | 'validation';
+  text?: string;
+  toolCalls?: Array<{
+    name: string;
+    args: Record<string, unknown>;
+  }>;
+};
+
+export type AssistantSandboxExecutionTrace = {
+  request: {
+    contextPreset: AssistantSandboxContextPreset;
+    timeoutMs: number;
+    selectedCellIds: string[];
+    codePreview: string;
+  };
+  result: {
+    status: AssistantSandboxResult['status'];
+    durationMs: number;
+    errorName?: string;
+    errorValue?: string;
+    stdoutPreview: string;
+    stderrPreview: string;
+    replayedCellIds: string[];
+  };
+};
+
+export type AssistantSandboxRunner = (
+  request: AssistantSandboxRequest,
+  onActivity?: (item: AssistantActivity) => void
+) => Promise<AssistantSandboxResult>;
+
+export const DEFAULT_ASSISTANT_MODEL = 'gpt-5.1-codex-mini';
+
+export const ASSISTANT_MODEL_PRESETS = [
+  {
+    value: DEFAULT_ASSISTANT_MODEL,
+    label: 'GPT-5.1 Codex mini'
+  },
+  {
+    value: 'gpt-5.2',
+    label: 'GPT-5.2'
+  },
+  {
+    value: 'gpt-5-mini',
+    label: 'GPT-5 mini'
+  },
+  {
+    value: 'gpt-5-nano',
+    label: 'GPT-5 nano'
+  },
+  {
+    value: 'gemini-3.1-flash-lite-preview',
+    label: 'Gemini 3.1 Flash-Lite Preview'
+  },
+  {
+    value: 'gemini-3-flash-preview',
+    label: 'Gemini 3 Flash Preview'
+  },
+  {
+    value: 'gemini-3.1-pro-preview',
+    label: 'Gemini 3.1 Pro Preview'
+  }
+] as const;
+
+export const ASSISTANT_THINKING_LEVELS = [
+  { value: 'dynamic', label: 'Dynamic' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' }
+] as const;
+
+type GeminiPart =
+  | { text: string }
+  | { functionCall: { name: string; args?: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: { result: unknown } } };
+
+type GeminiContent = {
+  role: 'user' | 'model' | 'tool';
+  parts: GeminiPart[];
+};
+
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: GeminiPart[];
+      role?: 'model';
+    };
+  }>;
+};
+
+type OpenAIResponsesResponse = {
+  id?: string;
+  output?: Array<{
+    id?: string;
+    type?: string;
+    name?: string;
+    arguments?: string;
+    call_id?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+  error?: {
+    message?: string;
+    code?: string | number;
+    type?: string;
+  };
+};
+
+type ToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+  id?: string;
+};
+
+type OpenAIStreamingEvent = {
+  type?: string;
+  response?: OpenAIResponsesResponse;
+  output_index?: number;
+  delta?: string;
+  item?: {
+    type?: string;
+    id?: string;
+    call_id?: string;
+    name?: string;
+    arguments?: string;
+  };
+  item_id?: string;
+  call_id?: string;
+  arguments?: string;
+  error?: {
+    message?: string;
+  };
+};
+
+type ToolLoopResult = {
+  notes: string;
+  transcript: string[];
+  inspectedCells: Array<ReturnType<typeof renderCellDetail>>;
+};
+
+const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta';
+const MAX_TOOL_ROUNDS = 5;
+const DETAIL_SOURCE_LIMIT = 700;
+const DETAIL_OUTPUT_LIMIT = 240;
+const GEMINI_REQUEST_TIMEOUT_MS = 45000;
+const COMPACT_REFERENCE = [
+  'SugarPy compact reference:',
+  '- Cell types: code, markdown, math, stoich.',
+  '- Math cells are CAS-style, not Python-style.',
+  '- In Math cells: = means equation, := means assignment, ^ is exponent, implicit multiplication works.',
+  '- name := expr assigns a value or symbolic expression to a name; it does not define a callable function.',
+  '- name(arg) := expr defines a callable Math-cell function.',
+  '- Math cells share namespace with Code cells.',
+  '- Notebook defaults include trig mode (deg/rad) and render mode (exact/decimal).',
+  '- Each Math cell may override trig/render mode.',
+  '- Math plotting uses plot(...).',
+  '- Safe plotting defaults for geometry: prefer implicit equations or directly plottable expressions.',
+  '- For circles and geometry, prefer circle := equation and then plot(circle, ..., equal_axes=True).',
+  '- Do not rely on trig parameterizations unless the user explicitly asks for them.',
+  '- Trig expressions in Math cells depend on Deg/Rad mode.',
+  '- If a graph is requested, generate notebook content that actually renders the graph in SugarPy.',
+  '- Stoich cells are for chemistry tables, not generic math.',
+  '- Prefer CAS-first outputs when the task is naturally symbolic or equation-based.'
+].join('\n');
+const REFERENCE_SECTIONS = {
+  overview: [
+    'SugarPy product overview:',
+    '- Notebook app with code, markdown, math, and stoich cells.',
+    '- Optional AI assistant edits notebook cells through structured operations.',
+    '- Run All executes code, math, and stoich cells top-to-bottom.',
+    '- Header defaults include Degrees/Radians and Exact/Decimal for Math cells.'
+  ].join('\n'),
+  math_cells: [
+    'Math cell reference:',
+    '- CAS-style input over SymPy.',
+    '- = means equation; := means assignment.',
+    '- name := expr stores a value or symbolic expression under that name.',
+    '- name(arg) := expr defines a callable function.',
+    '- ^ is exponent; implicit multiplication works.',
+    '- Multiple statements per cell are allowed.',
+    '- Math cells share namespace with Code cells.',
+    '- Trig mode is deg or rad and affects trig evaluation.',
+    '- Prefer Math cells for symbolic equations, solve, expand, factor, N, and plot workflows.'
+  ].join('\n'),
+  plotting: [
+    'Plotting reference:',
+    '- plot(...) works in Code and Math cells.',
+    '- Supported options include xmin, xmax, ymin, ymax, equal_axes, showlegend, title.',
+    '- Geometry-safe pattern: store an implicit equation assignment, then call plot(name, ...).',
+    '- Example: circle := (x-2)^2 + (y+10)^2 = 25; plot(circle, xmin=-5, xmax=9, equal_axes=True).',
+    '- Do not assume parametric plotting support from plot(x(t), y(t), t=...).',
+    '- Trig-based plotting in Math cells depends on the Deg/Rad mode.',
+    '- If a non-trig form exists, prefer it.'
+  ].join('\n'),
+  cell_types: [
+    'Cell type reference:',
+    '- code: Python execution.',
+    '- markdown: text/notes.',
+    '- math: CAS symbolic input with rendered math card.',
+    '- stoich: chemistry stoichiometry table over a reaction.'
+  ].join('\n'),
+  assistant: [
+    'Assistant behavior reference:',
+    '- Return structured notebook operations only.',
+    '- Prefer minimal, directly runnable edits.',
+    '- Respect user preference mode: auto, cas, python, explain.',
+    '- Use CAS-first when the task is naturally equation-based or symbolic.',
+    '- Avoid mathematically valid but SugarPy-incompatible representations.'
+  ].join('\n')
+} as const;
+
+const requestLooksLikeDirectGeometrySolve = (request: string) => {
+  const normalized = request.toLowerCase();
+  return (
+    (normalized.includes('circle') || normalized.includes('окруж')) &&
+    (normalized.includes('point') ||
+      normalized.includes('точк') ||
+      /\ba\(/.test(normalized) ||
+      /\bb\(/.test(normalized) ||
+      normalized.includes('radius') ||
+      normalized.includes('радиус') ||
+      normalized.includes('solve'))
+  );
+};
+
+const requestLooksMathLike = (request: string) => {
+  const normalized = request.toLowerCase();
+  return (
+    /(math|equation|equations|solve|symbolic|algebra|geometry|circle|radius|plot|intersection)\b/.test(normalized) ||
+    /(матем|уравн|реши|решить|решение|окруж|радиус|график|пересеч)/.test(normalized)
+  );
+};
+
+const requestExplicitlyAsksForPython = (request: string) => {
+  const normalized = request.toLowerCase();
+  return (
+    /\bpython\b/.test(normalized) ||
+    /\bsympy\b/.test(normalized) ||
+    /\bcode cell\b/.test(normalized) ||
+    /\bscript\b/.test(normalized) ||
+    /\bprogram\b/.test(normalized) ||
+    /питон|python|sympy|через python|на python|python-скрипт/.test(normalized)
+  );
+};
+
+const parseDirectCircleRequest = (request: string) => {
+  const pointA = request.match(/A\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i);
+  const pointB = request.match(/B\s*\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/i);
+  const radius =
+    request.match(/radius\s*[:=]?\s*(-?\d+(?:\.\d+)?)/i) ??
+    request.match(/r\s*[:=]?\s*(-?\d+(?:\.\d+)?)/i) ??
+    request.match(/радиус\s*[:=]?\s*(-?\d+(?:\.\d+)?)/i);
+  if (!pointA || !pointB || !radius) return null;
+  const ax = Number(pointA[1]);
+  const ay = Number(pointA[2]);
+  const bx = Number(pointB[1]);
+  const by = Number(pointB[2]);
+  const r = Number(radius[1]);
+  if (![ax, ay, bx, by, r].every(Number.isFinite)) return null;
+  return { ax, ay, bx, by, r };
+};
+
+const buildDirectCircleSolvePlan = (request: string): AssistantPlan | null => {
+  const parsed = parseDirectCircleRequest(request);
+  if (!parsed) return null;
+  const { ax, ay, bx, by, r } = parsed;
+  const xmin = Math.floor(Math.min(ax, bx) - Math.max(10, r * 0.4));
+  const xmax = Math.ceil(Math.max(ax, bx) + Math.max(10, r * 0.4));
+  const ymin = Math.floor(Math.min(ay, by) - Math.max(10, r * 0.4));
+  const ymax = Math.ceil(Math.max(ay, by) + Math.max(10, r * 0.4));
+  return {
+    summary: 'Use Math cells to solve the two circle-center equations and build the circle equations.',
+    userMessage: 'Prepared a CAS-first Math-cell solution that defines one equation per point, solves for the centers, and builds both circle equations.',
+    warnings: [],
+    operations: [
+      {
+        type: 'insert_cell',
+        index: 0,
+        cellType: 'math',
+        source: [
+          `A := (${ax}, ${ay})`,
+          `B := (${bx}, ${by})`,
+          `r := ${r}`,
+          '',
+          `eqA := (${ax} - h)^2 + (${ay} - k)^2 = r^2`,
+          `eqB := (${bx} - h)^2 + (${by} - k)^2 = r^2`,
+          'solutions := solve((eqA, eqB), (h, k))',
+          'solutions'
+        ].join('\n'),
+        reason: 'Write one circle-center equation per point and solve them directly in CAS.'
+      },
+      {
+        type: 'insert_cell',
+        index: 1,
+        cellType: 'math',
+        source: [
+          'c1 := solutions[0]',
+          'c2 := solutions[1]',
+          'circle1 := (x - c1[0])^2 + (y - c1[1])^2 = r^2',
+          'circle2 := (x - c2[0])^2 + (y - c2[1])^2 = r^2',
+          `plot(circle1, circle2, (x, ${xmin}, ${xmax}), (y, ${ymin}, ${ymax}), equal_axes=True)`
+        ].join('\n'),
+        reason: 'Build both circle equations from the solved centers and plot them.'
+      }
+    ]
+  };
+};
+
+const toJsonSchema = (schema: any): any => {
+  if (!schema || typeof schema !== 'object') return schema;
+  const rawType = typeof schema.type === 'string' ? schema.type.toLowerCase() : schema.type;
+  if (rawType === 'object') {
+    const properties = Object.fromEntries(
+      Object.entries(schema.properties ?? {}).map(([key, value]) => [key, toJsonSchema(value)])
+    );
+    return {
+      type: 'object',
+      properties,
+      required: Array.isArray(schema.required) ? schema.required : [],
+      additionalProperties: false
+    };
+  }
+  if (rawType === 'array') {
+    return {
+      type: 'array',
+      items: toJsonSchema(schema.items ?? {})
+    };
+  }
+  return {
+    ...schema,
+    type: rawType
+  };
+};
+
+const TOOL_DECLARATIONS = [
+  {
+    name: 'get_notebook_summary',
+    description: 'Return a concise summary of the current notebook, defaults, and cell ordering.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        scope: {
+          type: 'STRING',
+          enum: ['notebook', 'active']
+        }
+      },
+      required: ['scope']
+    }
+  },
+  {
+    name: 'list_cells',
+    description: 'List notebook cells with ids, types, short previews, and error flags.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {}
+    }
+  },
+  {
+    name: 'get_active_cell',
+    description: 'Return the currently active cell, if any.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {}
+    }
+  },
+  {
+    name: 'get_cell',
+    description: 'Return the full content of a cell by id.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        cellId: { type: 'STRING' }
+      },
+      required: ['cellId']
+    }
+  },
+  {
+    name: 'get_recent_errors',
+    description: 'Return cells with visible error output.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {}
+    }
+  },
+  {
+    name: 'get_reference',
+    description: 'Return built-in SugarPy documentation for a specific topic.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        section: {
+          type: 'STRING',
+          enum: ['overview', 'math_cells', 'plotting', 'cell_types', 'assistant']
+        }
+      },
+      required: ['section']
+    }
+  }
+] as const;
+
+const OPENAI_TOOL_DECLARATIONS = TOOL_DECLARATIONS.map((tool) => ({
+  type: 'function' as const,
+  name: tool.name,
+  description: tool.description,
+  parameters: toJsonSchema(tool.parameters),
+  strict: true
+}));
+
+const SANDBOX_TOOL_DECLARATION = {
+  name: 'run_code_in_sandbox',
+  description:
+    'Run Python code in an isolated temporary kernel for self-checking. This never mutates the live notebook.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      code: { type: 'STRING' },
+      contextPreset: {
+        type: 'STRING',
+        enum: ['none', 'bootstrap-only', 'imports-only', 'selected-cells', 'full-notebook-replay']
+      },
+      selectedCellIds: {
+        type: 'ARRAY',
+        items: { type: 'STRING' }
+      },
+      timeoutMs: { type: 'NUMBER' }
+    },
+    required: ['code', 'contextPreset', 'selectedCellIds', 'timeoutMs']
+  }
+} as const;
+
+const OPENAI_SANDBOX_TOOL_DECLARATION = {
+  type: 'function' as const,
+  name: SANDBOX_TOOL_DECLARATION.name,
+  description: SANDBOX_TOOL_DECLARATION.description,
+  parameters: toJsonSchema(SANDBOX_TOOL_DECLARATION.parameters),
+  strict: true
+};
+
+const PLAN_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    summary: { type: 'STRING' },
+    userMessage: { type: 'STRING' },
+    warnings: {
+      type: 'ARRAY',
+      items: { type: 'STRING' }
+    },
+    operations: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          type: {
+            type: 'STRING',
+            enum: ['insert_cell', 'update_cell', 'delete_cell', 'move_cell', 'set_notebook_defaults']
+          },
+          index: { type: 'NUMBER' },
+          cellType: {
+            type: 'STRING',
+            enum: ['code', 'markdown', 'math', 'stoich']
+          },
+          source: { type: 'STRING' },
+          cellId: { type: 'STRING' },
+          trigMode: {
+            type: 'STRING',
+            enum: ['deg', 'rad']
+          },
+          renderMode: {
+            type: 'STRING',
+            enum: ['exact', 'decimal']
+          },
+          reason: { type: 'STRING' }
+        },
+        required: ['type']
+      }
+    }
+  },
+  required: ['summary', 'userMessage', 'warnings', 'operations']
+} as const;
+
+const OPENAI_PLAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    userMessage: { type: 'string' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    operations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['insert_cell', 'update_cell', 'delete_cell', 'move_cell', 'set_notebook_defaults']
+          },
+          index: {
+            type: ['number', 'null']
+          },
+          cellType: {
+            type: ['string', 'null'],
+            enum: ['code', 'markdown', 'math', 'stoich', null]
+          },
+          source: {
+            type: ['string', 'null']
+          },
+          cellId: {
+            type: ['string', 'null']
+          },
+          trigMode: {
+            type: ['string', 'null'],
+            enum: ['deg', 'rad', null]
+          },
+          renderMode: {
+            type: ['string', 'null'],
+            enum: ['exact', 'decimal', null]
+          },
+          reason: {
+            type: ['string', 'null']
+          }
+        },
+        required: ['type', 'index', 'cellType', 'source', 'cellId', 'trigMode', 'renderMode', 'reason'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['summary', 'userMessage', 'warnings', 'operations'],
+  additionalProperties: false
+} as const;
+
+const SUBMIT_PLAN_TOOL_DECLARATION = {
+  name: 'submit_plan',
+  description: 'Submit the final SugarPy notebook change set.',
+  parameters: OPENAI_PLAN_SCHEMA
+} as const;
+
+const OPENAI_SUBMIT_PLAN_TOOL_DECLARATION = {
+  type: 'function' as const,
+  name: SUBMIT_PLAN_TOOL_DECLARATION.name,
+  description: SUBMIT_PLAN_TOOL_DECLARATION.description,
+  parameters: SUBMIT_PLAN_TOOL_DECLARATION.parameters,
+  strict: true
+};
+
+const PLAN_METADATA_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    userMessage: { type: 'string' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' }
+    }
+  },
+  required: ['summary', 'userMessage', 'warnings'],
+  additionalProperties: false
+} as const;
+
+const PLAN_OPERATION_SCHEMA = OPENAI_PLAN_SCHEMA.properties.operations.items;
+
+const PLAN_METADATA_TOOL_DECLARATION = {
+  name: 'set_plan_metadata',
+  description: 'Set the plan summary, user-facing message, and warning list before adding operations.',
+  parameters: PLAN_METADATA_SCHEMA
+} as const;
+
+const OPENAI_PLAN_METADATA_TOOL_DECLARATION = {
+  type: 'function' as const,
+  name: PLAN_METADATA_TOOL_DECLARATION.name,
+  description: PLAN_METADATA_TOOL_DECLARATION.description,
+  parameters: PLAN_METADATA_TOOL_DECLARATION.parameters,
+  strict: true
+};
+
+const PLAN_OPERATION_TOOL_DECLARATION = {
+  name: 'add_plan_operation',
+  description: 'Append one notebook operation to the plan. Call this once per operation.',
+  parameters: PLAN_OPERATION_SCHEMA
+} as const;
+
+const OPENAI_PLAN_OPERATION_TOOL_DECLARATION = {
+  type: 'function' as const,
+  name: PLAN_OPERATION_TOOL_DECLARATION.name,
+  description: PLAN_OPERATION_TOOL_DECLARATION.description,
+  parameters: PLAN_OPERATION_TOOL_DECLARATION.parameters,
+  strict: true
+};
+
+const FINALIZE_PLAN_TOOL_DECLARATION = {
+  name: 'finalize_plan',
+  description: 'Finish plan generation after metadata and operations have been sent.',
+  parameters: {
+    type: 'object',
+    properties: {},
+    required: [],
+    additionalProperties: false
+  }
+} as const;
+
+const OPENAI_FINALIZE_PLAN_TOOL_DECLARATION = {
+  type: 'function' as const,
+  name: FINALIZE_PLAN_TOOL_DECLARATION.name,
+  description: FINALIZE_PLAN_TOOL_DECLARATION.description,
+  parameters: FINALIZE_PLAN_TOOL_DECLARATION.parameters,
+  strict: true
+};
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const MAX_VALIDATION_ROUNDS = 4;
+const MAX_PLANNING_ROUNDS = 16;
+const SANDBOX_PREVIEW_LIMIT = 240;
+const OPENAI_DEFAULT_REQUEST_TIMEOUT_MS = 45000;
+const OPENAI_PLANNING_REQUEST_TIMEOUT_MS = 90000;
+
+const createInactivityTimeout = (timeoutMs: number, onTimeout: () => void) => {
+  let timeoutId: number | null = null;
+  const clear = () => {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  const touch = () => {
+    clear();
+    timeoutId = window.setTimeout(() => {
+      timeoutId = null;
+      onTimeout();
+    }, timeoutMs);
+  };
+  return { touch, clear };
+};
+
+const stripCodeFence = (raw: string) =>
+  raw
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+const tryParsePlanText = (raw: string): AssistantPlan | null => {
+  const cleaned = stripCodeFence(raw || '');
+  if (!cleaned) return null;
+  try {
+    return normalizePlan(JSON.parse(cleaned));
+  } catch (_error) {
+    return null;
+  }
+};
+
+const previewText = (value: string, limit = 160) => {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit - 1)}…`;
+};
+
+const truncateText = (value: string, limit: number) => {
+  if (!value) return '';
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 1))}…`;
+};
+
+const planHasPythonCodeOperations = (plan: AssistantPlan) =>
+  plan.operations.some(
+    (operation) =>
+      (operation.type === 'insert_cell' && operation.cellType === 'code' && operation.source.trim()) ||
+      (operation.type === 'update_cell' && operation.source.trim())
+  );
+
+const planUsesSolveInMathCells = (plan: AssistantPlan) =>
+  plan.operations.some(
+    (operation) =>
+      operation.type === 'insert_cell' &&
+      operation.cellType === 'math' &&
+      /\bsolve\s*\(/.test(operation.source)
+  );
+
+const normalizeSandboxRequest = (args: Record<string, unknown>): AssistantSandboxRequest => ({
+  code: String(args.code ?? ''),
+  contextPreset: (
+    typeof args.contextPreset === 'string' ? args.contextPreset : 'bootstrap-only'
+  ) as AssistantSandboxContextPreset,
+  selectedCellIds: Array.isArray(args.selectedCellIds) ? args.selectedCellIds.map((value) => String(value)) : [],
+  timeoutMs:
+    typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) ? Math.round(args.timeoutMs) : 5000
+});
+
+const summarizeSandboxExecution = (
+  request: AssistantSandboxRequest,
+  result: AssistantSandboxResult
+): AssistantSandboxExecutionTrace => ({
+  request: {
+    contextPreset: request.contextPreset ?? 'bootstrap-only',
+    timeoutMs: typeof request.timeoutMs === 'number' ? request.timeoutMs : 5000,
+    selectedCellIds: Array.isArray(request.selectedCellIds) ? request.selectedCellIds : [],
+    codePreview: truncateText(request.code ?? '', SANDBOX_PREVIEW_LIMIT)
+  },
+  result: {
+    status: result.status,
+    durationMs: result.durationMs,
+    errorName: result.errorName,
+    errorValue: truncateText(result.errorValue ?? '', SANDBOX_PREVIEW_LIMIT),
+    stdoutPreview: truncateText(result.stdout ?? '', SANDBOX_PREVIEW_LIMIT),
+    stderrPreview: truncateText(result.stderr ?? '', SANDBOX_PREVIEW_LIMIT),
+    replayedCellIds: result.replayedCellIds
+  }
+});
+
+const extractSubmittedPlan = (response: OpenAIResponsesResponse): AssistantPlan | null => {
+  const submitCall = parseOpenAIToolCalls(response).find((toolCall) => toolCall.name === 'submit_plan');
+  if (!submitCall) return null;
+  return normalizePlan(submitCall.args);
+};
+
+const buildPlanFromParts = (metadata: {
+  summary: string;
+  userMessage: string;
+  warnings: string[];
+} | null, operations: AssistantOperation[]): AssistantPlan | null => {
+  if (!metadata) return null;
+  return {
+    summary: metadata.summary,
+    userMessage: metadata.userMessage,
+    warnings: metadata.warnings,
+    operations
+  };
+};
+
+const summarizeCell = (cell: NotebookCellSnapshot) => ({
+  id: cell.id,
+  type: cell.type,
+  preview: previewText(cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source),
+  hasError: !!cell.hasError
+});
+
+const renderCellDetail = (cell: NotebookCellSnapshot | null) => {
+  if (!cell) return null;
+  return {
+    id: cell.id,
+    type: cell.type,
+    source: truncateText(cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source, DETAIL_SOURCE_LIMIT),
+    mathRenderMode: cell.mathRenderMode,
+    mathTrigMode: cell.mathTrigMode,
+    outputText: truncateText(cell.outputText || '', DETAIL_OUTPUT_LIMIT),
+    hasError: !!cell.hasError
+  };
+};
+
+const executeTool = (
+  tool: ToolCall,
+  context: NotebookAssistantContext,
+  scope: AssistantScope
+) => {
+  const activeCell = context.cells.find((cell) => cell.id === context.activeCellId) || null;
+  switch (tool.name) {
+    case 'get_notebook_summary':
+      return {
+        notebookName: context.notebookName,
+        defaultTrigMode: context.defaultTrigMode,
+        defaultMathRenderMode: context.defaultMathRenderMode,
+        scope,
+        activeCellId: context.activeCellId,
+        cellCount: context.cells.length,
+        cells:
+          (tool.args.scope === 'active' ? (activeCell ? [activeCell] : []) : context.cells).map(summarizeCell)
+      };
+    case 'list_cells':
+      return context.cells.map(summarizeCell);
+    case 'get_active_cell':
+      return renderCellDetail(activeCell);
+    case 'get_cell': {
+      const cellId = String(tool.args.cellId || '');
+      return renderCellDetail(context.cells.find((cell) => cell.id === cellId) || null);
+    }
+    case 'get_recent_errors':
+      return context.cells.filter((cell) => cell.hasError).map(renderCellDetail);
+    case 'get_reference': {
+      const section = String(tool.args.section || 'overview') as keyof typeof REFERENCE_SECTIONS;
+      return {
+        section,
+        text: REFERENCE_SECTIONS[section] ?? REFERENCE_SECTIONS.overview
+      };
+    }
+    default:
+      return { error: `Unknown tool: ${tool.name}` };
+  }
+};
+
+const parseToolCalls = (response: GeminiResponse): ToolCall[] => {
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  return parts
+    .filter((part): part is Extract<GeminiPart, { functionCall: { name: string; args?: Record<string, unknown> } }> => 'functionCall' in part)
+    .map((part) => ({
+      name: part.functionCall.name,
+      args: (part.functionCall.args ?? {}) as Record<string, unknown>
+    }));
+};
+
+const parseOpenAIToolCalls = (response: OpenAIResponsesResponse): ToolCall[] => {
+  const calls = (response.output ?? []).filter((item) => item?.type === 'function_call' && item.name);
+  return calls
+    .map((call) => {
+      let args: Record<string, unknown> = {};
+      try {
+        args = call.arguments ? JSON.parse(call.arguments) : {};
+      } catch (_err) {
+        args = {};
+      }
+      return {
+        id: call.call_id,
+        name: String(call.name ?? ''),
+        args
+      };
+    });
+};
+
+const parseSseEvent = (rawEvent: string): OpenAIStreamingEvent | null => {
+  const lines = rawEvent
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  const data = lines
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n');
+  if (!data || data === '[DONE]') return null;
+  try {
+    return JSON.parse(data) as OpenAIStreamingEvent;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const extractText = (response: GeminiResponse) => {
+  const parts = response.candidates?.[0]?.content?.parts ?? [];
+  return parts
+    .filter((part): part is Extract<GeminiPart, { text: string }> => 'text' in part)
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+};
+
+const extractOpenAIText = (response: OpenAIResponsesResponse) => {
+  return (response.output ?? [])
+    .filter((item) => item?.type === 'message')
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
+    .map((part) => String(part.text))
+    .join('\n')
+    .trim();
+};
+
+export const getSupportedThinkingLevels = (model: string): AssistantThinkingLevel[] => {
+  const normalized = model.toLowerCase();
+  if (normalized.startsWith('gpt-5.1-codex')) return ['dynamic', 'low', 'medium', 'high'];
+  if (normalized.startsWith('gpt-5.1')) return ['dynamic', 'minimal', 'low', 'medium', 'high'];
+  if (normalized.startsWith('gpt-5')) return ['dynamic', 'minimal', 'low', 'medium', 'high'];
+  if (!normalized.includes('gemini-3')) return ['dynamic'];
+  if (normalized.includes('pro')) {
+    return ['dynamic', 'low', 'high'];
+  }
+  return ['dynamic', 'minimal', 'low', 'medium', 'high'];
+};
+
+export const normalizeThinkingLevel = (
+  model: string,
+  thinkingLevel: AssistantThinkingLevel
+): AssistantThinkingLevel => {
+  const supported = getSupportedThinkingLevels(model);
+  return supported.includes(thinkingLevel) ? thinkingLevel : supported[0];
+};
+
+const buildThinkingConfig = (model: string, thinkingLevel: AssistantThinkingLevel) => {
+  const normalizedLevel = normalizeThinkingLevel(model, thinkingLevel);
+  if (normalizedLevel === 'dynamic') return undefined;
+  return {
+    thinkingConfig: {
+      thinkingLevel: normalizedLevel
+    }
+  };
+};
+
+export const detectAssistantProvider = (model: string): 'gemini' | 'openai' => {
+  const normalized = model.toLowerCase();
+  if (normalized.startsWith('gpt-') || normalized.startsWith('o') || normalized.includes('codex')) {
+    return 'openai';
+  }
+  return 'gemini';
+};
+
+const buildOpenAIReasoningEffort = (model: string, thinkingLevel: AssistantThinkingLevel) => {
+  const normalizedLevel = normalizeThinkingLevel(model, thinkingLevel);
+  if (normalizedLevel === 'dynamic') return undefined;
+  return normalizedLevel;
+};
+
+const callGemini = async (
+  apiKey: string,
+  model: string,
+  body: Record<string, unknown>,
+  retries = 3,
+  signal?: AbortSignal,
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<GeminiResponse> => {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let timeoutId: number | null = null;
+    let lastStreamEvent = '';
+    let partialText = '';
+    const requestController = new AbortController();
+    const abortFromParent = () => requestController.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) {
+        requestController.abort(signal.reason);
+      } else {
+        signal.addEventListener('abort', abortFromParent, { once: true });
+      }
+    }
+    timeoutId = window.setTimeout(() => {
+      requestController.abort(new Error(`Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms`));
+    }, GEMINI_REQUEST_TIMEOUT_MS);
+    try {
+      onNetworkEvent?.({
+        phase: 'request_start',
+        attempt: attempt + 1,
+        stage
+      });
+      const baseGenerationConfig =
+        body.generationConfig && typeof body.generationConfig === 'object'
+          ? (body.generationConfig as Record<string, unknown>)
+          : {};
+      const generationConfig = {
+        ...baseGenerationConfig,
+        ...(buildThinkingConfig(model, thinkingLevel) ?? {})
+      };
+      const response = await fetch(`${API_ROOT}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ...body,
+          generationConfig
+        }),
+        signal: requestController.signal
+      });
+      onNetworkEvent?.({
+        phase: 'response',
+        attempt: attempt + 1,
+        stage,
+        status: response.status
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (response.status === 429) {
+          onNetworkEvent?.({
+            phase: 'error',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: errorText
+          });
+          throw new Error(`Gemini API rate/quota limit hit (429). Wait a bit and retry. ${errorText}`);
+        }
+        if (response.status === 503 && attempt < retries) {
+          onNetworkEvent?.({
+            phase: 'retry',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: '503 Service Unavailable'
+          });
+          await wait(1200 * (attempt + 1));
+          continue;
+        }
+        onNetworkEvent?.({
+          phase: 'error',
+          attempt: attempt + 1,
+          stage,
+          status: response.status,
+          detail: errorText
+        });
+        throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+      }
+      const parsed = (await response.json()) as GeminiResponse;
+      onResponseTrace?.({
+        attempt: attempt + 1,
+        provider: 'gemini',
+        stage,
+        text: extractText(parsed),
+        toolCalls: parseToolCalls(parsed)
+      });
+      return parsed;
+    } catch (error) {
+      const didTimeout =
+        requestController.signal.aborted &&
+        !(signal?.aborted) &&
+        error instanceof Error &&
+        error.name === 'AbortError';
+      if (didTimeout) {
+        onNetworkEvent?.({
+          phase: 'timeout',
+          attempt: attempt + 1,
+          stage,
+          detail: `Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms`
+        });
+        lastError = new Error(`Gemini request timed out after ${GEMINI_REQUEST_TIMEOUT_MS}ms.`);
+        break;
+      }
+      if (signal?.aborted) {
+        onNetworkEvent?.({
+          phase: 'aborted',
+          attempt: attempt + 1,
+          stage,
+          detail: error instanceof Error ? error.message : String(error)
+        });
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      onNetworkEvent?.({
+        phase: 'error',
+        attempt: attempt + 1,
+        stage,
+        detail: error instanceof Error ? error.message : String(error)
+      });
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= retries) break;
+      onNetworkEvent?.({
+        phase: 'retry',
+        attempt: attempt + 1,
+        stage,
+        detail: `Retrying after transport error`
+      });
+      await wait(1000 * (attempt + 1));
+    } finally {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (signal) {
+        signal.removeEventListener('abort', abortFromParent);
+      }
+    }
+  }
+  throw lastError ?? new Error('Gemini API request failed.');
+};
+
+const callOpenAIResponses = async (
+  apiKey: string,
+  model: string,
+  body: Record<string, unknown>,
+  retries = 3,
+  signal?: AbortSignal,
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  requestTimeoutMs = OPENAI_DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<OpenAIResponsesResponse> => {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let lastStreamEvent = '';
+    let lastActivity = 'request_start';
+    let partialText = '';
+    const requestController = new AbortController();
+    const abortFromParent = () => requestController.abort(signal?.reason);
+    const inactivityTimeout = createInactivityTimeout(requestTimeoutMs, () => {
+      requestController.abort(new Error(`OpenAI request timed out after ${requestTimeoutMs}ms`));
+    });
+    if (signal) {
+      if (signal.aborted) {
+        requestController.abort(signal.reason);
+      } else {
+        signal.addEventListener('abort', abortFromParent, { once: true });
+      }
+    }
+    try {
+      onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
+      inactivityTimeout.touch();
+      const effort = buildOpenAIReasoningEffort(model, thinkingLevel);
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          ...body,
+          model,
+          stream: true,
+          ...(effort ? { reasoning: { effort } } : {})
+        }),
+        signal: requestController.signal
+      });
+      lastActivity = 'response_headers';
+      inactivityTimeout.touch();
+      onNetworkEvent?.({ phase: 'response', attempt: attempt + 1, stage, status: response.status });
+      const contentType = response.headers.get('content-type') || '';
+      const streamToolCalls = new Map<number, { id?: string; call_id?: string; name?: string; arguments: string }>();
+      const readStreamResponse = async (): Promise<OpenAIResponsesResponse> => {
+        if (!response.body) {
+          throw new Error('OpenAI stream response body was empty.');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let responseId = '';
+        let completedResponse: OpenAIResponsesResponse | null = null;
+        let emittedTextStart = false;
+        let emittedToolStart = false;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          lastActivity = 'response_chunk';
+          inactivityTimeout.touch();
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split(/\r?\n\r?\n/);
+          buffer = chunks.pop() ?? '';
+          for (const chunk of chunks) {
+            const event = parseSseEvent(chunk);
+            if (!event?.type) continue;
+            lastStreamEvent = event.type;
+            lastActivity = event.type;
+            inactivityTimeout.touch();
+            if (event.response?.id) {
+              responseId = event.response.id;
+            }
+            if (
+              event.type === 'response.created' ||
+              event.type === 'response.in_progress' ||
+              event.type === 'response.completed'
+            ) {
+              onNetworkEvent?.({
+                phase: 'stream',
+                attempt: attempt + 1,
+                stage,
+                detail: event.type
+              });
+            }
+            if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+              partialText += event.delta;
+              if (!emittedTextStart) {
+                emittedTextStart = true;
+                onNetworkEvent?.({
+                  phase: 'stream',
+                  attempt: attempt + 1,
+                  stage,
+                  detail: 'response.output_text.delta'
+                });
+              }
+            }
+            if (event.type === 'response.function_call_arguments.delta') {
+              const index = typeof event.output_index === 'number' ? event.output_index : streamToolCalls.size;
+              const existing = streamToolCalls.get(index) ?? {
+                id: event.item_id,
+                call_id: event.call_id,
+                arguments: ''
+              };
+              existing.arguments += typeof event.delta === 'string' ? event.delta : '';
+              if (event.call_id) existing.call_id = event.call_id;
+              if (event.item_id) existing.id = event.item_id;
+              streamToolCalls.set(index, existing);
+              if (!emittedToolStart) {
+                emittedToolStart = true;
+                onNetworkEvent?.({
+                  phase: 'stream',
+                  attempt: attempt + 1,
+                  stage,
+                  detail: 'response.function_call_arguments.delta'
+                });
+              }
+            }
+            if (event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+              const index = typeof event.output_index === 'number' ? event.output_index : streamToolCalls.size;
+              streamToolCalls.set(index, {
+                id: event.item.id,
+                call_id: event.item.call_id,
+                name: event.item.name,
+                arguments: event.item.arguments ?? ''
+              });
+            }
+            if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') {
+              const index = typeof event.output_index === 'number' ? event.output_index : streamToolCalls.size;
+              streamToolCalls.set(index, {
+                id: event.item.id,
+                call_id: event.item.call_id,
+                name: event.item.name,
+                arguments: event.item.arguments ?? ''
+              });
+            }
+            if (event.type === 'response.completed' && event.response) {
+              completedResponse = event.response;
+            }
+            if (event.type === 'response.failed' || event.type === 'error') {
+              throw new Error(event.error?.message || `OpenAI stream failed during ${event.type}.`);
+            }
+          }
+        }
+        if (completedResponse) return completedResponse;
+        return {
+          id: responseId || undefined,
+          output: [
+            ...Array.from(streamToolCalls.values()).map((tool) => ({
+              type: 'function_call',
+              id: tool.id,
+              call_id: tool.call_id,
+              name: tool.name,
+              arguments: tool.arguments
+            })),
+            ...(partialText
+              ? [
+                  {
+                    type: 'message',
+                    content: [
+                      {
+                        type: 'output_text',
+                        text: partialText
+                      }
+                    ]
+                  }
+                ]
+              : [])
+          ]
+        };
+      };
+      const parsed = contentType.includes('text/event-stream')
+        ? await readStreamResponse()
+        : ((await response.json()) as OpenAIResponsesResponse);
+      if (!response.ok) {
+        const errorText = parsed?.error?.message || `OpenAI API error ${response.status}`;
+        if ((response.status === 429 || response.status === 503) && attempt < retries) {
+          onNetworkEvent?.({
+            phase: 'retry',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: errorText
+          });
+          await wait(1200 * (attempt + 1));
+          continue;
+        }
+        onNetworkEvent?.({
+          phase: 'error',
+          attempt: attempt + 1,
+          stage,
+          status: response.status,
+          detail: errorText
+        });
+        throw new Error(`OpenAI API error ${response.status}: ${errorText}`);
+      }
+      onResponseTrace?.({
+        provider: 'openai',
+        attempt: attempt + 1,
+        stage,
+        text: extractOpenAIText(parsed),
+        toolCalls: parseOpenAIToolCalls(parsed)
+      });
+      return parsed;
+    } catch (error) {
+      const didTimeout =
+        requestController.signal.aborted &&
+        !(signal?.aborted) &&
+        error instanceof Error &&
+        error.name === 'AbortError';
+      if (didTimeout) {
+        const streamHint =
+          typeof lastStreamEvent === 'string' && lastStreamEvent
+            ? ` Last stream event: ${lastStreamEvent}.${partialText ? ` Partial text: ${truncateText(partialText, 160)}` : ''}`
+            : ` Last activity: ${lastActivity}.`;
+        onNetworkEvent?.({
+          phase: 'timeout',
+          attempt: attempt + 1,
+          stage,
+          detail: `OpenAI request timed out after ${requestTimeoutMs}ms.${streamHint}`
+        });
+        lastError = new Error(`OpenAI request timed out after ${requestTimeoutMs}ms.${streamHint}`);
+        break;
+      }
+      if (signal?.aborted) {
+        onNetworkEvent?.({
+          phase: 'aborted',
+          attempt: attempt + 1,
+          stage,
+          detail: error instanceof Error ? error.message : String(error)
+        });
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      onNetworkEvent?.({
+        phase: 'error',
+        attempt: attempt + 1,
+        stage,
+        detail: error instanceof Error ? error.message : String(error)
+      });
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= retries) break;
+      onNetworkEvent?.({
+        phase: 'retry',
+        attempt: attempt + 1,
+        stage,
+        detail: 'Retrying after transport error'
+      });
+      await wait(1000 * (attempt + 1));
+    } finally {
+      inactivityTimeout.clear();
+      if (signal) signal.removeEventListener('abort', abortFromParent);
+    }
+  }
+  throw lastError ?? new Error('OpenAI API request failed.');
+};
+
+const buildInspectionPrompt = (
+  request: string,
+  scope: AssistantScope,
+  conversationHistory: AssistantConversationEntry[]
+) => {
+  const recentConversation = conversationHistory
+    .slice(-6)
+    .map((entry) => `${entry.role}: ${entry.content}`)
+    .join('\n');
+  return [
+    'You are helping edit a SugarPy notebook.',
+    COMPACT_REFERENCE,
+    'First inspect the notebook using the available tools before planning changes.',
+    'Only inspect what you need. Prefer concise tool usage.',
+    ...(requestLooksMathLike(request)
+      ? [
+          'This request looks mathematical or plotting-related.',
+          'Before planning, consult the SugarPy references you need to confirm Math-cell and plotting behavior.',
+          "Start with get_reference('math_cells') and, if plotting or geometry is involved, get_reference('plotting').",
+          'Do not assume Python is needed before checking whether SugarPy Math cells already support the workflow.'
+        ]
+      : []),
+    `Scope preference: ${scope}.`,
+    `User request: ${request}`,
+    recentConversation ? `Recent conversation:\n${recentConversation}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n');
+};
+
+const runGeminiToolLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  scope: AssistantScope,
+  context: NotebookAssistantContext,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<ToolLoopResult> => {
+  onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
+  const contents: GeminiContent[] = [
+    {
+      role: 'user',
+      parts: [
+        {
+          text: buildInspectionPrompt(request, scope, conversationHistory)
+        }
+      ]
+    }
+  ];
+  const transcript: string[] = [];
+  const seenCalls = new Set<string>();
+  const inspectedCells = new Map<string, ReturnType<typeof renderCellDetail>>();
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Inspection round ${round + 1}`
+    });
+    const response = await callGemini(apiKey, model, {
+      systemInstruction: {
+        parts: [
+          {
+            text: [
+              'Inspect the notebook with function calls, then respond with short planning notes once you have enough context.',
+              'Use get_reference when platform behavior matters.',
+              ...(requestLooksMathLike(request)
+                ? [
+                    "For mathematical or plotting requests, confirm SugarPy support from references before planning.",
+                    "Consult get_reference('math_cells') first and get_reference('plotting') when geometry or plotting is relevant."
+                  ]
+                : [])
+            ].join('\n')
+          }
+        ]
+      },
+      contents,
+      tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: 'AUTO'
+        }
+      },
+      generationConfig: {
+        temperature: 0.2
+      }
+    }, 3, signal, thinkingLevel, onNetworkEvent, 'inspection', onResponseTrace);
+
+    const toolCalls = parseToolCalls(response);
+    const candidateContent = response.candidates?.[0]?.content;
+    if (candidateContent?.parts?.length) {
+      contents.push({
+        role: 'model',
+        parts: candidateContent.parts
+      });
+    }
+
+    if (toolCalls.length === 0) {
+      const notes = extractText(response);
+      if (notes) transcript.push(`Model notes: ${notes}`);
+      onActivity?.({ kind: 'phase', label: 'Inspection finished', detail: notes || 'No extra notes.' });
+      return { notes, transcript, inspectedCells: Array.from(inspectedCells.values()) };
+    }
+
+    const toolResponses: GeminiPart[] = [];
+    toolCalls.forEach((toolCall) => {
+      const signature = JSON.stringify({ name: toolCall.name, args: toolCall.args ?? {} });
+      if (seenCalls.has(signature)) {
+        return;
+      }
+      seenCalls.add(signature);
+      const result = executeTool(toolCall, context, scope);
+      transcript.push(`Used tool ${toolCall.name}.`);
+      onActivity?.({
+        kind: toolCall.name === 'get_reference' ? 'reference' : 'tool',
+        label: toolCall.name,
+        detail:
+          toolCall.name === 'get_reference'
+            ? String(toolCall.args.section || '')
+            : toolCall.name === 'get_cell'
+              ? String(toolCall.args.cellId || '')
+              : undefined
+      });
+      if (toolCall.name === 'get_cell' || toolCall.name === 'get_active_cell') {
+        const detail = result as ReturnType<typeof renderCellDetail>;
+        if (detail?.id) inspectedCells.set(detail.id, detail);
+      }
+      if (toolCall.name === 'get_recent_errors' && Array.isArray(result)) {
+        result.forEach((detail) => {
+          if (detail?.id) inspectedCells.set(detail.id, detail);
+        });
+      }
+      toolResponses.push({
+        functionResponse: {
+          name: toolCall.name,
+          response: { result }
+        }
+      });
+    });
+    if (toolResponses.length === 0) {
+      onActivity?.({ kind: 'phase', label: 'Inspection stopped', detail: 'Repeated tool calls were ignored.' });
+      return {
+        notes: 'Stopped tool inspection after repeated tool calls.',
+        transcript,
+        inspectedCells: Array.from(inspectedCells.values())
+      };
+    }
+    contents.push({
+      role: 'tool',
+      parts: toolResponses
+    });
+  }
+
+  return {
+    notes: '',
+    transcript,
+    inspectedCells: Array.from(inspectedCells.values())
+  };
+};
+
+const runOpenAIToolLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  scope: AssistantScope,
+  context: NotebookAssistantContext,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<ToolLoopResult> => {
+  onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
+  const transcript: string[] = [];
+  const seenCalls = new Set<string>();
+  const inspectedCells = new Map<string, ReturnType<typeof renderCellDetail>>();
+  let previousResponseId: string | undefined;
+  let nextInput: unknown = buildInspectionPrompt(request, scope, conversationHistory);
+  const instructions = [
+    'Inspect the notebook with function calls, then respond with short planning notes once you have enough context.',
+    'Use get_reference when platform behavior matters.',
+    ...(requestLooksMathLike(request)
+      ? [
+          "For mathematical or plotting requests, confirm SugarPy support from references before planning.",
+          "Consult get_reference('math_cells') first and get_reference('plotting') when geometry or plotting is relevant."
+        ]
+      : [])
+  ].join('\n');
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Inspection round ${round + 1}`
+    });
+    const response = await callOpenAIResponses(
+      apiKey,
+      model,
+      {
+        instructions,
+        input: nextInput,
+        tools: OPENAI_TOOL_DECLARATIONS,
+        tool_choice: 'auto',
+        ...(previousResponseId ? { previous_response_id: previousResponseId } : {})
+      },
+      3,
+      signal,
+      thinkingLevel,
+      onNetworkEvent,
+      'inspection',
+      onResponseTrace
+    );
+    previousResponseId = response.id || previousResponseId;
+    const toolCalls = parseOpenAIToolCalls(response);
+
+    if (toolCalls.length === 0) {
+      const notes = extractOpenAIText(response);
+      if (notes) transcript.push(`Model notes: ${notes}`);
+      onActivity?.({ kind: 'phase', label: 'Inspection finished', detail: notes || 'No extra notes.' });
+      return { notes, transcript, inspectedCells: Array.from(inspectedCells.values()) };
+    }
+
+    let uniqueToolCount = 0;
+    const toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }> = [];
+    toolCalls.forEach((toolCall, index) => {
+      const signature = JSON.stringify({ name: toolCall.name, args: toolCall.args ?? {} });
+      const isRepeated = seenCalls.has(signature);
+      if (!isRepeated) {
+        seenCalls.add(signature);
+        uniqueToolCount += 1;
+      }
+      const result = isRepeated
+        ? { ignored: true, reason: 'Repeated tool call was ignored.' }
+        : executeTool(toolCall, context, scope);
+      if (!isRepeated) {
+        transcript.push(`Used tool ${toolCall.name}.`);
+        onActivity?.({
+          kind: toolCall.name === 'get_reference' ? 'reference' : 'tool',
+          label: toolCall.name,
+          detail:
+            toolCall.name === 'get_reference'
+              ? String(toolCall.args.section || '')
+              : toolCall.name === 'get_cell'
+                ? String(toolCall.args.cellId || '')
+                : undefined
+        });
+        if (toolCall.name === 'get_cell' || toolCall.name === 'get_active_cell') {
+          const detail = result as ReturnType<typeof renderCellDetail>;
+          if (detail?.id) inspectedCells.set(detail.id, detail);
+        }
+        if (toolCall.name === 'get_recent_errors' && Array.isArray(result)) {
+          result.forEach((detail) => {
+            if (detail?.id) inspectedCells.set(detail.id, detail);
+          });
+        }
+      }
+      toolOutputs.push({
+        type: 'function_call_output',
+        call_id: toolCall.id || `tool-call-${round}-${index}`,
+        output: JSON.stringify(result)
+      });
+    });
+
+    if (uniqueToolCount === 0) {
+      onActivity?.({ kind: 'phase', label: 'Inspection stopped', detail: 'Repeated tool calls were ignored.' });
+      return {
+        notes: 'Stopped tool inspection after repeated tool calls.',
+        transcript,
+        inspectedCells: Array.from(inspectedCells.values())
+      };
+    }
+    nextInput = toolOutputs;
+  }
+
+  return {
+    notes: '',
+    transcript,
+    inspectedCells: Array.from(inspectedCells.values())
+  };
+};
+
+const runToolLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  scope: AssistantScope,
+  context: NotebookAssistantContext,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<ToolLoopResult> => {
+  if (requestLooksMathLike(request) && context.cells.length === 0) {
+    onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
+    onActivity?.({ kind: 'reference', label: 'get_reference', detail: 'math_cells' });
+    onActivity?.({ kind: 'reference', label: 'get_reference', detail: 'plotting' });
+    onActivity?.({ kind: 'phase', label: 'Inspection finished', detail: 'Used built-in math and plotting references.' });
+    return {
+      notes: 'Empty notebook. Used built-in SugarPy math/plotting references; no notebook cells needed for inspection.',
+      transcript: [
+        'Used local reference: math_cells.',
+        'Used local reference: plotting.',
+        'Notebook is empty.'
+      ],
+      inspectedCells: []
+    };
+  }
+  return detectAssistantProvider(model) === 'openai'
+    ? runOpenAIToolLoop(
+        apiKey,
+        model,
+        request,
+        scope,
+        context,
+        onActivity,
+        signal,
+        conversationHistory,
+        thinkingLevel,
+        onNetworkEvent,
+        onResponseTrace
+      )
+    : runGeminiToolLoop(
+        apiKey,
+        model,
+        request,
+        scope,
+        context,
+        onActivity,
+        signal,
+        conversationHistory,
+        thinkingLevel,
+        onNetworkEvent,
+        onResponseTrace
+      );
+};
+
+const buildValidationPrompt = (
+  request: string,
+  context: NotebookAssistantContext,
+  draftPlan: AssistantPlan,
+  conversationHistory: AssistantConversationEntry[]
+) =>
+  JSON.stringify({
+    userRequest: request,
+    notebookName: context.notebookName,
+    activeCellId: context.activeCellId,
+    defaults: {
+      trigMode: context.defaultTrigMode,
+      renderMode: context.defaultMathRenderMode
+    },
+    conversationHistory: conversationHistory.slice(-6),
+    draftPlan
+  });
+
+const validationSystemPrompt = [
+  'You are validating a drafted SugarPy notebook change set.',
+  COMPACT_REFERENCE,
+  'The live notebook has not been changed yet.',
+  'You must use run_code_in_sandbox to self-check every Python code snippet that appears in code-cell insert/update operations before returning the final plan.',
+  'Sandbox execution is isolated and never mutates the notebook.',
+  'A successful sandbox check means the code is valid for preview; actual notebook execution happens later when the user chooses Apply and Run.',
+  'Do not claim that code execution is unavailable if sandbox validation succeeded.',
+  'Default to contextPreset bootstrap-only unless the draft truly depends on notebook code state.',
+  'Use imports-only, selected-cells, or full-notebook-replay only when that context is required.',
+  'Do not use sandbox execution for Math or Stoich cells.',
+  'If the sandbox reports an error or timeout, revise the draft plan or add a warning that validation failed.',
+  'Return the full final AssistantPlan JSON and nothing else.'
+].join('\n');
+
+const VALIDATION_REQUIRED_REMINDER = [
+  'Your previous validation response did not call run_code_in_sandbox.',
+  'Before returning the final plan, validate every inserted or updated code cell with run_code_in_sandbox.',
+  'If validation succeeds, return the updated AssistantPlan without warnings about execution being unavailable.',
+  'If validation fails, revise the code or add a precise validation warning.'
+].join('\n');
+
+const runGeminiValidationLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  context: NotebookAssistantContext,
+  draftPlan: AssistantPlan,
+  sandboxRunner: AssistantSandboxRunner,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  onSandboxExecution?: (trace: AssistantSandboxExecutionTrace) => void
+): Promise<AssistantPlan> => {
+  const contents: GeminiContent[] = [
+    {
+      role: 'user',
+      parts: [{ text: buildValidationPrompt(request, context, draftPlan, conversationHistory) }]
+    }
+  ];
+  let sawSandboxValidation = false;
+
+  for (let round = 0; round < MAX_VALIDATION_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Validation round ${round + 1}`
+    });
+    const response = await callGemini(
+      apiKey,
+      model,
+      {
+        systemInstruction: {
+          parts: [{ text: validationSystemPrompt }]
+        },
+        contents,
+        tools: [{ functionDeclarations: [SANDBOX_TOOL_DECLARATION] }],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: 'AUTO'
+          }
+        },
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+          responseSchema: PLAN_SCHEMA
+        }
+      },
+      3,
+      signal,
+      thinkingLevel,
+      onNetworkEvent,
+      'validation',
+      onResponseTrace
+    );
+    const toolCalls = parseToolCalls(response);
+    const candidateContent = response.candidates?.[0]?.content;
+    if (candidateContent?.parts?.length) {
+      contents.push({
+        role: 'model',
+        parts: candidateContent.parts
+      });
+    }
+    if (toolCalls.length === 0) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        contents.push({
+          role: 'user',
+          parts: [{ text: VALIDATION_REQUIRED_REMINDER }]
+        });
+        continue;
+      }
+      return normalizePlan(JSON.parse(stripCodeFence(extractText(response)) || '{}'));
+    }
+
+    const toolResponses: GeminiPart[] = [];
+    for (const toolCall of toolCalls) {
+      const sandboxRequest = normalizeSandboxRequest(toolCall.args);
+      const result = await sandboxRunner(sandboxRequest, onActivity);
+      sawSandboxValidation = true;
+      onSandboxExecution?.(summarizeSandboxExecution(sandboxRequest, result));
+      toolResponses.push({
+        functionResponse: {
+          name: toolCall.name,
+          response: { result }
+        }
+      });
+    }
+    contents.push({
+      role: 'tool',
+      parts: toolResponses
+    });
+  }
+
+  return draftPlan;
+};
+
+const runOpenAIValidationLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  context: NotebookAssistantContext,
+  draftPlan: AssistantPlan,
+  sandboxRunner: AssistantSandboxRunner,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  onSandboxExecution?: (trace: AssistantSandboxExecutionTrace) => void
+): Promise<AssistantPlan> => {
+  let previousResponseId: string | undefined;
+  let nextInput: unknown = buildValidationPrompt(request, context, draftPlan, conversationHistory);
+  let sawSandboxValidation = false;
+
+  for (let round = 0; round < MAX_VALIDATION_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Validation round ${round + 1}`
+    });
+    const response = await callOpenAIResponses(
+      apiKey,
+      model,
+      {
+        instructions: validationSystemPrompt,
+        input: nextInput,
+        tools: [OPENAI_SANDBOX_TOOL_DECLARATION, OPENAI_SUBMIT_PLAN_TOOL_DECLARATION],
+        tool_choice: 'auto',
+        ...(previousResponseId ? { previous_response_id: previousResponseId } : {})
+      },
+      3,
+      signal,
+      thinkingLevel,
+      onNetworkEvent,
+      'validation',
+      onResponseTrace
+    );
+    previousResponseId = response.id || previousResponseId;
+    const submittedPlan = extractSubmittedPlan(response);
+    if (submittedPlan) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        nextInput = VALIDATION_REQUIRED_REMINDER;
+        continue;
+      }
+      return submittedPlan;
+    }
+    const toolCalls = parseOpenAIToolCalls(response);
+    if (toolCalls.length === 0) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        nextInput = VALIDATION_REQUIRED_REMINDER;
+        continue;
+      }
+      return normalizePlan(JSON.parse(stripCodeFence(extractOpenAIText(response)) || '{}'));
+    }
+    if (!sawSandboxValidation && toolCalls.some((toolCall) => toolCall.name === 'submit_plan') && round < MAX_VALIDATION_ROUNDS - 1) {
+      nextInput = VALIDATION_REQUIRED_REMINDER;
+      continue;
+    }
+
+    const toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }> = [];
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const toolCall = toolCalls[index];
+      if (toolCall.name === 'submit_plan') {
+        return normalizePlan(toolCall.args);
+      }
+      if (toolCall.name !== 'run_code_in_sandbox') continue;
+      const sandboxRequest = normalizeSandboxRequest(toolCall.args);
+      const result = await sandboxRunner(sandboxRequest, onActivity);
+      sawSandboxValidation = true;
+      onSandboxExecution?.(summarizeSandboxExecution(sandboxRequest, result));
+      toolOutputs.push({
+        type: 'function_call_output',
+        call_id: toolCall.id || `validation-tool-${round}-${index}`,
+        output: JSON.stringify(result)
+      });
+    }
+    nextInput = toolOutputs;
+  }
+
+  return draftPlan;
+};
+
+const runOpenAIPlanningLoop = async (
+  apiKey: string,
+  model: string,
+  planningSystemPrompt: string,
+  planningPayload: string,
+  signal?: AbortSignal,
+  thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<AssistantPlan> => {
+  let previousResponseId: string | undefined;
+  let nextInput: unknown = planningPayload;
+  let metadata: { summary: string; userMessage: string; warnings: string[] } | null = null;
+  const operations: AssistantOperation[] = [];
+
+  for (let round = 0; round < MAX_PLANNING_ROUNDS; round += 1) {
+    const response = await callOpenAIResponses(
+      apiKey,
+      model,
+      {
+        instructions: planningSystemPrompt,
+        input: nextInput,
+        tools: [
+          OPENAI_SUBMIT_PLAN_TOOL_DECLARATION,
+          OPENAI_PLAN_METADATA_TOOL_DECLARATION,
+          OPENAI_PLAN_OPERATION_TOOL_DECLARATION,
+          OPENAI_FINALIZE_PLAN_TOOL_DECLARATION
+        ],
+        tool_choice: 'auto',
+        ...(previousResponseId ? { previous_response_id: previousResponseId } : {})
+      },
+      0,
+      signal,
+      model.toLowerCase().startsWith('gpt-5.1-codex') ? 'low' : thinkingLevel,
+      onNetworkEvent,
+      'planning',
+      onResponseTrace,
+      OPENAI_PLANNING_REQUEST_TIMEOUT_MS
+    );
+    previousResponseId = response.id || previousResponseId;
+    const submittedPlan = extractSubmittedPlan(response);
+    if (submittedPlan) {
+      return submittedPlan;
+    }
+    const toolCalls = parseOpenAIToolCalls(response);
+    if (toolCalls.length === 0) {
+      const fallbackText = extractOpenAIText(response);
+      const parsedFallback = tryParsePlanText(fallbackText);
+      if (parsedFallback) {
+        return parsedFallback;
+      }
+      if (fallbackText.trim() && round < MAX_PLANNING_ROUNDS - 1) {
+        nextInput = [
+          'Your previous planning response was not valid AssistantPlan JSON and did not use the planning tools.',
+          'Retry now.',
+          'Return the plan only via tool calls or strict AssistantPlan JSON.',
+          'Do not return prose.'
+        ].join('\n');
+        continue;
+      }
+      const currentPlan = buildPlanFromParts(metadata, operations);
+      if (currentPlan) return currentPlan;
+      throw new Error('OpenAI planning finished without a submitted plan.');
+    }
+
+    const toolOutputs: Array<{ type: 'function_call_output'; call_id: string; output: string }> = [];
+    let sawFinalize = false;
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const toolCall = toolCalls[index];
+      if (toolCall.name === 'submit_plan') {
+        return normalizePlan(toolCall.args);
+      }
+      if (toolCall.name === 'set_plan_metadata') {
+        metadata = {
+          summary: String(toolCall.args.summary ?? ''),
+          userMessage: String(toolCall.args.userMessage ?? ''),
+          warnings: Array.isArray(toolCall.args.warnings)
+            ? toolCall.args.warnings.map((item) => String(item))
+            : []
+        };
+        toolOutputs.push({
+          type: 'function_call_output',
+          call_id: toolCall.id || `planning-metadata-${round}-${index}`,
+          output: JSON.stringify({ ok: true, metadataSet: true })
+        });
+        continue;
+      }
+      if (toolCall.name === 'add_plan_operation') {
+        const normalized = normalizePlan({
+          summary: metadata?.summary ?? '',
+          userMessage: metadata?.userMessage ?? '',
+          warnings: metadata?.warnings ?? [],
+          operations: [toolCall.args]
+        });
+        if (normalized.operations[0]) {
+          operations.push(normalized.operations[0]);
+        }
+        toolOutputs.push({
+          type: 'function_call_output',
+          call_id: toolCall.id || `planning-op-${round}-${index}`,
+          output: JSON.stringify({ ok: true, operationCount: operations.length })
+        });
+        continue;
+      }
+      if (toolCall.name === 'finalize_plan') {
+        sawFinalize = true;
+        toolOutputs.push({
+          type: 'function_call_output',
+          call_id: toolCall.id || `planning-finalize-${round}-${index}`,
+          output: JSON.stringify({ ok: true, finalized: true })
+        });
+      }
+    }
+
+    const currentPlan = buildPlanFromParts(metadata, operations);
+    if (sawFinalize && currentPlan) {
+      return currentPlan;
+    }
+    nextInput = toolOutputs;
+  }
+
+  const currentPlan = buildPlanFromParts(metadata, operations);
+  if (currentPlan) return currentPlan;
+  throw new Error('OpenAI planning exceeded the maximum number of planning rounds.');
+};
+
+const normalizePlan = (raw: any): AssistantPlan => {
+  const payload = raw && typeof raw === 'object' && raw.plan && typeof raw.plan === 'object' ? raw.plan : raw;
+  const operations = Array.isArray(payload?.operations) ? payload.operations : [];
+  return {
+    summary: String(payload?.summary ?? 'Prepared a notebook change set.'),
+    userMessage: String(payload?.userMessage ?? ''),
+    warnings: Array.isArray(payload?.warnings) ? payload.warnings.map((item: unknown) => String(item)) : [],
+    operations: operations
+      .map((item: any) => {
+        const type = String(item?.type ?? '');
+        if (type === 'insert_cell') {
+          return {
+            type,
+            index: Number(item?.index ?? 0),
+            cellType: (item?.cellType ?? 'code') as AssistantCellKind,
+            source: String(item?.source ?? ''),
+            reason: item?.reason ? String(item.reason) : undefined
+          };
+        }
+        if (type === 'update_cell') {
+          return {
+            type,
+            cellId: String(item?.cellId ?? ''),
+            source: String(item?.source ?? ''),
+            reason: item?.reason ? String(item.reason) : undefined
+          };
+        }
+        if (type === 'delete_cell') {
+          return {
+            type,
+            cellId: String(item?.cellId ?? ''),
+            reason: item?.reason ? String(item.reason) : undefined
+          };
+        }
+        if (type === 'move_cell') {
+          return {
+            type,
+            cellId: String(item?.cellId ?? ''),
+            index: Number(item?.index ?? 0),
+            reason: item?.reason ? String(item.reason) : undefined
+          };
+        }
+        if (type === 'set_notebook_defaults') {
+          return {
+            type,
+            trigMode: item?.trigMode === 'rad' ? 'rad' : item?.trigMode === 'deg' ? 'deg' : undefined,
+            renderMode:
+              item?.renderMode === 'decimal' ? 'decimal' : item?.renderMode === 'exact' ? 'exact' : undefined,
+            reason: item?.reason ? String(item.reason) : undefined
+          };
+        }
+        return null;
+      })
+      .filter(Boolean) as AssistantOperation[]
+  };
+};
+
+export async function planNotebookChanges(params: {
+  apiKey: string;
+  model: string;
+  request: string;
+  scope: AssistantScope;
+  preference: AssistantPreference;
+  context: NotebookAssistantContext;
+  onActivity?: (item: AssistantActivity) => void;
+  signal?: AbortSignal;
+  conversationHistory?: AssistantConversationEntry[];
+  thinkingLevel?: AssistantThinkingLevel;
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void;
+  onResponseTrace?: (trace: AssistantResponseTrace) => void;
+  sandboxRunner?: AssistantSandboxRunner;
+  onSandboxExecution?: (trace: AssistantSandboxExecutionTrace) => void;
+}) {
+  const {
+    apiKey,
+    model,
+    request,
+    scope,
+    preference,
+    context,
+    onActivity,
+    signal,
+    conversationHistory = [],
+    thinkingLevel = 'dynamic',
+    onNetworkEvent,
+    onResponseTrace,
+    sandboxRunner,
+    onSandboxExecution
+  } = params;
+  onActivity?.({ kind: 'phase', label: 'Preparing context' });
+  const inspection = await runToolLoop(
+    apiKey,
+    model,
+    request,
+    scope,
+    context,
+    onActivity,
+    signal,
+    conversationHistory,
+    thinkingLevel,
+    onNetworkEvent,
+    onResponseTrace
+  );
+  const notebookManifest =
+    scope === 'active'
+      ? context.cells.filter((cell) => cell.id === context.activeCellId).map(summarizeCell)
+      : context.cells.map(summarizeCell);
+
+  const preferenceRules = (() => {
+    switch (preference) {
+      case 'cas':
+        return [
+          'Preference mode: CAS-first.',
+          'Prefer Math cells over Code cells when the task can be expressed naturally in SugarPy CAS.',
+          'Prefer equations, assignments, symbolic transformations, and SugarPy plot(...) workflows over Python implementations.',
+          'Avoid Python helper functions unless they are required for the requested task.'
+        ];
+      case 'python':
+        return [
+          'Preference mode: Python-first.',
+          'Prefer Code cells and ordinary Python/SymPy syntax over SugarPy CAS shorthand.',
+          'Use Math cells only when the user explicitly wants CAS notation or symbolic card rendering.'
+        ];
+      case 'explain':
+        return [
+          'Preference mode: Explain-first.',
+          'Prefer a short Markdown explanation plus the minimum runnable notebook content.',
+          'Avoid adding extra implementation cells beyond what is necessary to answer the request.'
+        ];
+      default:
+        return [
+          'Preference mode: Auto.',
+          'Default to CAS-first behavior.',
+          'If the request is math, symbolic, equation-based, plotting-related, or naturally expressible in SugarPy Math cells, prefer Math cells over Code cells.',
+          'Treat mathematical requests as Math-cell tasks by default; do not switch to Code cells unless CAS is clearly unsupported or the user explicitly asks for Python.',
+          'Treat Code cells as a last resort for math requests, not as an equal alternative.',
+          'Use Code cells only when the request is not really mathematical, when CAS is clearly a poor fit, or when the user explicitly asks for Python.'
+        ];
+    }
+  })();
+
+  onActivity?.({ kind: 'phase', label: 'Generating structured plan' });
+  onActivity?.({ kind: 'phase', label: 'Waiting for model', detail: 'Final plan generation' });
+  const planningSystemPrompt = [
+    'You are generating a structured SugarPy notebook change set.',
+    COMPACT_REFERENCE,
+    'Return only operations that can be applied safely and deterministically.',
+    'Use only these operation types: insert_cell, update_cell, delete_cell, move_cell, set_notebook_defaults.',
+    'Prefer submitting the full plan in one submit_plan call.',
+    'Use step-by-step planning tool calls only if you truly cannot produce the full plan in one response.',
+    'For stoich cells, store the reaction text in source.',
+    'Prefer minimal edits over broad rewrites.',
+    'Do not invent cell ids that do not exist.',
+    'Prefer notebook content that is natively supported by SugarPy over mathematically equivalent but less compatible forms.',
+    'By default, prefer SugarPy Math cells and CAS-native syntax for mathematical work.',
+    'If the request is mathematical, solve it in SugarPy Math cells by default.',
+    'Do not switch a math request into Python/Code cells just because code could also solve it.',
+    'Treat Code cells as last resort only for mathematical work.',
+    'Before choosing Code cells for a math task, assume the documented Math-cell workflow is the preferred path and use code only if that documented path still cannot express the task.',
+    'Only fall back to Code cells when the task is not math-oriented, when CAS would be awkward or unsupported, or when the user explicitly asks for Python.',
+    'When there are multiple equivalent representations, choose the one that SugarPy can execute, render, and plot directly with the current documented behavior.',
+    'For geometry and plotting tasks, prefer implicit equations or directly plottable expressions over parametric forms unless the user explicitly asked for a parametric representation.',
+    'Do not assume plot() supports representations that are not documented in SugarPy.',
+    'If a request asks for a graph, generate notebook content that will actually produce the graph, not just helper definitions.',
+    'SugarPy Math cells are sensitive to the notebook or cell trig mode (Deg/Rad).',
+    'Do not generate trig-based plotting formulas whose correctness depends on the current Deg/Rad toggle unless the user explicitly asked for that form.',
+    'If a geometric plot can be written without trig, prefer the trig-free form.',
+    'If you choose a trig-based form, you must account for the current trig mode explicitly or change notebook defaults on purpose.',
+    'For direct geometry-solving tasks, prefer short CAS derivations over helper-heavy code.',
+    'When the user gives concrete points or constants, substitute those numeric values directly into the Math-cell equations instead of introducing Python tuples, indexing, or symbols(...) boilerplate unless that extra structure is truly required.',
+    'For circle-from-points/radius tasks, prefer a minimal Math-cell workflow: define the given coordinates, write one distance equation per point, pass those equations to solve(...), then build the resulting circle equations from the returned centers.',
+    'When solve(...) is the natural SugarPy/CAS tool for the request, use it directly instead of replacing it with manual algebra or Python/SymPy scaffolding.',
+    'In Math cells, name := expr is an assignment, not a function definition.',
+    'Use name(arg) := expr only when the user actually needs a callable function.',
+    'Do not later call a name as a function if you defined it with plain := assignment.',
+    ...(requestLooksLikeDirectGeometrySolve(request)
+      ? [
+          'This request looks like a direct geometry solve with concrete inputs.',
+          'Favor 1-2 compact Math cells that a student can read top-to-bottom.',
+          'Avoid over-engineered intermediate abstractions when two explicit equations and one solve(...) call are enough.'
+        ]
+      : []),
+    ...(requestLooksMathLike(request)
+      ? [
+          'This request looks mathematical.',
+          'Stay in Math cells unless there is a concrete CAS limitation that blocks the task.',
+          'Do not generate Python scaffolding for a math exercise unless the user explicitly requested Python.'
+        ]
+      : []),
+    ...preferenceRules
+  ].join('\n');
+  const planningPayload = JSON.stringify({
+    userRequest: request,
+    conversationHistory: conversationHistory.slice(-6),
+    scope,
+    preference,
+    notebookName: context.notebookName,
+    activeCellId: context.activeCellId,
+    defaults: {
+      trigMode: context.defaultTrigMode,
+      renderMode: context.defaultMathRenderMode
+    },
+    notebookManifest,
+    inspectedCells: inspection.inspectedCells,
+    inspectionNotes: inspection.notes,
+    inspectionSummary: inspection.transcript
+  });
+
+  const provider = detectAssistantProvider(model);
+  const runPlanning = async (systemPrompt: string) => {
+    if (provider === 'openai') {
+      return runOpenAIPlanningLoop(
+        apiKey,
+        model,
+        systemPrompt,
+        planningPayload,
+        signal,
+        thinkingLevel,
+        onNetworkEvent,
+        onResponseTrace
+      );
+    }
+    const rawText = stripCodeFence(
+      extractText(
+        await callGemini(
+          apiKey,
+          model,
+          {
+            systemInstruction: {
+              parts: [{ text: systemPrompt }]
+            },
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: planningPayload }]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              responseSchema: PLAN_SCHEMA
+            }
+          },
+          3,
+          signal,
+          thinkingLevel,
+          onNetworkEvent,
+          'planning',
+          onResponseTrace
+        )
+      )
+    );
+    return normalizePlan(JSON.parse(rawText || '{}'));
+  };
+
+  let plan: AssistantPlan = await runPlanning(planningSystemPrompt);
+
+  if (requestLooksMathLike(request) && !requestExplicitlyAsksForPython(request) && planHasPythonCodeOperations(plan)) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Revising plan',
+      detail: 'Math request should stay in Math cells'
+    });
+    plan = await runPlanning(
+      [
+        planningSystemPrompt,
+        'The previous draft incorrectly used Code cells for a mathematical request.',
+        'Regenerate the plan using Math cells only.',
+        'For this request, plans that insert or update Code cells are invalid unless the user explicitly asked for Python.',
+        'If SugarPy CAS cannot express the task, explain that limitation in warnings instead of generating Python code.'
+      ].join('\n')
+    );
+  }
+
+  if (
+    requestLooksLikeDirectGeometrySolve(request) &&
+    !requestExplicitlyAsksForPython(request) &&
+    !planUsesSolveInMathCells(plan)
+  ) {
+    const localSolvePlan = buildDirectCircleSolvePlan(request);
+    if (localSolvePlan) {
+      onActivity?.({
+        kind: 'phase',
+        label: 'Revising plan',
+        detail: 'Replaced non-solve geometry draft with local CAS solve template'
+      });
+      plan = localSolvePlan;
+    } else {
+      onActivity?.({
+        kind: 'phase',
+        label: 'Revising plan',
+        detail: 'Direct geometry request should use solve(...) in Math cells'
+      });
+      plan = await runPlanning(
+        [
+          planningSystemPrompt,
+          'The previous draft avoided solve(...) even though this direct geometry task should use it.',
+          'Regenerate the plan so the Math-cell solution explicitly uses solve(...) for the circle-center equations.',
+          'For this request, manual geometric derivation without solve(...) is not preferred unless solve(...) is impossible in SugarPy CAS.',
+          'Return a compact Math-cell solution that uses solve(...) directly.'
+        ].join('\n')
+      );
+    }
+  }
+
+  if (sandboxRunner && planHasPythonCodeOperations(plan)) {
+    onActivity?.({ kind: 'phase', label: 'Validating generated code' });
+    plan =
+      provider === 'openai'
+        ? await runOpenAIValidationLoop(
+            apiKey,
+            model,
+            request,
+            context,
+            plan,
+            sandboxRunner,
+            onActivity,
+            signal,
+            conversationHistory,
+            thinkingLevel,
+            onNetworkEvent,
+            onResponseTrace,
+            onSandboxExecution
+          )
+        : await runGeminiValidationLoop(
+            apiKey,
+            model,
+            request,
+            context,
+            plan,
+            sandboxRunner,
+            onActivity,
+            signal,
+            conversationHistory,
+            thinkingLevel,
+            onNetworkEvent,
+            onResponseTrace,
+            onSandboxExecution
+          );
+  }
+
+  onActivity?.({ kind: 'phase', label: 'Plan ready' });
+  return plan;
+}

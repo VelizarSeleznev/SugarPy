@@ -33,7 +33,6 @@ retry_until_ok() {
   echo "${description} did not become healthy in time."
   bash -lc "${command}"
 }
-
 echo "Local deploy root: ${DEPLOY_ROOT}"
 echo "Release ID: ${RELEASE_ID}"
 

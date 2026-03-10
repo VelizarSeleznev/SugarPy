@@ -34,7 +34,7 @@ Use it together with:
 ### Header actions
 - Notebook name field.
 - `Run All` for all runnable cells from top to bottom.
-- `Assistant` button for optional Gemini-powered notebook editing.
+- `Assistant` button for optional AI-powered notebook editing.
 - Connection status pill.
 - `⋮` menu for notebook, file, and reference actions.
 - Header overlays dismiss on outside click or `Escape`.
@@ -164,41 +164,85 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Math cells expose a smaller CAS-oriented suggestion list.
 - Code cells also support slash-style command discovery from the function catalog.
 
-## Gemini assistant
+## AI assistant
 
 ### Current behavior
 - The assistant is optional and opened from the header `Assistant` button.
+- It uses a chat-style drawer with a composer at the bottom.
 - It drafts notebook edits from a plain-language request.
 - It shows a preview before anything is applied.
-- It lets the user choose a generation preference:
-  - `Auto`
-  - `CAS-first`
-  - `Python-first`
-  - `Explain-first`
+- The main chat UI keeps only the core controls visible.
+- Assistant settings are collapsed under `Settings`.
+- The main assistant flow now defaults to whole-notebook context and `Auto` output mode.
+- The drawer keeps the last 5 chats per notebook in browser `localStorage`.
+- Creating a new notebook starts with a fresh assistant history.
+- Assistant runs are also traced for debugging.
 - It supports:
   - `Apply`
   - `Apply and Run`
   - `Undo Last AI Change`
+  - `Stop`
+  - `New chat`
 
 ### Model integration
-- Gemini runs directly from the frontend via the Google Generative Language API.
+- Assistant models run directly from the frontend via either the OpenAI Responses API or the Google Generative Language API.
 - The UI stores assistant settings in browser `localStorage`.
-- The API key can be pasted into the assistant drawer or prefilled through `VITE_GEMINI_API_KEY`.
-- The model name can be overridden in the drawer and defaults to `gemini-3.1-flash-lite-preview`.
+- The assistant drawer provides preset model choices and also allows a custom model id.
+- The model defaults to `gpt-5.1-codex-mini`.
+- Assistant settings also expose a `Thinking level` selector.
+- SugarPy now normalizes the available `thinkingLevel` options per model family:
+  - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
+  - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`
+  - `Gemini 3 Flash / Flash-Lite`: `dynamic`, `minimal`, `low`, `medium`, `high`
+  - `Gemini 3 Pro`: `dynamic`, `low`, `high`
+- Model requests also use a hard per-request timeout so the UI does not wait indefinitely on a hung model call.
+- The API key can be pasted into the assistant drawer.
+- If `notebooks/sugarpy-assistant-config.json` exists on the connected Jupyter server, the app auto-loads `apiKey` and optional `model` from that runtime file.
+- A server-provided shared key is used implicitly and is not copied into the visible settings field.
+- The settings input acts as a user override key, not as a mirror of the shared server key.
+- Do not commit that config file to git.
+- Because the models are still called directly from the browser, a server-provided key is hidden from GitHub history but not from an authenticated browser session. Full key secrecy requires a backend proxy.
+- Each assistant run is persisted as a JSON trace under `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`.
+- Trace payloads include prompt, model, thinking level, activity timeline, low-level HTTP attempt telemetry, compact summaries of successful model responses (tool calls plus returned text), compact summaries of isolated sandbox executions, final status, error text if any, and a compact notebook context summary.
+- On the OpenAI Responses path, trace telemetry now also records stream progress hints so a timeout can say which stream event was last observed before the request stalled.
+- On the OpenAI path, final notebook planning now prefers a native function-call submission (`submit_plan`) instead of relying only on a strict JSON text response.
 - Recommended models:
-  - `gemini-3.1-flash-lite-preview`: default cheap/fast path.
-  - `gemini-3-flash-preview`: stronger general fallback.
-  - `gemini-3.1-pro-preview`: last-resort escalation model for ambiguous or difficult requests.
+  - `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.
+  - `gpt-5-mini`: smaller GPT-5 option.
+  - `gpt-5-nano`: cheapest GPT-5 option.
+  - `gemini-3.1-flash-lite-preview`: Gemini fallback.
 - Manual evaluation prompts live in `docs/LLM_EVAL.md`.
+- Browser-side assistant regression coverage lives in `web/e2e/notebook.spec.ts`.
+- The current regression suite covers:
+  - OpenAI Responses payload contract
+  - seeded whole-notebook manifest capture
+  - `deg` notebook defaults flowing into planning
+  - recent-error tool-output flow
+  - preview/apply-run assistant flow
 
 ### Safety model
 - The assistant reads notebook context through a constrained inspection tool loop.
+- For Python code-cell drafts, the assistant may also run an isolated self-check in a temporary kernel before the preview is shown.
+- The isolated self-check never mutates the live notebook and defaults to a 5-second `bootstrap-only` sandbox run.
+- Sandbox context is explicit rather than implicit. The supported presets are:
+  - `none`
+  - `bootstrap-only`
+  - `imports-only`
+  - `selected-cells`
+  - `full-notebook-replay`
 - It returns a structured change set instead of mutating notebook state directly.
 - The app applies the proposed operations locally and keeps an undo snapshot for rollback.
 - The assistant is instructed to prefer SugarPy-native, directly executable representations over mathematically equivalent but less compatible forms.
   Example: for geometry plotting, prefer implicit equations plus `plot(...)` over parametric helper functions unless the user explicitly asks for parametric form.
+- In the default `Auto` mode, the assistant now behaves CAS-first by default.
+  - For math, symbolic manipulation, equations, and graphing, it should prefer Math cells.
+  - It should use Code cells mainly for non-math tasks, clearly unsupported CAS workflows, or explicit Python requests.
 - `CAS-first` strengthens that preference and tells the assistant to favor Math cells and CAS-native syntax over Python when both are possible.
 - The assistant is also instructed to respect SugarPy `Deg/Rad` behavior and avoid trig-dependent notebook edits when a trig-free representation is available.
+- The assistant is instructed to distinguish plain assignments like `f := x^2 + 1` from callable function definitions like `f(x) := x^2 + 1`.
+- Follow-up messages in the same chat reuse a compact conversation history so the assistant can refine the previous proposal instead of starting from zero each time.
+- While the assistant is working, the drawer shows live progress with inspection/tool activity plus a running `Thinking ... Ns` indicator even before the first tool result comes back.
+- Validation activity also reports sandbox steps such as `Running isolated check`, `Replaying imports`, and `Timed out after 5s`.
 
 ## Persistence and recovery
 

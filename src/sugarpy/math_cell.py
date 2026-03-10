@@ -130,6 +130,18 @@ def _assignment_targets(parsed: Any) -> tuple[str, ...]:
     return (legacy,) if legacy else ()
 
 
+def _assignment_target_tree(parsed: Any) -> Any:
+    target_tree = getattr(parsed, "assignment_target_tree", None)
+    if target_tree is not None:
+        return target_tree
+    targets = _assignment_targets(parsed)
+    if len(targets) == 1:
+        return targets[0]
+    if targets:
+        return tuple(targets)
+    return None
+
+
 def _make_math_function(
     name: str,
     args: tuple[str, ...],
@@ -160,8 +172,14 @@ def _make_math_function(
     return _fn
 
 
-def _unpack_assignment_values(targets: tuple[str, ...], value_expr: Any) -> list[Any]:
-    if len(targets) == 1:
+def _assignment_leaf_count(target_tree: Any) -> int:
+    if isinstance(target_tree, str):
+        return 1
+    return sum(_assignment_leaf_count(item) for item in target_tree)
+
+
+def _unpack_assignment_values(target_tree: Any, value_expr: Any) -> list[Any]:
+    if isinstance(target_tree, str):
         return [value_expr]
 
     if isinstance(value_expr, (list, tuple, sp.Tuple)):
@@ -170,11 +188,19 @@ def _unpack_assignment_values(targets: tuple[str, ...], value_expr: Any) -> list
         raise MathParseError(
             "Right side of ':=' is not unpackable. Use a list/tuple when assigning multiple names."
         )
-    if len(values) != len(targets):
+    if len(values) != len(target_tree):
         raise MathParseError(
-            f"Unpack mismatch: expected {len(targets)} values, got {len(values)}."
+            f"Unpack mismatch: expected {len(target_tree)} values, got {len(values)}."
         )
-    return values
+    unpacked: list[Any] = []
+    for child_target, child_value in zip(target_tree, values):
+        unpacked.extend(_unpack_assignment_values(child_target, child_value))
+    expected = _assignment_leaf_count(target_tree)
+    if len(unpacked) != expected:
+        raise MathParseError(
+            f"Unpack mismatch: expected {expected} values, got {len(unpacked)}."
+        )
+    return unpacked
 
 
 def _resolve_render_mode(render_mode: str | None) -> str:
@@ -424,6 +450,7 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
 
         if parsed.kind == "assignment":
             targets = _assignment_targets(parsed)
+            target_tree = _assignment_target_tree(parsed)
             if not targets:
                 raise MathParseError("Assignment target is missing.")
             rhs_source = parsed.rhs_source or ""
@@ -453,7 +480,7 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 else:
                     steps = [f"{assign_label} = {_as_latex(value_expr)}"]
             value_expr = _finalize_value(value_expr)
-            assigned_values = _unpack_assignment_values(targets, value_expr)
+            assigned_values = _unpack_assignment_values(target_tree, value_expr)
             finalized_values = [_finalize_value(item) for item in assigned_values]
             for name, assigned_value in zip(targets, finalized_values):
                 user_ns[name] = assigned_value

@@ -17,18 +17,73 @@ What it does:
 
 Optional assistant env vars:
 ```bash
-VITE_GEMINI_API_KEY=... \
-VITE_GEMINI_MODEL=gemini-3.1-flash-lite-preview \
+VITE_ASSISTANT_API_KEY=... \
+VITE_ASSISTANT_MODEL=gpt-5.1-codex-mini \
 ./scripts/run-all.sh
 ```
 
-If those env vars are not set, the Gemini assistant can still be configured from the in-app
+If those env vars are not set, the assistant can still be configured from the in-app
 assistant drawer and the values are stored locally in the browser.
 
-Recommended Gemini models:
-- `gemini-3.1-flash-lite-preview`: default cheap/fast path.
-- `gemini-3-flash-preview`: stronger general fallback.
-- `gemini-3.1-pro-preview`: last-resort escalation model.
+Assistant UX notes:
+- The assistant uses a chat-style drawer with a bottom composer.
+- Model and API key live under the collapsed `Settings` section.
+- `Settings` also expose `Thinking level`.
+- The available `Thinking level` values are filtered by model family:
+  - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
+  - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`
+  - `Gemini 3 Flash / Flash-Lite`: `dynamic`, `minimal`, `low`, `medium`, `high`
+  - `Gemini 3 Pro`: `dynamic`, `low`, `high`
+- Assistant requests use an inactivity timeout so a stalled model call fails with an explicit timeout instead of spinning forever.
+- The default visible workflow is whole-notebook + auto mode; advanced scope/preference selectors are no longer shown in the main UI.
+- Up to 5 recent chats are stored locally per notebook.
+- A new notebook starts with a fresh assistant chat history.
+- Assistant runs are persisted as JSON traces on the Jupyter contents side at:
+  `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`
+- Those traces are intended for debugging stuck or failed assistant requests and include per-attempt HTTP telemetry, compact summaries of successful model responses, and compact summaries of any isolated sandbox executions.
+- On the OpenAI path, the assistant consumes streaming Responses API events, refreshes the request timeout when new stream activity arrives, and stores stream-stage hints in trace/network telemetry so timeouts report the last observed stream event or activity instead of only a generic timeout.
+- On the OpenAI path, final plan submission now prefers a `submit_plan` function call instead of depending only on a strict JSON text response.
+- For direct geometry tasks such as finding circles from concrete points and a radius, the assistant is biased toward short Math-cell CAS workflows: write the point equations directly, call `solve(...)`, and derive the final circle equations from the returned centers instead of generating Python-heavy scaffolding.
+- In `auto` mode, math requests are treated as Math-cell/CAS tasks by default. The assistant should stay out of Code cells unless the user explicitly asks for Python or SugarPy CAS clearly cannot express the task.
+- For math/geometry/plotting requests, the assistant now inspects SugarPy references first, especially `math_cells` and `plotting`, before planning edits. Code is treated as a last-resort fallback after documented Math-cell workflows are considered.
+- If a math request still produces a draft plan with Code cells, the assistant now retries planning with a stricter Math-cell-only constraint before showing the preview.
+- For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
+- For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
+  - Validation uses a fresh temporary Jupyter kernel, not the live notebook kernel.
+  - The default validation mode is `bootstrap-only` with a hard 5-second timeout.
+  - Available context presets are `none`, `bootstrap-only`, `imports-only`, `selected-cells`, and `full-notebook-replay`.
+  - Validation is Python/code-cell only in v1. Math and Stoich edits still rely on preview plus normal notebook execution.
+  - A sandbox timeout or runtime error is returned to the model as structured output so it can revise the draft or warn explicitly.
+
+Runtime server config without committing secrets:
+- Create `notebooks/sugarpy-assistant-config.json` on the server or local Jupyter contents root.
+- Example:
+  ```json
+  {
+    "apiKey": "your-api-key",
+    "model": "gpt-5.1-codex-mini"
+  }
+  ```
+- This file is not tracked by git because `notebooks/` is ignored.
+- The frontend will auto-load it and prefill the assistant.
+- The shared server key is used automatically, but it is not copied into the visible settings field.
+- The settings API-key input is treated as a user override.
+- Important: this keeps the key out of GitHub, but not out of browser devtools. To fully hide the key, move model calls behind a backend proxy.
+
+Recommended assistant models:
+- `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.
+- `gpt-5-mini`: smaller GPT-5 option.
+- `gpt-5-nano`: cheapest GPT-5 option.
+- `gemini-3.1-flash-lite-preview`: Gemini fallback when you want the Google path.
+
+Assistant regression checks:
+- Browser regression coverage lives in `web/e2e/notebook.spec.ts`.
+- The targeted assistant suite can be run with:
+  ```bash
+  cd web && npx playwright test e2e/notebook.spec.ts --grep "Assistant"
+  ```
+- This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the preview/apply assistant flow.
+- It also covers isolated assistant sandbox validation, timeout/error reporting, and replay presets such as `imports-only` and `selected-cells`.
 
 ## Notebook persistence (autosave + recovery)
 - The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.
@@ -40,7 +95,7 @@ Recommended Gemini models:
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
 - Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
-- The optional Gemini assistant is opened from the `Assistant` button in the header.
+- The optional AI assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.

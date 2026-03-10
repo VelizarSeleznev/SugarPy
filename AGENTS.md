@@ -15,6 +15,7 @@ This file is a table of contents for contributors and agents.
 - For behavior changes, update the relevant file under `docs/`.
 - For Math-cell command/function changes, update `docs/MATH_CELL_SPEC.md` in the same change set.
 - For UI changes, run `./scripts/ui-check.sh` (or `./scripts/test-all.sh`) and report the browser result.
+- For assistant/LLM runtime changes, finish with one real browser validation against the live model path when credentials/services are available; do not rely only on mocked tests.
 - For changes that must be visible on the demo server, deploy the updated code to `seggver` in the same work session and report the deployed URL or deployment status.
 - Use the documented remote deploy command from `docs/DEPLOY_DEMO.md` / `docs/RUNBOOK.md`; do not stop after local file edits when the user expects a live server update.
 - Do not mark work complete when script checks fail or UI console errors remain.
