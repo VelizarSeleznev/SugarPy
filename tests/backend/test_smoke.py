@@ -249,6 +249,21 @@ def test_math_plot_accepts_inline_equations_without_assignment():
     assert len(plotted["plotly_figure"]["data"]) >= 2
 
 
+def test_math_direct_argument_solve_accepts_natural_equations():
+    solved = render_math_cell("solve(x^2 + y^2 = 25, y = 2*x + 1, (x, y))")
+
+    assert solved["ok"]
+    assert "\\sqrt{31}" in (solved["value"] or "")
+
+
+def test_math_comparison_operator_diagnostics_are_readable():
+    for source in ("x == 2", "x <= 2", "x >= 2", "x != 2"):
+        result = render_math_cell(source)
+        assert not result["ok"]
+        assert "Comparison operators are unsupported" in (result["error"] or "")
+        assert "use single '='" in (result["error"] or "")
+
+
 def test_math_solve_and_plot_workflow_accepts_mixed_equation_forms():
     class DummyShell:
         def __init__(self):

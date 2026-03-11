@@ -18,6 +18,24 @@ _TRANSFORMS = standard_transformations + (convert_xor, implicit_multiplication_a
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 _ASSIGN_TARGET_RE = re.compile(r"^[A-Za-z_]\w*$")
 _CALL_NAME_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+_NORMALIZE_TOKEN_RE = re.compile(
+    r"""
+    (?P<space>\s+)
+    | (?P<string>'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")
+    | (?P<compare>==|!=|<=|>=)
+    | (?P<assign>:=)
+    | (?P<power>\*\*|\^)
+    | (?P<range>\.\.)
+    | (?P<number>\d+(?:\.\d+)?|\.\d+)
+    | (?P<ident>[A-Za-z_]\w*)
+    | (?P<open>[\(\[\{])
+    | (?P<close>[\)\]\}])
+    | (?P<comma>,)
+    | (?P<operator>[+\-*/%=:])
+    | (?P<other>.)
+    """,
+    re.VERBOSE,
+)
 _PLOT_KWARG_NAMES = {
     "xmin",
     "xmax",
@@ -70,6 +88,10 @@ class RenderDirective:
     value: Any
     mode: Literal["decimal", "exact"]
     places: int | None = None
+
+
+def _structured_parser_error(detail: str) -> MathParseError:
+    return MathParseError(f"Structured parser diagnostic: {detail}")
 
 
 def is_equation_like(value: Any) -> bool:
@@ -125,7 +147,7 @@ def _scan_top_level(source: str) -> Dict[str, list[int]]:
         if ch in ")]}":
             depth -= 1
             if depth < 0:
-                raise MathParseError("Unmatched closing bracket.")
+                raise _structured_parser_error("unmatched closing bracket")
             i += 1
             continue
         if depth == 0:
@@ -142,14 +164,56 @@ def _scan_top_level(source: str) -> Dict[str, list[int]]:
                 equation_positions.append(i)
         i += 1
     if quote:
-        raise MathParseError("Unclosed string literal.")
+        raise _structured_parser_error("unclosed string literal")
     if depth != 0:
-        raise MathParseError("Unclosed bracket in expression.")
+        raise _structured_parser_error("unclosed bracket")
     return {
         "assignment": assignment_positions,
         "equation": equation_positions,
         "compare": compare_positions,
     }
+
+
+def _normalize_expression_source(source: str) -> str:
+    raw = (source or "").strip()
+    if not raw:
+        return raw
+
+    tokens: list[tuple[str, str]] = []
+    for match in _NORMALIZE_TOKEN_RE.finditer(raw):
+        kind = match.lastgroup or "other"
+        value = match.group(0)
+        if kind == "space":
+            continue
+        if kind == "power":
+            value = "**"
+        tokens.append((kind, value))
+
+    normalized: list[str] = []
+    prev_kind: str | None = None
+    prev_value: str | None = None
+
+    def _ends_atom(kind: str | None) -> bool:
+        return kind in {"ident", "number", "string", "close"}
+
+    def _starts_atom(kind: str | None) -> bool:
+        return kind in {"ident", "number", "string", "open"}
+
+    for kind, value in tokens:
+        if normalized and _ends_atom(prev_kind) and _starts_atom(kind):
+            if not (
+                prev_kind == "ident" and value == "("
+            ) and not (
+                prev_kind == "close" and prev_value == "["
+            ) and not (
+                value == "[" and prev_kind in {"ident", "close"}
+            ):
+                normalized.append("*")
+        normalized.append(value)
+        prev_kind = kind
+        prev_value = value
+
+    return "".join(normalized)
 
 
 def _check_blocked_identifiers(source: str) -> None:
@@ -216,7 +280,7 @@ def _find_matching_bracket(source: str, start: int) -> int:
     opener = source[start]
     closer = pairs.get(opener)
     if closer is None:
-        raise MathParseError("Unsupported bracket.")
+        raise _structured_parser_error("unsupported bracket")
 
     depth = 1
     quote: str | None = None
@@ -244,7 +308,7 @@ def _find_matching_bracket(source: str, start: int) -> int:
             if depth == 0:
                 return i
         i += 1
-    raise MathParseError("Unclosed bracket in expression.")
+    raise _structured_parser_error("unclosed bracket")
 
 
 def _wrap_equation_expression(source: str) -> str:
@@ -490,35 +554,39 @@ def parse_math_input(source: str) -> ParsedMathInput:
     if len(marks["assignment"]) > 1:
         raise MathParseError("Use only one ':=' assignment per Math cell.")
     if marks["compare"]:
-        raise MathParseError("Use single '=' for equations in Math cells.")
+        raise MathParseError(
+            "Comparison operators are unsupported in Math cells; use single '=' for equations."
+        )
 
     if marks["assignment"]:
         idx = marks["assignment"][0]
         lhs = raw[:idx].strip()
         rhs = raw[idx + 2 :].strip()
         if not lhs or not rhs:
-            raise MathParseError("Assignment must have both name and expression.")
+            raise _structured_parser_error("assignment must have both name and expression")
         function_target = _parse_function_target(lhs)
         if function_target is not None:
             function_name, function_args = function_target
+            normalized_rhs = _normalize_expression_source(rhs)
             return ParsedMathInput(
                 kind="function_assignment",
                 source=raw,
-                normalized_source=f"{lhs} := {rhs}",
+                normalized_source=f"{lhs} := {normalized_rhs}",
                 lhs_source=lhs,
-                rhs_source=rhs,
+                rhs_source=normalized_rhs,
                 assigned_name=function_name,
                 assigned_names=(function_name,),
                 function_name=function_name,
                 function_args=function_args,
             )
         targets, target_tree = _parse_assignment_targets(lhs)
+        normalized_rhs = _normalize_expression_source(rhs)
         return ParsedMathInput(
             kind="assignment",
             source=raw,
-            normalized_source=f"{lhs} := {rhs}",
+            normalized_source=f"{lhs} := {normalized_rhs}",
             lhs_source=lhs,
-            rhs_source=rhs,
+            rhs_source=normalized_rhs,
             assigned_name=targets[0],
             assigned_names=targets,
             assignment_target_tree=target_tree,
@@ -531,16 +599,19 @@ def parse_math_input(source: str) -> ParsedMathInput:
         lhs = raw[:idx].strip()
         rhs = raw[idx + 1 :].strip()
         if not lhs or not rhs:
-            raise MathParseError("Equation must have expressions on both sides of '='.")
+            raise _structured_parser_error("equation must have expressions on both sides of '='")
+        normalized_lhs = _normalize_expression_source(lhs)
+        normalized_rhs = _normalize_expression_source(rhs)
         return ParsedMathInput(
             kind="equation",
             source=raw,
-            normalized_source=f"{lhs} = {rhs}",
-            lhs_source=lhs,
-            rhs_source=rhs,
+            normalized_source=f"{normalized_lhs} = {normalized_rhs}",
+            lhs_source=normalized_lhs,
+            rhs_source=normalized_rhs,
         )
 
-    return ParsedMathInput(kind="expression", source=raw, normalized_source=raw)
+    normalized = _normalize_expression_source(raw)
+    return ParsedMathInput(kind="expression", source=raw, normalized_source=normalized)
 
 
 def _collect_call_names(source: str) -> set[str]:
@@ -742,10 +813,17 @@ def build_math_locals(
 
 
 def parse_sympy_expression(source: str, *, mode: str, user_ns: Dict[str, Any]) -> Any:
-    if source.strip().startswith("plot("):
-        rewritten_source = _rewrite_plot_call_source(source)
+    parsed = parse_math_input(source)
+    if parsed.kind == "equation":
+        lhs_expr = parse_sympy_expression(parsed.lhs_source or "", mode=mode, user_ns=user_ns)
+        rhs_expr = parse_sympy_expression(parsed.rhs_source or "", mode=mode, user_ns=user_ns)
+        return sp.Eq(lhs_expr, rhs_expr, evaluate=False)
+
+    expression_source = parsed.normalized_source if parsed.kind == "expression" else source.strip()
+    if expression_source.startswith("plot("):
+        rewritten_source = _rewrite_plot_call_source(expression_source)
     else:
-        rewritten_source = _rewrite_inline_equations(source)
+        rewritten_source = _rewrite_inline_equations(expression_source)
     try:
         return parse_expr(
             rewritten_source,

@@ -11,6 +11,14 @@ The Math cell is a CAS-style layer over SymPy:
 - `:=` means assignment.
 - `^` is supported as exponent operator.
 - Implicit multiplication is supported (`2x`, `(x+1)(x-1)`).
+- Parser normalization keeps a natural math surface:
+  - `x^2` normalizes to `x**2`
+  - `2x` normalizes to `2*x`
+  - `(x+1)(x-1)` normalizes to `(x+1)*(x-1)`
+  - `x = 2` stays an equation form, not an `Eq(...)` helper string
+- Comparison operators are intentionally not part of Math-cell syntax:
+  - `==`, `!=`, `<=`, `>=` return a readable diagnostic telling the user to use single `=`
+    for equations
 
 ## Namespace sharing
 - Math cell resolves names from the current IPython namespace (`ip.user_ns`).
@@ -32,6 +40,8 @@ Important distinction:
 - Use plain `f := ...` when you want to reuse that expression as a symbolic object, for example `solve(f = 0, x)` or `expand(f)`.
 - Inline equations are also accepted inside CAS calls, for example
   `solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))`.
+- Direct ordered system forms are also supported, for example
+  `solve(x^2 + y^2 = 25, y = 2*x + 1, (x, y))`.
 - `Eq(...)` is also accepted when you need an explicit equation helper form.
   Assignments such as `line := Eq(y, 4 - x)` are stored internally in implicit `= 0`
   form, so they stay compatible with both `solve(...)` and `plot(...)`.
@@ -69,6 +79,9 @@ Additional assistant-safe rules:
 - Prefer plain `=` equation syntax over `Eq(...)` unless `Eq(...)` is specifically needed for a documented helper pattern.
 - For systems of equations, prefer inline equations passed directly to `solve(...)` in an ordered form.
 - Assigned equation forms such as `eq1 := a = b` and `eq1 := Eq(a, b)` are both supported, but ordered tuple/direct-argument solves are still preferred over set literals for deterministic output.
+- Parser-level `normalized_source` is a normalized natural form for the written Math syntax.
+  It is not a promise that SugarPy will expose internal helper forms such as `Eq(...)` or
+  `lhs-rhs`.
 - If `solve(...)` returns a container of points, it is fine to show that container directly before unpacking it.
 - If both exact and decimal presentations are needed in one cell, wrap lines explicitly with `render_exact(...)` or `render_decimal(...)`.
 - `render_decimal(...)` rounds by decimal places, not significant digits.
@@ -103,6 +116,8 @@ Notes:
 - Function definitions are shared through namespace and can be called from later Math/Code cells.
 - Function definitions are lazy at declaration time: the right side is not eagerly evaluated on `:=`.
   This avoids expensive `solve(...)` execution and huge symbolic dumps while defining helper functions.
+- When Math-cell syntax is malformed at the top level, SugarPy returns a structured parser
+  diagnostic instead of leaking raw low-level parser errors.
 
 ## Container results
 Some CAS helpers return containers (for example `solve(...)` returning a list of points).
