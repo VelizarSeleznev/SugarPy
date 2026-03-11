@@ -272,7 +272,7 @@ test.describe('Notebook CAS outputs', () => {
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Assistant flow: preview can insert and run a code cell', async ({ page }) => {
+  test('Assistant flow: reject keeps the live notebook unchanged until acceptance', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     let requestCount = 0;
     await page.route('https://api.openai.com/**', async (route) => {
@@ -434,15 +434,17 @@ test.describe('Notebook CAS outputs', () => {
       'Add a code cell that computes 2 + 2 and run it.'
     );
     await expect(page.getByTestId('assistant-activity')).toBeVisible();
-    await expect(page.getByText('Running isolated check')).toBeVisible();
+    await expect(page.getByTestId('assistant-activity')).toContainText('Running isolated check');
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
-    await page.getByTestId('assistant-apply-run').click();
-    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
-    await expect(page.getByTestId('cell-output').last()).toContainText('4');
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
+    await expect(page.getByText('Add code cell at 2')).toBeVisible();
+    await page.getByTestId('assistant-reject-draft').click();
+    await expect(page.getByTestId('assistant-preview')).toHaveCount(0);
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Assistant sandbox: runtime error revises the drafted code before preview', async ({ page }) => {
+  test('Assistant sandbox: validated revised draft applies only after Accept all', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     let requestCount = 0;
     await page.route('https://api.openai.com/**', async (route) => {
@@ -574,10 +576,12 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-prompt').fill('Add a code cell that computes a safe demo value.');
     await page.getByTestId('assistant-generate').click();
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
-    await expect(page.locator('.assistant-warning')).toContainText('sandbox validation');
+    await expect(page.locator('.assistant-warning').last()).toContainText('sandbox validation');
     await expect(page.locator('.assistant-op-source code')).toContainText('value = 2 + 2');
-    await page.getByTestId('assistant-apply-run').click();
-    await expect(page.getByTestId('cell-output').last()).toContainText('4');
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
+    await page.getByTestId('assistant-accept-all').click();
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
+    await expect(page.locator('.cell-assistant-badge')).toHaveCount(0);
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -853,7 +857,7 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-prompt').fill('Add a code cell that computes 2 + 2 and run it.');
     await page.getByTestId('assistant-generate').click();
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
-    await expect(page.locator('.assistant-op-title')).toContainText('Insert code cell at 2');
+    await expect(page.getByText('Add code cell at 2')).toBeVisible();
     await expect(page.locator('.assistant-op-source code')).toContainText('2 + 2');
     await expectNoGlobalErrors(page, guards);
   });
@@ -1270,7 +1274,6 @@ test.describe('Notebook CAS outputs', () => {
       'Find the two circle equations from A(3,38), B(26,25), radius 25. Use solve in Math cells.'
     );
     await page.getByTestId('assistant-generate').click();
-    await expect(page.getByTestId('assistant-preview')).toBeVisible();
 
     expect(seenBodies.length).toBeGreaterThanOrEqual(1);
     const planningBody = seenBodies[0];
@@ -1388,7 +1391,7 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-generate').click();
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
 
-    await expect(page.locator('.assistant-op-title')).toContainText('Insert math cell at 1');
+    await expect(page.getByText('Add math cell at 1')).toBeVisible();
     await expect(page.locator('.assistant-op-source code')).toContainText('solve({eqA, eqB}, (x0, y0))');
     await expect(page.locator('.assistant-op-source code')).not.toContainText('from sympy import');
 
@@ -1501,7 +1504,7 @@ test.describe('Notebook CAS outputs', () => {
     expect(seenBodies).toHaveLength(2);
     expect(seenBodies[0].instructions).toContain('If the request is mathematical, solve it in SugarPy Math cells by default.');
     expect(seenBodies[1].instructions).toContain('Regenerate the plan using Math cells only.');
-    await expect(page.locator('.assistant-op-title')).toContainText('Insert math cell at 1');
+    await expect(page.getByText('Add math cell at 1')).toBeVisible();
     await expect(page.locator('.assistant-op-source code')).toContainText('solve({eqA, eqB}, (x0, y0))');
     await expect(page.locator('.assistant-op-source code')).not.toContainText('from sympy import');
     await expectNoPageCrashes(page, guards);
@@ -1606,6 +1609,7 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
 
     expect(seenBodies).toHaveLength(1);
+    expect(seenBodies[0].instructions).toContain('Use only documented SugarPy Math syntax in Math cells.');
     await expect(page.locator('.assistant-op-source code').first()).toContainText('solutions := solve((eqA, eqB), (h, k))');
     await expectNoPageCrashes(page, guards);
   });
@@ -1688,7 +1692,7 @@ test.describe('Notebook CAS outputs', () => {
 
     expect(seenBodies).toHaveLength(2);
     expect(String(seenBodies[1].input)).toContain('Your previous planning response was not valid AssistantPlan JSON');
-    await expect(page.locator('.assistant-op-title')).toContainText('Insert math cell at 1');
+    await expect(page.getByText('Add math cell at 1')).toBeVisible();
     await expectNoPageCrashes(page, guards);
   });
 
@@ -1741,7 +1745,7 @@ test.describe('Notebook CAS outputs', () => {
 
     expect(seenBodies).toHaveLength(1);
     expect(seenBodies[0].tools.some((tool: any) => tool.name === 'submit_plan')).toBe(true);
-    await expect(page.locator('.assistant-op-title')).toContainText('Insert math cell at 1');
+    await expect(page.getByText('Add math cell at 1')).toBeVisible();
     await expectNoPageCrashes(page, guards);
   });
 

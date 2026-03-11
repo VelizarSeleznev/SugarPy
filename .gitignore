@@ -9,4 +9,5 @@ dist/
 artifacts/
 *.egg-info/
 web/test-results/
+web/.env.local
 notebooks/

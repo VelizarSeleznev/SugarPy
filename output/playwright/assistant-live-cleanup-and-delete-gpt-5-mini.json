@@ -1,0 +1,61 @@
+{
+  "assistant": {
+    "summary": "Reduce notebook to 3 cells (1 markdown, 2 math); remove helper code and any 'REMOVE ME' sections",
+    "warnings": [
+      "1. CAS-first symbolic solution and verification (student-friendly)",
+      "2. Numeric approximations and factorization"
+    ],
+    "previewVisible": true
+  },
+  "notebook": {
+    "id": "nb-assistant-live-cleanup",
+    "name": "Assistant Live Cleanup Fixture",
+    "cells": [
+      {
+        "id": "cell-markdown-keepish",
+        "type": "markdown",
+        "source": "Solve the equation x^2 = 2 using the CAS. Show the exact symbolic solutions, give decimal approximations, then verify each solution and factor the polynomial."
+      },
+      {
+        "id": "cell-2-1773222582137",
+        "type": "math",
+        "source": "s1, s2 := solve(Eq(x^2, 2), x)\ns1\ns2\nsimplify(s1^2) = 2\nsimplify(s2^2) = 2"
+      },
+      {
+        "id": "cell-3-1773222583077",
+        "type": "math",
+        "source": "set_decimal_places(6)\nN(s1)\nN(s2)\nfactor(x^2 - 2)"
+      }
+    ]
+  },
+  "rendered": {
+    "codeCellCount": 0,
+    "markdownCellCount": 1,
+    "mathCellCount": 2,
+    "totalCellCount": 3,
+    "mathOutputs": [
+      "▶EditExactRad1s1,s2≔solve(Eq(x2,2),x)s1,\\allowbreak s2 \\coloneqq\\allowbreak solve(Eq(x^2,\\allowbreak 2),\\allowbreak x)s1,s2:=solve(Eq(x2,2),x)s1=−2s_{1} =\\allowbreak - \\sqrt{2}s1​=−2​s2=2s_{2} =\\allowbreak \\sqrt{2}s2​=2​2s1s1s1−2- \\sqrt{2}−2​3s2s2s22\\sqrt{2}2​4simplify(s12)=2simplify(s1^2) =\\allowbreak 2simplify(s12)=22=22 =\\allowbreak 22=25simplify(s22)=2simplify(s2^2) =\\allowbreak 2simplify(s22)=22=22 =\\allowbreak 22=2"
+    ],
+    "codeOutputs": [
+      "",
+      ""
+    ],
+    "markdownTexts": [
+      "Solve the equation x^2 = 2 using the CAS. Show the exact symbolic solutions, give decimal approximations, then verify each solution and factor the polynomial."
+    ],
+    "cellErrors": [],
+    "plotCount": 0,
+    "bodyText": "Run All Assistant Connected ⋮ Code Text Math Up Down Delete ASSISTANT APPLIED Up Down Delete Solve the equation x^2 = 2 using the CAS. Show the exact symbolic solutions, give decimal approximations, then verify each solution and factor the polynomial. Code Text Math Run Up Down Delete ASSISTANT APPLIED ▶ Up Down Delete Edit Exact Rad 1 𝑠 1 , 𝑠 2 ≔ 𝑠 𝑜 𝑙 𝑣 𝑒 ( 𝐸 𝑞 ( 𝑥 2 , 2 ) , 𝑥 ) s1,s2:=solve(Eq(x 2 ,2),x) 𝑠 1 = − 2 s 1 ​ =− 2 ​ 𝑠 2 = 2 s 2 ​ = 2 ​ 2 𝑠 1 s1 − 2 − 2 ​ 3 𝑠 2 s2 2 2 ​ 4 𝑠 𝑖 𝑚 𝑝 𝑙 𝑖 𝑓 𝑦 ( 𝑠 1 2 ) = 2 simplify(s1 2 )=2 2 = 2 2=2 5 𝑠 𝑖 𝑚 𝑝 𝑙 𝑖 𝑓 𝑦 ( 𝑠 2 2 ) = 2 simplify(s2 2 )=2 2 = 2 2=2 Code Text Math Run Up Down Delete ASSISTANT APPLIED ▶ Up Down Delete Exact Rad set_decimal_places(6) N(s1) N(s2) factor(x^2 - 2) x² √ ( ) = := solve expand factor N plot Code Text Math AI ASSISTANT Chat-driven notebook edits + ⚙ × Hide settings API key override Shared server key is active unless you enter your own key here. Model GPT-5.1 Codex mini GPT-5.2 GPT-5 mini GPT-5 nano Gemini 3.1 Flash-Lite Preview Gemini 3 Flash Preview Gemini 3.1 Pro Preview Custom model Thinking level Dynamic Minimal Low Medium High Rewrite the current notebook into exactly 3 cells total: 1 markdown cell and 2 math cells. Delete the Python helper code cell. Delete every section marked REMOVE ME. Keep the result CAS-first and student-friendly. I've rewritten the notebook to contain exactly three cells: one markdown (student-facing instructions) and two Math cells (CAS-first solution and numeric checks). Removed the extra math duplicates and the Python helper cell. No 'REMOVE ME' sections were present beyond the deleted cells. The new math cells solve x^2 = 2 symbolically, verify the solutions, give decimal approximations, and factor the polynomial. Show steps Reduce notebook to 3 cells (1 markdown, 2 math); remove helper code and any 'REMOVE ME' sections 1. CAS-first symbolic solution and verification (student-friendly) 2. Numeric approximations and factorization Step 1: CAS-first symbolic solution and verification (student-friendly) Delete cell cell-1-1773221953498 Delete cell cell-3-1773222519150 Delete cell cell-math-old Move cell cell-markdown-keepish to 1 Insert math cell at 2 s1, s2 := solve(Eq(x^2, 2), x) s1 s2 simplify(s1^2) = 2 simplify(s2^2) = 2 Step 2: Numeric approximations and factorization Insert math cell at 3 set_decimal_places(6) N(s1) N(s2) factor(x^2 - 2) Progress: 2/2 Dismiss Undo Last Step Undo Assistant Run ↑"
+  },
+  "lastObservation": {
+    "second": 8,
+    "loading": 0,
+    "validating": 0,
+    "failed": 0,
+    "applied": 3,
+    "totalCells": 3,
+    "progress": "Progress: 2/2"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

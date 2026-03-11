@@ -45,6 +45,21 @@ Statements can span multiple lines when parentheses/brackets are still open
 - `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`
 - `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`
 
+## Assistant-safe subset
+When the notebook assistant generates Math cells for teaching/demo flows, it should stay inside a narrow documented subset:
+- statement types: expression, equation, assignment, unpack assignment, function assignment
+- helper calls: `Eq(...)`, `solve(...)`, `linsolve(...)`, `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`, `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`, `plot(...)`
+- verification style: explicit symbolic expressions or documented unpack assignment, not undocumented helper shortcuts
+
+The assistant should avoid undocumented or out-of-scope constructs even if they might look SymPy-like, for example:
+- arrow syntax like `x -> ...`
+- `lambda`
+- `map(...)`
+- Python comprehensions / loops / `def` blocks
+- undocumented helper names such as `subs(...)`
+
+For multi-step teaching notebooks, prefer longer but simpler Math cells with nearby Markdown explanations over dense helper-heavy transformations.
+
 Quick meaning:
 - `expand(expr)` expands parentheses and products into a summed form.
   Example: `expand((x-1)(x+2))` -> `x^2 + x - 2`.

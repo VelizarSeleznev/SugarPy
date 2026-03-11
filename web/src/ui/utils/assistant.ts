@@ -1,5 +1,6 @@
 import {
   AssistantSandboxContextPreset,
+  AssistantSandboxTarget,
   AssistantSandboxRequest,
   AssistantSandboxResult
 } from './assistantSandbox';
@@ -16,7 +17,8 @@ export type NotebookCellSnapshot = {
   mathRenderMode?: 'exact' | 'decimal';
   mathTrigMode?: 'deg' | 'rad';
   stoichReaction?: string;
-  outputText?: string;
+  hasOutput?: boolean;
+  outputPreview?: string;
   hasError?: boolean;
 };
 
@@ -65,6 +67,55 @@ export type AssistantPlan = {
   userMessage: string;
   warnings: string[];
   operations: AssistantOperation[];
+  outline: {
+    summary: string;
+    steps: string[];
+  };
+  steps: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    operations: AssistantOperation[];
+    warnings: string[];
+  }>;
+};
+
+export type AssistantValidationStatus = 'ok' | 'error' | 'timeout' | 'skipped';
+
+export type AssistantValidationSummary = {
+  status: AssistantValidationStatus;
+  outputKind: string;
+  outputPreview: string;
+  errorSummary?: string;
+  replayContextUsed: AssistantSandboxContextPreset;
+  replayedCellIds: string[];
+};
+
+export type AssistantDraftValidation = {
+  operationIndex: number;
+  cellType: AssistantCellKind;
+  source: string;
+  summary: AssistantValidationSummary;
+};
+
+export type AssistantDraftStep = {
+  id: string;
+  title: string;
+  summary: string;
+  explanation: string;
+  operations: AssistantOperation[];
+  validations: AssistantDraftValidation[];
+  warnings: string[];
+  errors: string[];
+  sourcePreview: string;
+  changes: string[];
+  isRunnable: boolean;
+};
+
+export type AssistantDraftRun = {
+  summary: string;
+  hasFailures: boolean;
+  steps: AssistantDraftStep[];
 };
 
 export type AssistantActivity = {
@@ -79,6 +130,7 @@ export type AssistantConversationEntry = {
 };
 
 export type AssistantThinkingLevel = 'dynamic' | 'minimal' | 'low' | 'medium' | 'high';
+export type AssistantProvider = 'gemini' | 'groq' | 'openai';
 
 export type AssistantNetworkEvent = {
   phase: 'request_start' | 'response' | 'retry' | 'error' | 'aborted' | 'timeout' | 'stream';
@@ -90,7 +142,7 @@ export type AssistantNetworkEvent = {
 
 export type AssistantResponseTrace = {
   attempt: number;
-  provider?: 'gemini' | 'openai';
+  provider?: AssistantProvider;
   stage: 'inspection' | 'planning' | 'validation';
   text?: string;
   toolCalls?: Array<{
@@ -101,10 +153,11 @@ export type AssistantResponseTrace = {
 
 export type AssistantSandboxExecutionTrace = {
   request: {
+    target: AssistantSandboxTarget;
     contextPreset: AssistantSandboxContextPreset;
     timeoutMs: number;
     selectedCellIds: string[];
-    codePreview: string;
+    sourcePreview: string;
   };
   result: {
     status: AssistantSandboxResult['status'];
@@ -114,6 +167,7 @@ export type AssistantSandboxExecutionTrace = {
     stdoutPreview: string;
     stderrPreview: string;
     replayedCellIds: string[];
+    mathError?: string;
   };
 };
 
@@ -122,11 +176,15 @@ export type AssistantSandboxRunner = (
   onActivity?: (item: AssistantActivity) => void
 ) => Promise<AssistantSandboxResult>;
 
-export const DEFAULT_ASSISTANT_MODEL = 'gpt-5.1-codex-mini';
+export const DEFAULT_ASSISTANT_MODEL = 'gpt-5-mini';
 
 export const ASSISTANT_MODEL_PRESETS = [
   {
     value: DEFAULT_ASSISTANT_MODEL,
+    label: 'GPT-5 mini'
+  },
+  {
+    value: 'gpt-5.1-codex-mini',
     label: 'GPT-5.1 Codex mini'
   },
   {
@@ -134,12 +192,12 @@ export const ASSISTANT_MODEL_PRESETS = [
     label: 'GPT-5.2'
   },
   {
-    value: 'gpt-5-mini',
-    label: 'GPT-5 mini'
-  },
-  {
     value: 'gpt-5-nano',
     label: 'GPT-5 nano'
+  },
+  {
+    value: 'moonshotai/kimi-k2-instruct-0905',
+    label: 'Kimi K2 Instruct 0905 (Groq)'
   },
   {
     value: 'gemini-3.1-flash-lite-preview',
@@ -228,6 +286,65 @@ type OpenAIStreamingEvent = {
   };
 };
 
+type OpenAICompatibleTool = {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+type OpenAICompatibleMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string | null;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+};
+
+type OpenAICompatibleResponse = {
+  id?: string;
+  choices?: Array<{
+    message?: OpenAICompatibleMessage;
+    finish_reason?: string | null;
+  }>;
+  error?: {
+    message?: string;
+    code?: string | number;
+    type?: string;
+  };
+};
+
+type OpenAICompatibleStreamingEvent = {
+  id?: string;
+  choices?: Array<{
+    delta?: {
+      role?: 'assistant';
+      content?: string;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: 'function';
+        function?: {
+          name?: string;
+          arguments?: string;
+        };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
 type ToolLoopResult = {
   notes: string;
   transcript: string[];
@@ -235,6 +352,7 @@ type ToolLoopResult = {
 };
 
 const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta';
+const GROQ_API_ROOT = 'https://api.groq.com/openai/v1';
 const MAX_TOOL_ROUNDS = 5;
 const DETAIL_SOURCE_LIMIT = 700;
 const DETAIL_OUTPUT_LIMIT = 240;
@@ -246,11 +364,14 @@ const COMPACT_REFERENCE = [
   '- In Math cells: = means equation, := means assignment, ^ is exponent, implicit multiplication works.',
   '- name := expr assigns a value or symbolic expression to a name; it does not define a callable function.',
   '- name(arg) := expr defines a callable Math-cell function.',
+  '- Supported Math-cell input kinds: expression, equation, assignment, unpack assignment, function assignment.',
   '- Math cells share namespace with Code cells.',
   '- Notebook defaults include trig mode (deg/rad) and render mode (exact/decimal).',
   '- Each Math cell may override trig/render mode.',
-  '- Math plotting uses plot(...).',
+  '- Built-in Math helpers include Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
   '- In Math cells, prefer Maple-style plot ranges: x = a..b and y = c..d.',
+  '- Use only documented SugarPy Math syntax; avoid unsupported lambda or arrow-function notation.',
+  '- For teaching notebooks, prefer explicit equations, unpack assignment, and direct symbolic expressions over helper-heavy transformations.',
   '- Safe plotting defaults for geometry: prefer implicit equations or directly plottable expressions.',
   '- For circles and geometry, prefer circle := equation and then plot(circle, ..., equal_axes=True).',
   '- Do not rely on trig parameterizations unless the user explicitly asks for them.',
@@ -274,10 +395,15 @@ const REFERENCE_SECTIONS = {
     '- name := expr stores a value or symbolic expression under that name.',
     '- name(arg) := expr defines a callable function.',
     '- ^ is exponent; implicit multiplication works.',
+    '- Supported input kinds: expression, equation, assignment, unpack assignment, function assignment.',
+    '- Unpack assignment examples: a0, b0 := solO[1] and (h1, k1), (h2, k2) := solutions.',
     '- Multiple statements per cell are allowed.',
     '- Math cells share namespace with Code cells.',
     '- Trig mode is deg or rad and affects trig evaluation.',
-    '- Prefer Math cells for symbolic equations, solve, expand, factor, N, and plot workflows.'
+    '- Built-in helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...).',
+    '- Prefer Math cells for symbolic equations, solve, expand, factor, N, and plot workflows.',
+    '- Prefer direct symbolic expressions and documented solve(...) results over helper-heavy transformations.',
+    '- Out of scope in Math cells: Python def blocks, lambda syntax, arrow syntax, Python loops/comprehensions, and undocumented helper functions.'
   ].join('\n'),
   plotting: [
     'Plotting reference:',
@@ -367,7 +493,7 @@ const buildDirectCircleSolvePlan = (request: string): AssistantPlan | null => {
   const xmax = Math.ceil(Math.max(ax, bx) + Math.max(10, r * 0.4));
   const ymin = Math.floor(Math.min(ay, by) - Math.max(10, r * 0.4));
   const ymax = Math.ceil(Math.max(ay, by) + Math.max(10, r * 0.4));
-  return {
+  return normalizePlan({
     summary: 'Use Math cells to solve the two circle-center equations and build the circle equations.',
     userMessage: 'Prepared a CAS-first Math-cell solution that defines one equation per point, solves for the centers, and builds both circle equations.',
     warnings: [],
@@ -393,16 +519,15 @@ const buildDirectCircleSolvePlan = (request: string): AssistantPlan | null => {
         index: 1,
         cellType: 'math',
         source: [
-          'c1 := solutions[0]',
-          'c2 := solutions[1]',
-          'circle1 := (x - c1[0])^2 + (y - c1[1])^2 = r^2',
-          'circle2 := (x - c2[0])^2 + (y - c2[1])^2 = r^2',
+          '(h1, k1), (h2, k2) := solutions',
+          'circle1 := (x - h1)^2 + (y - k1)^2 = r^2',
+          'circle2 := (x - h2)^2 + (y - k2)^2 = r^2',
           `plot(circle1, circle2, x = ${xmin}..${xmax}, y = ${ymin}..${ymax}, equal_axes=True)`
         ].join('\n'),
         reason: 'Build both circle equations from the solved centers and plot them.'
       }
     ]
-  };
+  });
 };
 
 const toJsonSchema = (schema: any): any => {
@@ -482,6 +607,22 @@ const TOOL_DECLARATIONS = [
     }
   },
   {
+    name: 'search_cells',
+    description:
+      'Search notebook cells by source text or useful category. Use this instead of requesting the full notebook when you need targeted context.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: { type: 'STRING' },
+        category: {
+          type: 'STRING',
+          enum: ['all', 'errors', 'solve-plot', 'helpers', 'markdown']
+        }
+      },
+      required: ['query', 'category']
+    }
+  },
+  {
     name: 'get_reference',
     description: 'Return built-in SugarPy documentation for a specific topic.',
     parameters: {
@@ -508,11 +649,24 @@ const OPENAI_TOOL_DECLARATIONS = TOOL_DECLARATIONS.map((tool) => ({
 const SANDBOX_TOOL_DECLARATION = {
   name: 'run_code_in_sandbox',
   description:
-    'Run Python code in an isolated temporary kernel for self-checking. This never mutates the live notebook.',
+    'Run code or Math-cell content in an isolated temporary kernel for self-checking. This never mutates the live notebook.',
   parameters: {
     type: 'OBJECT',
     properties: {
+      target: {
+        type: 'STRING',
+        enum: ['code', 'math']
+      },
       code: { type: 'STRING' },
+      source: { type: 'STRING' },
+      trigMode: {
+        type: 'STRING',
+        enum: ['deg', 'rad']
+      },
+      renderMode: {
+        type: 'STRING',
+        enum: ['exact', 'decimal']
+      },
       contextPreset: {
         type: 'STRING',
         enum: ['none', 'bootstrap-only', 'imports-only', 'selected-cells', 'full-notebook-replay']
@@ -523,7 +677,7 @@ const SANDBOX_TOOL_DECLARATION = {
       },
       timeoutMs: { type: 'NUMBER' }
     },
-    required: ['code', 'contextPreset', 'selectedCellIds', 'timeoutMs']
+    required: ['target', 'code', 'source', 'trigMode', 'renderMode', 'contextPreset', 'selectedCellIds', 'timeoutMs']
   }
 } as const;
 
@@ -777,8 +931,69 @@ const planUsesSolveInMathCells = (plan: AssistantPlan) =>
       /\bsolve\s*\(/.test(operation.source)
   );
 
+const getUnsupportedMathPatterns = (source: string) => {
+  const patterns: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /->/g, label: 'arrow syntax (->)' },
+    { pattern: /\bmap\s*\(/g, label: 'map(...) helper' },
+    { pattern: /\blambda\b/g, label: 'lambda syntax' },
+    { pattern: /\bfor\b.+\bin\b/g, label: 'Python-style loop syntax' },
+    { pattern: /\bdef\b/g, label: 'Python def block' },
+    { pattern: /\bsubs\s*\(/g, label: 'undocumented subs(...) helper' }
+  ];
+  return patterns.filter(({ pattern }) => pattern.test(source)).map(({ label }) => label);
+};
+
+const MATH_ASSISTANT_SPEC = [
+  'Math-cell assistant spec:',
+  '- Use only documented SugarPy Math syntax.',
+  '- Supported statement types: expression, equation, assignment, unpack assignment, function assignment.',
+  '- Use = for equations and := for assignment.',
+  '- Preferred helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
+  '- For teaching notebooks, prefer explicit equations, unpack assignment, direct arithmetic, and direct symbolic expressions.',
+  '- If solve(...) returns structured points, unpack them with documented assignment forms such as (h1, k1), (h2, k2) := solutions.',
+  '- For one-variable solve(...) results, avoid guessing container indexes; instead show the solve result directly and verify with explicit symbolic expressions.',
+  '- Forbidden: ->, lambda, map(...), subs(...), Python comprehensions, Python loops, def blocks, and undocumented helper functions.',
+  '- If plotting is needed, prefer implicit equations or directly plottable expressions with Maple-style ranges x = a..b and y = c..d.'
+].join('\n');
+
+const planHasUnsupportedMathSyntax = (plan: AssistantPlan) =>
+  plan.operations.some(
+    (operation) =>
+      operation.type === 'insert_cell' &&
+      operation.cellType === 'math' &&
+      getUnsupportedMathPatterns(operation.source).length > 0
+  );
+
+const collectUnsupportedMathWarnings = (plan: AssistantPlan) =>
+  plan.operations.flatMap((operation) => {
+    if (operation.type !== 'insert_cell' || operation.cellType !== 'math') return [];
+    const unsupported = getUnsupportedMathPatterns(operation.source);
+    if (unsupported.length === 0) return [];
+    return [`Unsupported Math-cell syntax detected: ${unsupported.join(', ')}.`];
+  });
+
+const planHasRiskySolveIndexing = (plan: AssistantPlan) => {
+  const hasSingleVariableSolve = plan.operations.some(
+    (operation) =>
+      operation.type === 'insert_cell' &&
+      operation.cellType === 'math' &&
+      /\bsolve\s*\([^,\n]+,\s*[A-Za-z_][A-Za-z0-9_]*\s*\)/.test(operation.source)
+  );
+  if (!hasSingleVariableSolve) return false;
+  return plan.operations.some(
+    (operation) =>
+      operation.type === 'insert_cell' &&
+      operation.cellType === 'math' &&
+      /\bsolutions\s*\[\s*\d+\s*\]/.test(operation.source)
+  );
+};
+
 const normalizeSandboxRequest = (args: Record<string, unknown>): AssistantSandboxRequest => ({
+  target: args.target === 'math' ? 'math' : 'code',
   code: String(args.code ?? ''),
+  source: String(args.source ?? ''),
+  trigMode: args.trigMode === 'rad' ? 'rad' : 'deg',
+  renderMode: args.renderMode === 'decimal' ? 'decimal' : 'exact',
   contextPreset: (
     typeof args.contextPreset === 'string' ? args.contextPreset : 'bootstrap-only'
   ) as AssistantSandboxContextPreset,
@@ -792,10 +1007,11 @@ const summarizeSandboxExecution = (
   result: AssistantSandboxResult
 ): AssistantSandboxExecutionTrace => ({
   request: {
+    target: request.target === 'math' ? 'math' : 'code',
     contextPreset: request.contextPreset ?? 'bootstrap-only',
     timeoutMs: typeof request.timeoutMs === 'number' ? request.timeoutMs : 5000,
     selectedCellIds: Array.isArray(request.selectedCellIds) ? request.selectedCellIds : [],
-    codePreview: truncateText(request.code ?? '', SANDBOX_PREVIEW_LIMIT)
+    sourcePreview: truncateText((request.target === 'math' ? request.source : request.code) ?? '', SANDBOX_PREVIEW_LIMIT)
   },
   result: {
     status: result.status,
@@ -804,7 +1020,8 @@ const summarizeSandboxExecution = (
     errorValue: truncateText(result.errorValue ?? '', SANDBOX_PREVIEW_LIMIT),
     stdoutPreview: truncateText(result.stdout ?? '', SANDBOX_PREVIEW_LIMIT),
     stderrPreview: truncateText(result.stderr ?? '', SANDBOX_PREVIEW_LIMIT),
-    replayedCellIds: result.replayedCellIds
+    replayedCellIds: result.replayedCellIds,
+    mathError: result.mathValidation?.error
   }
 });
 
@@ -820,19 +1037,81 @@ const buildPlanFromParts = (metadata: {
   warnings: string[];
 } | null, operations: AssistantOperation[]): AssistantPlan | null => {
   if (!metadata) return null;
-  return {
+  return normalizePlan({
     summary: metadata.summary,
     userMessage: metadata.userMessage,
     warnings: metadata.warnings,
     operations
+  });
+};
+
+const isRunnableOperation = (operation: AssistantOperation) =>
+  (operation.type === 'insert_cell' && operation.cellType !== 'markdown') ||
+  operation.type === 'update_cell';
+
+const describeStepOperation = (operation: AssistantOperation) => {
+  if (operation.reason?.trim()) return operation.reason.trim();
+  if (operation.type === 'insert_cell') {
+    const preview = previewText(operation.source, 80);
+    return `Add ${operation.cellType} cell${preview ? `: ${preview}` : ''}`;
+  }
+  if (operation.type === 'update_cell') {
+    const preview = previewText(operation.source, 80);
+    return `Update cell${preview ? `: ${preview}` : ''}`;
+  }
+  if (operation.type === 'set_notebook_defaults') return 'Update notebook defaults';
+  if (operation.type === 'move_cell') return 'Reorder a cell';
+  return 'Delete a cell';
+};
+
+const buildPlanSteps = (operations: AssistantOperation[]) => {
+  const steps: AssistantPlan['steps'] = [];
+  let current: AssistantOperation[] = [];
+  let currentWarnings: string[] = [];
+  const flush = () => {
+    if (current.length === 0) return;
+    const summary = describeStepOperation(current.find(isRunnableOperation) ?? current[0]);
+    steps.push({
+      id: `assistant-step-${steps.length + 1}`,
+      title: `Step ${steps.length + 1}`,
+      summary,
+      operations: current,
+      warnings: currentWarnings
+    });
+    current = [];
+    currentWarnings = [];
   };
+
+  operations.forEach((operation) => {
+    const currentHasRunnable = current.some(isRunnableOperation);
+    if (operation.type === 'set_notebook_defaults') {
+      flush();
+      current = [operation];
+      flush();
+      return;
+    }
+    if (operation.type === 'insert_cell' && operation.cellType === 'markdown') {
+      if (currentHasRunnable) flush();
+      current.push(operation);
+      return;
+    }
+    if (currentHasRunnable) flush();
+    current.push(operation);
+    if (isRunnableOperation(operation)) {
+      flush();
+    }
+  });
+  flush();
+  return steps;
 };
 
 const summarizeCell = (cell: NotebookCellSnapshot) => ({
   id: cell.id,
   type: cell.type,
   preview: previewText(cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source),
-  hasError: !!cell.hasError
+  hasOutput: !!cell.hasOutput,
+  hasError: !!cell.hasError,
+  outputPreview: cell.outputPreview ? previewText(cell.outputPreview, 100) : ''
 });
 
 const renderCellDetail = (cell: NotebookCellSnapshot | null) => {
@@ -843,9 +1122,47 @@ const renderCellDetail = (cell: NotebookCellSnapshot | null) => {
     source: truncateText(cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source, DETAIL_SOURCE_LIMIT),
     mathRenderMode: cell.mathRenderMode,
     mathTrigMode: cell.mathTrigMode,
-    outputText: truncateText(cell.outputText || '', DETAIL_OUTPUT_LIMIT),
+    hasOutput: !!cell.hasOutput,
+    outputPreview: truncateText(cell.outputPreview || '', DETAIL_OUTPUT_LIMIT),
     hasError: !!cell.hasError
   };
+};
+
+const matchesCellSearchCategory = (
+  cell: NotebookCellSnapshot,
+  category: 'all' | 'errors' | 'solve-plot' | 'helpers' | 'markdown'
+) => {
+  const source = `${cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source}\n${cell.outputPreview || ''}`.toLowerCase();
+  switch (category) {
+    case 'errors':
+      return !!cell.hasError;
+    case 'solve-plot':
+      return /\bsolve\s*\(|\bplot\s*\(/.test(source);
+    case 'helpers':
+      return cell.type === 'code' && (/^\s*(import|from)\b/m.test(source) || /\bdef\s+[A-Za-z_]/.test(source));
+    case 'markdown':
+      return cell.type === 'markdown';
+    default:
+      return true;
+  }
+};
+
+const searchNotebookCells = (
+  cells: NotebookCellSnapshot[],
+  query: string,
+  category: 'all' | 'errors' | 'solve-plot' | 'helpers' | 'markdown'
+) => {
+  const needle = query.trim().toLowerCase();
+  return cells
+    .filter((cell) => matchesCellSearchCategory(cell, category))
+    .filter((cell) => {
+      if (!needle) return true;
+      const haystack = `${cell.type === 'stoich' ? cell.stoichReaction || '' : cell.source}\n${cell.outputPreview || ''}`.toLowerCase();
+      return haystack.includes(needle);
+    })
+    .map(renderCellDetail)
+    .filter(Boolean)
+    .slice(0, 12);
 };
 
 const executeTool = (
@@ -876,6 +1193,11 @@ const executeTool = (
     }
     case 'get_recent_errors':
       return context.cells.filter((cell) => cell.hasError).map(renderCellDetail);
+    case 'search_cells': {
+      const query = String(tool.args.query || '');
+      const category = (String(tool.args.category || 'all') as 'all' | 'errors' | 'solve-plot' | 'helpers' | 'markdown');
+      return searchNotebookCells(context.cells, query, category);
+    }
     case 'get_reference': {
       const section = String(tool.args.section || 'overview') as keyof typeof REFERENCE_SECTIONS;
       return {
@@ -933,6 +1255,40 @@ const parseSseEvent = (rawEvent: string): OpenAIStreamingEvent | null => {
   }
 };
 
+const parseOpenAICompatibleToolCalls = (response: OpenAICompatibleResponse): ToolCall[] => {
+  const calls = response.choices?.[0]?.message?.tool_calls ?? [];
+  return calls.map((call) => {
+    let args: Record<string, unknown> = {};
+    try {
+      args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+    } catch (_error) {
+      args = {};
+    }
+    return {
+      id: call.id,
+      name: String(call.function.name ?? ''),
+      args
+    };
+  });
+};
+
+const parseOpenAICompatibleSseEvent = (rawEvent: string): OpenAICompatibleStreamingEvent | null => {
+  const lines = rawEvent
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  const data = lines
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart())
+    .join('\n');
+  if (!data || data === '[DONE]') return null;
+  try {
+    return JSON.parse(data) as OpenAICompatibleStreamingEvent;
+  } catch (_error) {
+    return null;
+  }
+};
+
 const extractText = (response: GeminiResponse) => {
   const parts = response.candidates?.[0]?.content?.parts ?? [];
   return parts
@@ -951,6 +1307,9 @@ const extractOpenAIText = (response: OpenAIResponsesResponse) => {
     .join('\n')
     .trim();
 };
+
+const extractOpenAICompatibleText = (response: OpenAICompatibleResponse) =>
+  (response.choices?.[0]?.message?.content ?? '').trim();
 
 export const getSupportedThinkingLevels = (model: string): AssistantThinkingLevel[] => {
   const normalized = model.toLowerCase();
@@ -982,10 +1341,41 @@ const buildThinkingConfig = (model: string, thinkingLevel: AssistantThinkingLeve
   };
 };
 
-export const detectAssistantProvider = (model: string): 'gemini' | 'openai' => {
+const toOpenAICompatibleTools = (
+  tools: ReadonlyArray<{
+    type: 'function';
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  }>
+): OpenAICompatibleTool[] =>
+  tools.map((tool) => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    }
+  }));
+
+const OPENAI_COMPATIBLE_TOOL_DECLARATIONS = toOpenAICompatibleTools(OPENAI_TOOL_DECLARATIONS);
+const OPENAI_COMPATIBLE_SANDBOX_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_SANDBOX_TOOL_DECLARATION])[0];
+const OPENAI_COMPATIBLE_SUBMIT_PLAN_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_SUBMIT_PLAN_TOOL_DECLARATION])[0];
+const OPENAI_COMPATIBLE_PLAN_METADATA_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_PLAN_METADATA_TOOL_DECLARATION])[0];
+const OPENAI_COMPATIBLE_PLAN_OPERATION_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_PLAN_OPERATION_TOOL_DECLARATION])[0];
+const OPENAI_COMPATIBLE_FINALIZE_PLAN_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_FINALIZE_PLAN_TOOL_DECLARATION])[0];
+
+export const detectAssistantProvider = (model: string, apiKey = ''): AssistantProvider => {
   const normalized = model.toLowerCase();
+  const trimmedKey = apiKey.trim();
+  if (trimmedKey.startsWith('gsk_')) {
+    return 'groq';
+  }
   if (normalized.startsWith('gpt-') || normalized.startsWith('o') || normalized.includes('codex')) {
     return 'openai';
+  }
+  if (normalized.includes('kimi-k2') || normalized.startsWith('moonshotai/')) {
+    return 'groq';
   }
   return 'gemini';
 };
@@ -1411,6 +1801,222 @@ const callOpenAIResponses = async (
   throw lastError ?? new Error('OpenAI API request failed.');
 };
 
+const callGroqChatCompletions = async (
+  apiKey: string,
+  model: string,
+  body: Record<string, unknown>,
+  retries = 3,
+  signal?: AbortSignal,
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  requestTimeoutMs = OPENAI_DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<OpenAICompatibleResponse> => {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    let lastStreamEvent = '';
+    let lastActivity = 'request_start';
+    let partialText = '';
+    const requestController = new AbortController();
+    const abortFromParent = () => requestController.abort(signal?.reason);
+    const inactivityTimeout = createInactivityTimeout(requestTimeoutMs, () => {
+      requestController.abort(new Error(`Groq request timed out after ${requestTimeoutMs}ms`));
+    });
+    if (signal) {
+      if (signal.aborted) {
+        requestController.abort(signal.reason);
+      } else {
+        signal.addEventListener('abort', abortFromParent, { once: true });
+      }
+    }
+    try {
+      onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
+      inactivityTimeout.touch();
+      const response = await fetch(`${GROQ_API_ROOT}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          ...body,
+          model,
+          stream: true
+        }),
+        signal: requestController.signal
+      });
+      lastActivity = 'response_headers';
+      inactivityTimeout.touch();
+      onNetworkEvent?.({ phase: 'response', attempt: attempt + 1, stage, status: response.status });
+      const contentType = response.headers.get('content-type') || '';
+      const readStreamResponse = async (): Promise<OpenAICompatibleResponse> => {
+        if (!response.body) {
+          throw new Error('Groq stream response body was empty.');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let responseId = '';
+        const toolCalls = new Map<number, NonNullable<OpenAICompatibleMessage['tool_calls']>[number]>();
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          lastActivity = 'response_chunk';
+          inactivityTimeout.touch();
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split(/\r?\n\r?\n/);
+          buffer = chunks.pop() ?? '';
+          for (const chunk of chunks) {
+            const event = parseOpenAICompatibleSseEvent(chunk);
+            if (!event) continue;
+            if (event.id) responseId = event.id;
+            const choice = event.choices?.[0];
+            const delta = choice?.delta;
+            if (choice?.finish_reason) {
+              lastStreamEvent = choice.finish_reason;
+              onNetworkEvent?.({
+                phase: 'stream',
+                attempt: attempt + 1,
+                stage,
+                detail: `finish:${choice.finish_reason}`
+              });
+            }
+            if (delta?.content) {
+              partialText += delta.content;
+              lastStreamEvent = 'content';
+              onNetworkEvent?.({
+                phase: 'stream',
+                attempt: attempt + 1,
+                stage,
+                detail: 'chat.completions.delta.content'
+              });
+            }
+            if (Array.isArray(delta?.tool_calls)) {
+              delta.tool_calls.forEach((toolCall) => {
+                const index = typeof toolCall.index === 'number' ? toolCall.index : toolCalls.size;
+                const existing = toolCalls.get(index) ?? {
+                  id: toolCall.id || `groq-tool-${index}`,
+                  type: 'function' as const,
+                  function: {
+                    name: '',
+                    arguments: ''
+                  }
+                };
+                if (toolCall.id) existing.id = toolCall.id;
+                if (toolCall.function?.name) existing.function.name = toolCall.function.name;
+                if (toolCall.function?.arguments) {
+                  existing.function.arguments += toolCall.function.arguments;
+                }
+                toolCalls.set(index, existing);
+              });
+              lastStreamEvent = 'tool_calls';
+              onNetworkEvent?.({
+                phase: 'stream',
+                attempt: attempt + 1,
+                stage,
+                detail: 'chat.completions.delta.tool_calls'
+              });
+            }
+          }
+        }
+        return {
+          id: responseId || undefined,
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: partialText || null,
+                tool_calls: Array.from(toolCalls.values())
+              }
+            }
+          ]
+        };
+      };
+      const parsed = contentType.includes('text/event-stream')
+        ? await readStreamResponse()
+        : ((await response.json()) as OpenAICompatibleResponse);
+      if (!response.ok) {
+        const errorText = parsed?.error?.message || `Groq API error ${response.status}`;
+        if ((response.status === 429 || response.status === 503) && attempt < retries) {
+          onNetworkEvent?.({
+            phase: 'retry',
+            attempt: attempt + 1,
+            stage,
+            status: response.status,
+            detail: errorText
+          });
+          await wait(1200 * (attempt + 1));
+          continue;
+        }
+        onNetworkEvent?.({
+          phase: 'error',
+          attempt: attempt + 1,
+          stage,
+          status: response.status,
+          detail: errorText
+        });
+        throw new Error(`Groq API error ${response.status}: ${errorText}`);
+      }
+      onResponseTrace?.({
+        provider: 'groq',
+        attempt: attempt + 1,
+        stage,
+        text: extractOpenAICompatibleText(parsed),
+        toolCalls: parseOpenAICompatibleToolCalls(parsed)
+      });
+      return parsed;
+    } catch (error) {
+      const didTimeout =
+        requestController.signal.aborted &&
+        !(signal?.aborted) &&
+        error instanceof Error &&
+        error.name === 'AbortError';
+      if (didTimeout) {
+        const streamHint =
+          typeof lastStreamEvent === 'string' && lastStreamEvent
+            ? ` Last stream event: ${lastStreamEvent}.${partialText ? ` Partial text: ${truncateText(partialText, 160)}` : ''}`
+            : ` Last activity: ${lastActivity}.`;
+        onNetworkEvent?.({
+          phase: 'timeout',
+          attempt: attempt + 1,
+          stage,
+          detail: `Groq request timed out after ${requestTimeoutMs}ms.${streamHint}`
+        });
+        lastError = new Error(`Groq request timed out after ${requestTimeoutMs}ms.${streamHint}`);
+        break;
+      }
+      if (signal?.aborted) {
+        onNetworkEvent?.({
+          phase: 'aborted',
+          attempt: attempt + 1,
+          stage,
+          detail: error instanceof Error ? error.message : String(error)
+        });
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+      onNetworkEvent?.({
+        phase: 'error',
+        attempt: attempt + 1,
+        stage,
+        detail: error instanceof Error ? error.message : String(error)
+      });
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= retries) break;
+      onNetworkEvent?.({
+        phase: 'retry',
+        attempt: attempt + 1,
+        stage,
+        detail: 'Retrying after transport error'
+      });
+      await wait(1000 * (attempt + 1));
+    } finally {
+      inactivityTimeout.clear();
+      if (signal) signal.removeEventListener('abort', abortFromParent);
+    }
+  }
+  throw lastError ?? new Error('Groq API request failed.');
+};
+
 const buildInspectionPrompt = (
   request: string,
   scope: AssistantScope,
@@ -1698,6 +2304,132 @@ const runOpenAIToolLoop = async (
   };
 };
 
+const runGroqToolLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  scope: AssistantScope,
+  context: NotebookAssistantContext,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  _thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<ToolLoopResult> => {
+  onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
+  const transcript: string[] = [];
+  const seenCalls = new Set<string>();
+  const inspectedCells = new Map<string, ReturnType<typeof renderCellDetail>>();
+  const messages: OpenAICompatibleMessage[] = [
+    {
+      role: 'system',
+      content: [
+        'Inspect the notebook with function calls, then respond with short planning notes once you have enough context.',
+        'Use get_reference when platform behavior matters.',
+        ...(requestLooksMathLike(request)
+          ? [
+              "For mathematical or plotting requests, confirm SugarPy support from references before planning.",
+              "Consult get_reference('math_cells') first and get_reference('plotting') when geometry or plotting is relevant."
+            ]
+          : [])
+      ].join('\n')
+    },
+    {
+      role: 'user',
+      content: buildInspectionPrompt(request, scope, conversationHistory)
+    }
+  ];
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Inspection round ${round + 1}`
+    });
+    const response = await callGroqChatCompletions(
+      apiKey,
+      model,
+      {
+        messages,
+        tools: OPENAI_COMPATIBLE_TOOL_DECLARATIONS,
+        tool_choice: 'auto',
+        temperature: 0.1
+      },
+      3,
+      signal,
+      onNetworkEvent,
+      'inspection',
+      onResponseTrace
+    );
+    const assistantMessage = response.choices?.[0]?.message ?? { role: 'assistant', content: null };
+    const toolCalls = parseOpenAICompatibleToolCalls(response);
+    messages.push(assistantMessage);
+
+    if (toolCalls.length === 0) {
+      const notes = extractOpenAICompatibleText(response);
+      if (notes) transcript.push(`Model notes: ${notes}`);
+      onActivity?.({ kind: 'phase', label: 'Inspection finished', detail: notes || 'No extra notes.' });
+      return { notes, transcript, inspectedCells: Array.from(inspectedCells.values()) };
+    }
+
+    let uniqueToolCount = 0;
+    toolCalls.forEach((toolCall, index) => {
+      const signature = JSON.stringify({ name: toolCall.name, args: toolCall.args ?? {} });
+      const isRepeated = seenCalls.has(signature);
+      if (!isRepeated) {
+        seenCalls.add(signature);
+        uniqueToolCount += 1;
+      }
+      const result = isRepeated
+        ? { ignored: true, reason: 'Repeated tool call was ignored.' }
+        : executeTool(toolCall, context, scope);
+      if (!isRepeated) {
+        transcript.push(`Used tool ${toolCall.name}.`);
+        onActivity?.({
+          kind: toolCall.name === 'get_reference' ? 'reference' : 'tool',
+          label: toolCall.name,
+          detail:
+            toolCall.name === 'get_reference'
+              ? String(toolCall.args.section || '')
+              : toolCall.name === 'get_cell'
+                ? String(toolCall.args.cellId || '')
+                : undefined
+        });
+        if (toolCall.name === 'get_cell' || toolCall.name === 'get_active_cell') {
+          const detail = result as ReturnType<typeof renderCellDetail>;
+          if (detail?.id) inspectedCells.set(detail.id, detail);
+        }
+        if (toolCall.name === 'get_recent_errors' && Array.isArray(result)) {
+          result.forEach((detail) => {
+            if (detail?.id) inspectedCells.set(detail.id, detail);
+          });
+        }
+      }
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id || `tool-call-${round}-${index}`,
+        content: JSON.stringify(result)
+      });
+    });
+
+    if (uniqueToolCount === 0) {
+      onActivity?.({ kind: 'phase', label: 'Inspection stopped', detail: 'Repeated tool calls were ignored.' });
+      return {
+        notes: 'Stopped tool inspection after repeated tool calls.',
+        transcript,
+        inspectedCells: Array.from(inspectedCells.values())
+      };
+    }
+  }
+
+  return {
+    notes: '',
+    transcript,
+    inspectedCells: Array.from(inspectedCells.values())
+  };
+};
+
 const runToolLoop = async (
   apiKey: string,
   model: string,
@@ -1726,33 +2458,50 @@ const runToolLoop = async (
       inspectedCells: []
     };
   }
-  return detectAssistantProvider(model) === 'openai'
-    ? runOpenAIToolLoop(
-        apiKey,
-        model,
-        request,
-        scope,
-        context,
-        onActivity,
-        signal,
-        conversationHistory,
-        thinkingLevel,
-        onNetworkEvent,
-        onResponseTrace
-      )
-    : runGeminiToolLoop(
-        apiKey,
-        model,
-        request,
-        scope,
-        context,
-        onActivity,
-        signal,
-        conversationHistory,
-        thinkingLevel,
-        onNetworkEvent,
-        onResponseTrace
-      );
+  const provider = detectAssistantProvider(model, apiKey);
+  if (provider === 'gemini') {
+    return runGeminiToolLoop(
+      apiKey,
+      model,
+      request,
+      scope,
+      context,
+      onActivity,
+      signal,
+      conversationHistory,
+      thinkingLevel,
+      onNetworkEvent,
+      onResponseTrace
+    );
+  }
+  if (provider === 'groq') {
+    return runGroqToolLoop(
+      apiKey,
+      model,
+      request,
+      scope,
+      context,
+      onActivity,
+      signal,
+      conversationHistory,
+      thinkingLevel,
+      onNetworkEvent,
+      onResponseTrace
+    );
+  }
+  return runOpenAIToolLoop(
+    apiKey,
+    model,
+    request,
+    scope,
+    context,
+    onActivity,
+    signal,
+    conversationHistory,
+    thinkingLevel,
+    onNetworkEvent,
+    onResponseTrace
+  );
 };
 
 const buildValidationPrompt = (
@@ -1777,20 +2526,22 @@ const validationSystemPrompt = [
   'You are validating a drafted SugarPy notebook change set.',
   COMPACT_REFERENCE,
   'The live notebook has not been changed yet.',
-  'You must use run_code_in_sandbox to self-check every Python code snippet that appears in code-cell insert/update operations before returning the final plan.',
+  'You must use run_code_in_sandbox to self-check every runnable insert/update operation before returning the final plan.',
+  'Use target=code for Python code cells and target=math for SugarPy Math cells.',
   'Sandbox execution is isolated and never mutates the notebook.',
   'A successful sandbox check means the code is valid for preview; actual notebook execution happens later when the user chooses Apply and Run.',
   'Do not claim that code execution is unavailable if sandbox validation succeeded.',
   'Default to contextPreset bootstrap-only unless the draft truly depends on notebook code state.',
   'Use imports-only, selected-cells, or full-notebook-replay only when that context is required.',
-  'Do not use sandbox execution for Math or Stoich cells.',
+  'Math validation must use the notebook or cell trig/render mode that the inserted Math cell will use.',
+  'Do not use sandbox execution for Stoich cells.',
   'If the sandbox reports an error or timeout, revise the draft plan or add a warning that validation failed.',
   'Return the full final AssistantPlan JSON and nothing else.'
 ].join('\n');
 
 const VALIDATION_REQUIRED_REMINDER = [
   'Your previous validation response did not call run_code_in_sandbox.',
-  'Before returning the final plan, validate every inserted or updated code cell with run_code_in_sandbox.',
+  'Before returning the final plan, validate every inserted or updated runnable cell with run_code_in_sandbox.',
   'If validation succeeds, return the updated AssistantPlan without warnings about execution being unavailable.',
   'If validation fails, revise the code or add a precise validation warning.'
 ].join('\n');
@@ -1979,6 +2730,90 @@ const runOpenAIValidationLoop = async (
   return draftPlan;
 };
 
+const runGroqValidationLoop = async (
+  apiKey: string,
+  model: string,
+  request: string,
+  context: NotebookAssistantContext,
+  draftPlan: AssistantPlan,
+  sandboxRunner: AssistantSandboxRunner,
+  onActivity?: (item: AssistantActivity) => void,
+  signal?: AbortSignal,
+  conversationHistory: AssistantConversationEntry[] = [],
+  _thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  onSandboxExecution?: (trace: AssistantSandboxExecutionTrace) => void
+): Promise<AssistantPlan> => {
+  const messages: OpenAICompatibleMessage[] = [
+    { role: 'system', content: validationSystemPrompt },
+    { role: 'user', content: buildValidationPrompt(request, context, draftPlan, conversationHistory) }
+  ];
+  let sawSandboxValidation = false;
+
+  for (let round = 0; round < MAX_VALIDATION_ROUNDS; round += 1) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Waiting for model',
+      detail: `Validation round ${round + 1}`
+    });
+    const response = await callGroqChatCompletions(
+      apiKey,
+      model,
+      {
+        messages,
+        tools: [OPENAI_COMPATIBLE_SANDBOX_TOOL_DECLARATION, OPENAI_COMPATIBLE_SUBMIT_PLAN_TOOL_DECLARATION],
+        tool_choice: 'auto',
+        temperature: 0.1
+      },
+      3,
+      signal,
+      onNetworkEvent,
+      'validation',
+      onResponseTrace
+    );
+    const assistantMessage = response.choices?.[0]?.message ?? { role: 'assistant', content: null };
+    const toolCalls = parseOpenAICompatibleToolCalls(response);
+    messages.push(assistantMessage);
+
+    if (toolCalls.length === 0) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        messages.push({ role: 'user', content: VALIDATION_REQUIRED_REMINDER });
+        continue;
+      }
+      return normalizePlan(JSON.parse(stripCodeFence(extractOpenAICompatibleText(response)) || '{}'));
+    }
+
+    let returnedPlan: AssistantPlan | null = null;
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const toolCall = toolCalls[index];
+      if (toolCall.name === 'submit_plan') {
+        returnedPlan = normalizePlan(toolCall.args);
+        continue;
+      }
+      if (toolCall.name !== 'run_code_in_sandbox') continue;
+      const sandboxRequest = normalizeSandboxRequest(toolCall.args);
+      const result = await sandboxRunner(sandboxRequest, onActivity);
+      sawSandboxValidation = true;
+      onSandboxExecution?.(summarizeSandboxExecution(sandboxRequest, result));
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id || `validation-tool-${round}-${index}`,
+        content: JSON.stringify(result)
+      });
+    }
+    if (returnedPlan) {
+      if (!sawSandboxValidation && round < MAX_VALIDATION_ROUNDS - 1) {
+        messages.push({ role: 'user', content: VALIDATION_REQUIRED_REMINDER });
+        continue;
+      }
+      return returnedPlan;
+    }
+  }
+
+  return draftPlan;
+};
+
 const runOpenAIPlanningLoop = async (
   apiKey: string,
   model: string,
@@ -2105,60 +2940,190 @@ const runOpenAIPlanningLoop = async (
   throw new Error('OpenAI planning exceeded the maximum number of planning rounds.');
 };
 
+const runGroqPlanningLoop = async (
+  apiKey: string,
+  model: string,
+  planningSystemPrompt: string,
+  planningPayload: string,
+  signal?: AbortSignal,
+  _thinkingLevel: AssistantThinkingLevel = 'dynamic',
+  onNetworkEvent?: (event: AssistantNetworkEvent) => void,
+  onResponseTrace?: (trace: AssistantResponseTrace) => void
+): Promise<AssistantPlan> => {
+  const messages: OpenAICompatibleMessage[] = [
+    { role: 'system', content: planningSystemPrompt },
+    { role: 'user', content: planningPayload }
+  ];
+  let metadata: { summary: string; userMessage: string; warnings: string[] } | null = null;
+  const operations: AssistantOperation[] = [];
+
+  for (let round = 0; round < MAX_PLANNING_ROUNDS; round += 1) {
+    const response = await callGroqChatCompletions(
+      apiKey,
+      model,
+      {
+        messages,
+        tools: [
+          OPENAI_COMPATIBLE_SUBMIT_PLAN_TOOL_DECLARATION,
+          OPENAI_COMPATIBLE_PLAN_METADATA_TOOL_DECLARATION,
+          OPENAI_COMPATIBLE_PLAN_OPERATION_TOOL_DECLARATION,
+          OPENAI_COMPATIBLE_FINALIZE_PLAN_TOOL_DECLARATION
+        ],
+        tool_choice: 'auto',
+        temperature: 0.1
+      },
+      0,
+      signal,
+      onNetworkEvent,
+      'planning',
+      onResponseTrace,
+      OPENAI_PLANNING_REQUEST_TIMEOUT_MS
+    );
+    const assistantMessage = response.choices?.[0]?.message ?? { role: 'assistant', content: null };
+    const toolCalls = parseOpenAICompatibleToolCalls(response);
+    messages.push(assistantMessage);
+
+    if (toolCalls.length === 0) {
+      const fallbackText = extractOpenAICompatibleText(response);
+      const parsedFallback = tryParsePlanText(fallbackText);
+      if (parsedFallback) {
+        return parsedFallback;
+      }
+      if (fallbackText.trim() && round < MAX_PLANNING_ROUNDS - 1) {
+        messages.push({
+          role: 'user',
+          content: [
+            'Your previous planning response was not valid AssistantPlan JSON and did not use the planning tools.',
+            'Retry now.',
+            'Return the plan only via tool calls or strict AssistantPlan JSON.',
+            'Do not return prose.'
+          ].join('\n')
+        });
+        continue;
+      }
+      const currentPlan = buildPlanFromParts(metadata, operations);
+      if (currentPlan) return currentPlan;
+      throw new Error('Groq planning finished without a submitted plan.');
+    }
+
+    let sawFinalize = false;
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const toolCall = toolCalls[index];
+      if (toolCall.name === 'submit_plan') {
+        return normalizePlan(toolCall.args);
+      }
+      if (toolCall.name === 'set_plan_metadata') {
+        metadata = {
+          summary: String(toolCall.args.summary ?? ''),
+          userMessage: String(toolCall.args.userMessage ?? ''),
+          warnings: Array.isArray(toolCall.args.warnings) ? toolCall.args.warnings.map((item) => String(item)) : []
+        };
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id || `planning-metadata-${round}-${index}`,
+          content: JSON.stringify({ ok: true, metadataSet: true })
+        });
+        continue;
+      }
+      if (toolCall.name === 'add_plan_operation') {
+        const normalized = normalizePlan({
+          summary: metadata?.summary ?? '',
+          userMessage: metadata?.userMessage ?? '',
+          warnings: metadata?.warnings ?? [],
+          operations: [toolCall.args]
+        });
+        if (normalized.operations[0]) {
+          operations.push(normalized.operations[0]);
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id || `planning-op-${round}-${index}`,
+          content: JSON.stringify({ ok: true, operationCount: operations.length })
+        });
+        continue;
+      }
+      if (toolCall.name === 'finalize_plan') {
+        sawFinalize = true;
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id || `planning-finalize-${round}-${index}`,
+          content: JSON.stringify({ ok: true, finalized: true })
+        });
+      }
+    }
+
+    const currentPlan = buildPlanFromParts(metadata, operations);
+    if (sawFinalize && currentPlan) {
+      return currentPlan;
+    }
+  }
+
+  const currentPlan = buildPlanFromParts(metadata, operations);
+  if (currentPlan) return currentPlan;
+  throw new Error('Groq planning exceeded the maximum number of planning rounds.');
+};
+
 const normalizePlan = (raw: any): AssistantPlan => {
   const payload = raw && typeof raw === 'object' && raw.plan && typeof raw.plan === 'object' ? raw.plan : raw;
   const operations = Array.isArray(payload?.operations) ? payload.operations : [];
+  const normalizedOperations = operations
+    .map((item: any) => {
+      const type = String(item?.type ?? '');
+      if (type === 'insert_cell') {
+        return {
+          type,
+          index: Number(item?.index ?? 0),
+          cellType: (item?.cellType ?? 'code') as AssistantCellKind,
+          source: String(item?.source ?? ''),
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'update_cell') {
+        return {
+          type,
+          cellId: String(item?.cellId ?? ''),
+          source: String(item?.source ?? ''),
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'delete_cell') {
+        return {
+          type,
+          cellId: String(item?.cellId ?? ''),
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'move_cell') {
+        return {
+          type,
+          cellId: String(item?.cellId ?? ''),
+          index: Number(item?.index ?? 0),
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'set_notebook_defaults') {
+        return {
+          type,
+          trigMode: item?.trigMode === 'rad' ? 'rad' : item?.trigMode === 'deg' ? 'deg' : undefined,
+          renderMode:
+            item?.renderMode === 'decimal' ? 'decimal' : item?.renderMode === 'exact' ? 'exact' : undefined,
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      return null;
+    })
+    .filter(Boolean) as AssistantOperation[];
+  const steps = buildPlanSteps(normalizedOperations);
   return {
     summary: String(payload?.summary ?? 'Prepared a notebook change set.'),
     userMessage: String(payload?.userMessage ?? ''),
     warnings: Array.isArray(payload?.warnings) ? payload.warnings.map((item: unknown) => String(item)) : [],
-    operations: operations
-      .map((item: any) => {
-        const type = String(item?.type ?? '');
-        if (type === 'insert_cell') {
-          return {
-            type,
-            index: Number(item?.index ?? 0),
-            cellType: (item?.cellType ?? 'code') as AssistantCellKind,
-            source: String(item?.source ?? ''),
-            reason: item?.reason ? String(item.reason) : undefined
-          };
-        }
-        if (type === 'update_cell') {
-          return {
-            type,
-            cellId: String(item?.cellId ?? ''),
-            source: String(item?.source ?? ''),
-            reason: item?.reason ? String(item.reason) : undefined
-          };
-        }
-        if (type === 'delete_cell') {
-          return {
-            type,
-            cellId: String(item?.cellId ?? ''),
-            reason: item?.reason ? String(item.reason) : undefined
-          };
-        }
-        if (type === 'move_cell') {
-          return {
-            type,
-            cellId: String(item?.cellId ?? ''),
-            index: Number(item?.index ?? 0),
-            reason: item?.reason ? String(item.reason) : undefined
-          };
-        }
-        if (type === 'set_notebook_defaults') {
-          return {
-            type,
-            trigMode: item?.trigMode === 'rad' ? 'rad' : item?.trigMode === 'deg' ? 'deg' : undefined,
-            renderMode:
-              item?.renderMode === 'decimal' ? 'decimal' : item?.renderMode === 'exact' ? 'exact' : undefined,
-            reason: item?.reason ? String(item.reason) : undefined
-          };
-        }
-        return null;
-      })
-      .filter(Boolean) as AssistantOperation[]
+    operations: normalizedOperations,
+    outline: {
+      summary: String(payload?.summary ?? 'Prepared a notebook change set.'),
+      steps: steps.map((step) => step.summary)
+    },
+    steps
   };
 };
 
@@ -2259,6 +3224,18 @@ export async function planNotebookChanges(params: {
     'Prefer minimal edits over broad rewrites.',
     'Do not invent cell ids that do not exist.',
     'Prefer notebook content that is natively supported by SugarPy over mathematically equivalent but less compatible forms.',
+    'This notebook is intended for teaching and demos.',
+    'Optimize for clarity over compactness.',
+    'Prefer a sequence of small, readable cells over one dense cell.',
+    'When introducing a new runnable idea, add a short markdown explanation nearby instead of assuming the user knows why the cell exists.',
+    'Do not combine multiple conceptual leaps into one code cell if two simpler cells would read better.',
+    'Avoid boilerplate-heavy Python when a short SugarPy-native alternative exists.',
+    'Use only documented SugarPy Math syntax in Math cells.',
+    'Do not invent lambda, arrow-function, or functional-programming helpers such as x -> expr or map(...) unless the documented SugarPy Math syntax explicitly supports them.',
+    MATH_ASSISTANT_SPEC,
+    'For follow-up verification steps in Math cells, prefer explicit symbolic expressions such as sqrt(2)^2 or direct equation checks over anonymous-function patterns.',
+    'Forbidden in Math cells unless explicitly documented: ->, lambda, map(...), subs(...), Python comprehensions, Python for-loops, def blocks.',
+    'Allowed Math-cell building blocks should stay narrow and explicit: symbolic assignments with :=, equations with =, unpack assignment, solve(...), Eq(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), direct arithmetic, direct symbolic expressions, and plot(...).',
     'By default, prefer SugarPy Math cells and CAS-native syntax for mathematical work.',
     'If the request is mathematical, solve it in SugarPy Math cells by default.',
     'Do not switch a math request into Python/Code cells just because code could also solve it.',
@@ -2291,7 +3268,8 @@ export async function planNotebookChanges(params: {
       ? [
           'This request looks mathematical.',
           'Stay in Math cells unless there is a concrete CAS limitation that blocks the task.',
-          'Do not generate Python scaffolding for a math exercise unless the user explicitly requested Python.'
+          'Do not generate Python scaffolding for a math exercise unless the user explicitly requested Python.',
+          'Prefer step-by-step symbolic cells that a student can read from top to bottom.'
         ]
       : []),
     ...preferenceRules
@@ -2313,10 +3291,22 @@ export async function planNotebookChanges(params: {
     inspectionSummary: inspection.transcript
   });
 
-  const provider = detectAssistantProvider(model);
+  const provider = detectAssistantProvider(model, apiKey);
   const runPlanning = async (systemPrompt: string) => {
     if (provider === 'openai') {
       return runOpenAIPlanningLoop(
+        apiKey,
+        model,
+        systemPrompt,
+        planningPayload,
+        signal,
+        thinkingLevel,
+        onNetworkEvent,
+        onResponseTrace
+      );
+    }
+    if (provider === 'groq') {
+      return runGroqPlanningLoop(
         apiKey,
         model,
         systemPrompt,
@@ -2410,6 +3400,43 @@ export async function planNotebookChanges(params: {
     }
   }
 
+  if (planHasUnsupportedMathSyntax(plan)) {
+    const unsupportedWarnings = collectUnsupportedMathWarnings(plan);
+    onActivity?.({
+      kind: 'phase',
+      label: 'Revising plan',
+      detail: 'Generated Math cells used unsupported syntax'
+    });
+    plan = await runPlanning(
+      [
+        planningSystemPrompt,
+        'The previous draft used unsupported Math-cell syntax.',
+        ...unsupportedWarnings,
+        'Regenerate the plan using only documented SugarPy Math syntax.',
+        MATH_ASSISTANT_SPEC,
+        'If you need to verify a result, do it with explicit symbolic expressions instead of undocumented helper functions.'
+      ].join('\n')
+    );
+  }
+
+  if (planHasRiskySolveIndexing(plan)) {
+    onActivity?.({
+      kind: 'phase',
+      label: 'Revising plan',
+      detail: 'Generated Math cells indexed one-variable solve results unsafely'
+    });
+    plan = await runPlanning(
+      [
+        planningSystemPrompt,
+        'The previous draft solved for a single variable and then indexed into solutions[...] in later Math cells.',
+        'That is unsafe for SugarPy Math notebooks because the exact container shape is not guaranteed to match that indexing pattern.',
+        'Regenerate the plan without indexing into solutions from a one-variable solve.',
+        'For one-variable teaching examples, prefer: show the solve(...) result directly, then verify with explicit symbolic expressions such as sqrt(2)^2 and (-sqrt(2))^2, or another equally explicit documented CAS step.',
+        'Do not use solutions[0], solutions[1], solutions[2], or similar indexing after solve(..., x).'
+      ].join('\n')
+    );
+  }
+
   if (sandboxRunner && planHasPythonCodeOperations(plan)) {
     onActivity?.({ kind: 'phase', label: 'Validating generated code' });
     plan =
@@ -2429,6 +3456,22 @@ export async function planNotebookChanges(params: {
             onResponseTrace,
             onSandboxExecution
           )
+        : provider === 'groq'
+          ? await runGroqValidationLoop(
+              apiKey,
+              model,
+              request,
+              context,
+              plan,
+              sandboxRunner,
+              onActivity,
+              signal,
+              conversationHistory,
+              thinkingLevel,
+              onNetworkEvent,
+              onResponseTrace,
+              onSandboxExecution
+            )
         : await runGeminiValidationLoop(
             apiKey,
             model,

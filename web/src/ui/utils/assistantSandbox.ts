@@ -9,8 +9,14 @@ export type AssistantSandboxContextPreset =
   | 'selected-cells'
   | 'full-notebook-replay';
 
+export type AssistantSandboxTarget = 'code' | 'math';
+
 export type AssistantSandboxRequest = {
-  code: string;
+  target?: AssistantSandboxTarget;
+  code?: string;
+  source?: string;
+  trigMode?: 'deg' | 'rad';
+  renderMode?: 'exact' | 'decimal';
   contextPreset?: AssistantSandboxContextPreset;
   selectedCellIds?: string[];
   timeoutMs?: number;
@@ -20,9 +26,12 @@ export type AssistantSandboxNotebookCell = {
   id: string;
   type?: 'code' | 'markdown' | 'math' | 'stoich';
   source: string;
+  mathTrigMode?: 'deg' | 'rad';
+  mathRenderMode?: 'exact' | 'decimal';
 };
 
 export type AssistantSandboxResult = {
+  target: AssistantSandboxTarget;
   status: 'ok' | 'error' | 'timeout';
   stdout: string;
   stderr: string;
@@ -33,6 +42,13 @@ export type AssistantSandboxResult = {
   contextPresetUsed: AssistantSandboxContextPreset;
   executedBootstrap: boolean;
   replayedCellIds: string[];
+  mathValidation?: {
+    kind?: 'expression' | 'equation' | 'assignment';
+    error?: string;
+    warnings: string[];
+    stepsPreview: string[];
+    hasPlot: boolean;
+  };
 };
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -97,21 +113,24 @@ const isImportOnlyCode = (source: string) => {
 };
 
 const isRunnableCodeCell = (cell: AssistantSandboxNotebookCell) => cell.type === 'code' && cell.source.trim().length > 0;
+const isRunnableMathCell = (cell: AssistantSandboxNotebookCell) => cell.type === 'math' && cell.source.trim().length > 0;
+const isReplayableCell = (cell: AssistantSandboxNotebookCell) => isRunnableCodeCell(cell) || isRunnableMathCell(cell);
 
 const selectReplayCells = (
   cells: AssistantSandboxNotebookCell[],
   contextPreset: AssistantSandboxContextPreset,
-  selectedCellIds: string[]
+  selectedCellIds: string[],
+  target: AssistantSandboxTarget
 ) => {
   switch (contextPreset) {
     case 'imports-only':
       return cells.filter((cell) => isRunnableCodeCell(cell) && isImportOnlyCode(cell.source));
     case 'selected-cells': {
       const selected = new Set(selectedCellIds);
-      return cells.filter((cell) => selected.has(cell.id) && isRunnableCodeCell(cell));
+      return cells.filter((cell) => selected.has(cell.id) && (target === 'math' ? isReplayableCell(cell) : isRunnableCodeCell(cell)));
     }
     case 'full-notebook-replay':
-      return cells.filter(isRunnableCodeCell);
+      return cells.filter(target === 'math' ? isReplayableCell : isRunnableCodeCell);
     default:
       return [];
   }
@@ -141,6 +160,7 @@ const executeCodeOnKernel = async (
     future = kernel.requestExecute({ code, stop_on_error: true });
   } catch (error) {
     return {
+      target: 'code',
       status: 'error',
       stdout: '',
       stderr: '',
@@ -192,6 +212,7 @@ const executeCodeOnKernel = async (
   try {
     await withTimeout(Promise.resolve(future.done), timeoutMs, 'Sandbox execution');
     return {
+      target: 'code',
       status: errorName ? 'error' : 'ok',
       stdout: truncateText(stdout),
       stderr: truncateText(stderr),
@@ -206,6 +227,7 @@ const executeCodeOnKernel = async (
   } catch (error) {
     future.dispose?.();
     return {
+      target: 'code',
       status: 'timeout',
       stdout: truncateText(stdout),
       stderr: truncateText(stderr),
@@ -220,6 +242,59 @@ const executeCodeOnKernel = async (
   }
 };
 
+const buildMathValidationCode = (source: string, trigMode: 'deg' | 'rad', renderMode: 'exact' | 'decimal') =>
+  [
+    'import json',
+    'from sugarpy.math_cell import render_math_cell',
+    `_result = render_math_cell(${JSON.stringify(source)}, mode=${JSON.stringify(trigMode)}, render_mode=${JSON.stringify(renderMode)})`,
+    'print(json.dumps(_result))'
+  ].join('\n');
+
+const executeMathOnKernel = async (
+  kernel: any,
+  source: string,
+  timeoutMs: number,
+  trigMode: 'deg' | 'rad',
+  renderMode: 'exact' | 'decimal'
+): Promise<AssistantSandboxResult> => {
+  const result = await executeCodeOnKernel(kernel, buildMathValidationCode(source, trigMode, renderMode), timeoutMs);
+  const mathValidation = parseMathValidation(result.stdout);
+  return {
+    ...result,
+    target: 'math',
+    status: result.status === 'ok' && (!mathValidation || !!mathValidation.error) ? 'error' : result.status,
+    mathValidation:
+      mathValidation ?? {
+        error: 'Math validation did not return structured output.',
+        warnings: [],
+        stepsPreview: [],
+        hasPlot: false
+      }
+  };
+};
+
+const parseMathValidation = (stdout: string) => {
+  const lines = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const parsed = JSON.parse(lines[index]) as Record<string, unknown>;
+      return {
+        kind: typeof parsed.kind === 'string' ? parsed.kind : undefined,
+        error: typeof parsed.error === 'string' ? parsed.error : undefined,
+        warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((value) => String(value)) : [],
+        stepsPreview: Array.isArray(parsed.steps) ? parsed.steps.map((value) => String(value)).slice(0, 6) : [],
+        hasPlot: !!parsed.plotly_figure
+      };
+    } catch (_error) {
+      continue;
+    }
+  }
+  return null;
+};
+
 export const runAssistantSandbox = async (params: {
   request: AssistantSandboxRequest;
   serverSettings: ServerConnection.ISettings;
@@ -228,9 +303,12 @@ export const runAssistantSandbox = async (params: {
   onActivity?: (label: string, detail?: string) => void;
 }): Promise<AssistantSandboxResult> => {
   const { request, serverSettings, notebookCells, bootstrapCode, onActivity } = params;
+  const target: AssistantSandboxTarget = request.target === 'math' ? 'math' : 'code';
   const code = String(request.code ?? '').trim();
-  if (!code) {
+  const source = String(request.source ?? '').trim();
+  if (target === 'code' && !code) {
     return {
+      target,
       status: 'error',
       stdout: '',
       stderr: '',
@@ -243,8 +321,24 @@ export const runAssistantSandbox = async (params: {
       replayedCellIds: []
     };
   }
-  if (code.length > MAX_CODE_LENGTH) {
+  if (target === 'math' && !source) {
     return {
+      target,
+      status: 'error',
+      stdout: '',
+      stderr: '',
+      mimeData: {},
+      errorName: 'ValidationError',
+      errorValue: 'Math sandbox source cannot be empty.',
+      durationMs: 0,
+      contextPresetUsed: request.contextPreset ?? 'bootstrap-only',
+      executedBootstrap: false,
+      replayedCellIds: []
+    };
+  }
+  if (target === 'code' && code.length > MAX_CODE_LENGTH) {
+    return {
+      target,
       status: 'error',
       stdout: '',
       stderr: '',
@@ -258,7 +352,7 @@ export const runAssistantSandbox = async (params: {
     };
   }
 
-  const contextPreset: AssistantSandboxContextPreset = request.contextPreset ?? 'bootstrap-only';
+  const contextPreset: AssistantSandboxContextPreset = request.contextPreset ?? (target === 'math' ? 'selected-cells' : 'bootstrap-only');
   const timeoutMs =
     typeof request.timeoutMs === 'number' && Number.isFinite(request.timeoutMs) && request.timeoutMs > 0
       ? Math.min(Math.max(Math.round(request.timeoutMs), 250), DEFAULT_TIMEOUT_MS)
@@ -269,7 +363,7 @@ export const runAssistantSandbox = async (params: {
   const manager = new KernelManager({ serverSettings });
   let kernel: any = null;
   let executedBootstrap = false;
-  const replayedCells = selectReplayCells(notebookCells, contextPreset, selectedCellIds);
+  const replayedCells = selectReplayCells(notebookCells, contextPreset, selectedCellIds, target);
   const startedAt = Date.now();
 
   try {
@@ -302,7 +396,16 @@ export const runAssistantSandbox = async (params: {
     }
 
     for (const cell of replayedCells) {
-      const replayResult = await executeCodeOnKernel(kernel, cell.source, timeoutMs);
+      const replayResult =
+        cell.type === 'math'
+          ? await executeMathOnKernel(
+              kernel,
+              cell.source,
+              timeoutMs,
+              cell.mathTrigMode === 'rad' ? 'rad' : 'deg',
+              cell.mathRenderMode === 'decimal' ? 'decimal' : 'exact'
+            )
+          : await executeCodeOnKernel(kernel, cell.source, timeoutMs);
       if (replayResult.status !== 'ok') {
         return {
           ...replayResult,
@@ -314,13 +417,23 @@ export const runAssistantSandbox = async (params: {
       }
     }
 
-    onActivity?.('Running isolated check', contextPreset);
-    const result = await executeCodeOnKernel(kernel, code, timeoutMs);
+    onActivity?.('Running isolated check', target === 'math' ? 'math' : contextPreset);
+    const result =
+      target === 'math'
+        ? await executeMathOnKernel(
+            kernel,
+            source,
+            timeoutMs,
+            request.trigMode === 'rad' ? 'rad' : 'deg',
+            request.renderMode === 'decimal' ? 'decimal' : 'exact'
+          )
+        : await executeCodeOnKernel(kernel, code, timeoutMs);
     if (result.status === 'timeout') {
       onActivity?.('Timed out after 5s');
     }
     return {
       ...result,
+      target,
       durationMs: Date.now() - startedAt,
       contextPresetUsed: contextPreset,
       executedBootstrap,

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   AssistantActivity,
+  AssistantDraftRun,
   ASSISTANT_MODEL_PRESETS,
   ASSISTANT_THINKING_LEVELS,
   getSupportedThinkingLevels,
@@ -16,7 +17,9 @@ type AssistantMessage = {
   status?: 'loading' | 'ready' | 'error' | 'stopped' | 'applied' | 'dismissed';
   activity?: AssistantActivity[];
   plan?: AssistantPlan | null;
+  draftRun?: AssistantDraftRun | null;
   error?: string;
+  requestPrompt?: string;
 };
 
 type AssistantChat = {
@@ -36,7 +39,6 @@ type Props = {
   error: string;
   chats: AssistantChat[];
   activeChatId: string | null;
-  canUndo: boolean;
   settingsOpen: boolean;
   onClose: () => void;
   onToggleSettings: () => void;
@@ -46,32 +48,15 @@ type Props = {
   onChangeDraft: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onApply: (messageId: string) => void;
-  onApplyAndRun: (messageId: string) => void;
-  onDismiss: (messageId: string) => void;
-  onUndo: () => void;
+  onAcceptAll: (messageId: string) => void;
+  onAcceptStep: (messageId: string, stepId: string) => void;
+  onReject: (messageId: string) => void;
+  onRevise: (messageId: string) => void;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
 };
 
 const CUSTOM_MODEL_VALUE = '__custom__';
-
-const describeOperation = (operation: AssistantPlan['operations'][number]) => {
-  switch (operation.type) {
-    case 'insert_cell':
-      return `Insert ${operation.cellType} cell at ${operation.index + 1}`;
-    case 'update_cell':
-      return `Update cell ${operation.cellId}`;
-    case 'delete_cell':
-      return `Delete cell ${operation.cellId}`;
-    case 'move_cell':
-      return `Move cell ${operation.cellId} to ${operation.index + 1}`;
-    case 'set_notebook_defaults':
-      return 'Update notebook defaults';
-    default:
-      return operation.type;
-  }
-};
 
 export function AssistantDrawer({
   open,
@@ -84,7 +69,6 @@ export function AssistantDrawer({
   error,
   chats,
   activeChatId,
-  canUndo,
   settingsOpen,
   onClose,
   onToggleSettings,
@@ -94,10 +78,10 @@ export function AssistantDrawer({
   onChangeDraft,
   onSend,
   onStop,
-  onApply,
-  onApplyAndRun,
-  onDismiss,
-  onUndo,
+  onAcceptAll,
+  onAcceptStep,
+  onReject,
+  onRevise,
   onSelectChat,
   onNewChat
 }: Props) {
@@ -133,6 +117,7 @@ export function AssistantDrawer({
     () => (activeChat?.messages ?? []).filter((message) => message.status !== 'dismissed'),
     [activeChat]
   );
+
   return (
     <aside className={`assistant-drawer${open ? ' open' : ''}`} aria-hidden={!open}>
       <div className="assistant-drawer-header">
@@ -141,13 +126,7 @@ export function AssistantDrawer({
           <h2>Chat-driven notebook edits</h2>
         </div>
         <div className="assistant-header-actions">
-          <button
-            className="assistant-icon-btn"
-            type="button"
-            onClick={onNewChat}
-            aria-label="New chat"
-            title="New chat"
-          >
+          <button className="assistant-icon-btn" type="button" onClick={onNewChat} aria-label="New chat" title="New chat">
             +
           </button>
           <button
@@ -169,12 +148,7 @@ export function AssistantDrawer({
       <div className="assistant-panel assistant-chat-panel">
         {settingsOpen ? (
           <div className="assistant-settings-body">
-            <button
-              type="button"
-              className="assistant-settings-close"
-              onClick={onToggleSettings}
-              aria-label="Hide assistant settings"
-            >
+            <button type="button" className="assistant-settings-close" onClick={onToggleSettings} aria-label="Hide assistant settings">
               Hide settings
             </button>
             <label className="assistant-field">
@@ -185,7 +159,7 @@ export function AssistantDrawer({
                 type="password"
                 value={apiKey}
                 onChange={(event) => onChangeApiKey(event.target.value)}
-                placeholder={hasDefaultApiKey ? 'Using shared key by default' : 'Paste OpenAI or Gemini API key'}
+                placeholder={hasDefaultApiKey ? 'Using shared key by default' : 'Paste OpenAI, Groq, or Gemini API key'}
               />
               {hasDefaultApiKey ? <small>Shared server key is active unless you enter your own key here.</small> : null}
             </label>
@@ -234,9 +208,7 @@ export function AssistantDrawer({
                 className="input"
                 value={thinkingLevel}
                 onChange={(event) =>
-                onChangeThinkingLevel(
-                  event.target.value as 'dynamic' | 'minimal' | 'low' | 'medium' | 'high'
-                )
+                  onChangeThinkingLevel(event.target.value as 'dynamic' | 'minimal' | 'low' | 'medium' | 'high')
                 }
               >
                 {ASSISTANT_THINKING_LEVELS.filter((entry) => supportedThinkingLevels.includes(entry.value)).map((entry) => (
@@ -252,7 +224,7 @@ export function AssistantDrawer({
         <div className="assistant-chat-messages" ref={messageListRef}>
           {visibleMessages.length === 0 ? (
             <div className="assistant-empty-state">
-              Ask for a notebook change in plain language. The assistant will reply with a reversible preview.
+              Ask for a notebook change in plain language. The assistant will prepare a staged draft, validate it, and wait for acceptance before applying anything.
             </div>
           ) : null}
 
@@ -274,10 +246,7 @@ export function AssistantDrawer({
                   message.status === 'loading' ? (
                     <div className="assistant-inline-activity" data-testid="assistant-activity">
                       {message.activity.map((item, index) => (
-                        <div
-                          key={`${message.id}-activity-${index}`}
-                          className={`assistant-activity-item kind-${item.kind}`}
-                        >
+                        <div key={`${message.id}-activity-${index}`} className={`assistant-activity-item kind-${item.kind}`}>
                           <span className="assistant-activity-label">{item.label}</span>
                           {item.detail ? <span className="assistant-activity-detail">{item.detail}</span> : null}
                         </div>
@@ -285,13 +254,10 @@ export function AssistantDrawer({
                     </div>
                   ) : (
                     <details className="assistant-activity-collapsed">
-                      <summary>Show steps</summary>
+                      <summary>Technical details</summary>
                       <div className="assistant-inline-activity">
                         {message.activity.map((item, index) => (
-                          <div
-                            key={`${message.id}-collapsed-activity-${index}`}
-                            className={`assistant-activity-item kind-${item.kind}`}
-                          >
+                          <div key={`${message.id}-collapsed-activity-${index}`} className={`assistant-activity-item kind-${item.kind}`}>
                             <span className="assistant-activity-label">{item.label}</span>
                             {item.detail ? <span className="assistant-activity-detail">{item.detail}</span> : null}
                           </div>
@@ -304,16 +270,25 @@ export function AssistantDrawer({
                 {message.status === 'loading' ? (
                   <div className="assistant-loading-line">
                     Thinking{'.'.repeat(Math.floor(timeTick / 500) % 3 + 1)}
-                    {message.createdAt
-                      ? ` ${Math.max(0, Math.floor((timeTick - Date.parse(message.createdAt)) / 1000))}s`
-                      : ''}
+                    {message.createdAt ? ` ${Math.max(0, Math.floor((timeTick - Date.parse(message.createdAt)) / 1000))}s` : ''}
                   </div>
                 ) : null}
 
-                {message.plan ? (
+                {message.plan || message.draftRun ? (
                   <div className="assistant-preview" data-testid="assistant-preview">
-                    <p className="assistant-summary">{message.plan.summary}</p>
-                    {message.plan.warnings.length > 0 ? (
+                    <p className="assistant-summary">{message.plan?.summary ?? message.draftRun?.summary ?? ''}</p>
+
+                    <div className="assistant-op-item">
+                      <div className="assistant-op-title">Plan</div>
+                      <div className="assistant-op-reason">{message.plan?.outline?.summary ?? message.plan?.summary ?? 'No plan summary.'}</div>
+                      {(message.plan?.outline?.steps ?? []).map((step, index) => (
+                        <div key={`${message.id}-outline-${index}`} className="assistant-warning">
+                          {index + 1}. {step}
+                        </div>
+                      ))}
+                    </div>
+
+                    {message.plan?.warnings?.length ? (
                       <div className="assistant-warning-list">
                         {message.plan.warnings.map((warning, index) => (
                           <div key={`${message.id}-warning-${index}`} className="assistant-warning">
@@ -323,47 +298,104 @@ export function AssistantDrawer({
                       </div>
                     ) : null}
 
-                    <div className="assistant-op-list">
-                      {message.plan.operations.length > 0 ? (
-                        message.plan.operations.map((operation, index) => (
-                          <div key={`${message.id}-op-${index}`} className="assistant-op-item">
-                            <div className="assistant-op-title">{describeOperation(operation)}</div>
-                            {operation.reason ? <div className="assistant-op-reason">{operation.reason}</div> : null}
-                            {'source' in operation && operation.source ? (
-                              <pre className="assistant-op-source">
-                                <code>{operation.source}</code>
-                              </pre>
-                            ) : null}
+                    {message.draftRun ? (
+                      <>
+                        <div className="assistant-op-item">
+                          <div className="assistant-op-title">Draft</div>
+                          <div className="assistant-op-list">
+                            {message.draftRun.steps.map((step) => (
+                              <div key={`${message.id}-draft-${step.id}`} className="assistant-op-item">
+                                <div className="assistant-op-reason">{step.title}: {step.explanation}</div>
+                                {step.sourcePreview ? (
+                                  <pre className="assistant-op-source">
+                                    <code>{step.sourcePreview}</code>
+                                  </pre>
+                                ) : (
+                                  <div className="assistant-op-reason">No new source in this step.</div>
+                                )}
+                              </div>
+                            ))}
                           </div>
-                        ))
-                      ) : (
-                        <div className="assistant-op-empty">No notebook changes proposed.</div>
-                      )}
-                    </div>
+                        </div>
+
+                        <div className="assistant-op-item">
+                          <div className="assistant-op-title">Validation</div>
+                          <div className="assistant-op-list">
+                            {message.draftRun.steps.map((step) => (
+                              <div key={`${message.id}-validation-${step.id}`} className="assistant-op-item">
+                                <div className="assistant-op-reason">
+                                  {step.title}: {step.errors.length > 0 ? 'failed' : step.validations.length > 0 ? 'validated' : 'schema/content pass'}
+                                </div>
+                                {step.validations.length > 0 ? (
+                                  step.validations.map((validation, index) => (
+                                    <div key={`${message.id}-validation-row-${step.id}-${index}`} className="assistant-op-reason">
+                                      {validation.summary.status} · {validation.summary.outputKind} · {validation.summary.outputPreview || 'No preview'}
+                                      {validation.summary.errorSummary ? ` · ${validation.summary.errorSummary}` : ''}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="assistant-op-reason">Markdown-only step.</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="assistant-op-item">
+                          <div className="assistant-op-title">Changes</div>
+                          <div className="assistant-op-list">
+                            {message.draftRun.steps.map((step) => (
+                              <div key={`${message.id}-changes-${step.id}`} className="assistant-op-item">
+                                <div className="assistant-op-reason">{step.title}</div>
+                                {step.changes.map((change, index) => (
+                                  <div key={`${message.id}-change-${step.id}-${index}`} className="assistant-op-title">
+                                    {change}
+                                  </div>
+                                ))}
+                                <div className="assistant-preview-actions">
+                                  <button
+                                    type="button"
+                                    className="button secondary"
+                                    onClick={() => onAcceptStep(message.id, step.id)}
+                                    disabled={loading || step.errors.length > 0}
+                                  >
+                                    Accept step
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
 
                     <div className="assistant-preview-actions">
                       <button
-                        data-testid="assistant-apply"
-                        className="button secondary"
-                        onClick={() => onApply(message.id)}
-                        disabled={loading || message.status === 'applied'}
-                      >
-                        {message.status === 'applied' ? 'Applied' : 'Apply'}
-                      </button>
-                      <button
-                        data-testid="assistant-apply-run"
+                        data-testid="assistant-accept-all"
                         className="button"
-                        onClick={() => onApplyAndRun(message.id)}
-                        disabled={loading || message.status === 'applied'}
+                        onClick={() => onAcceptAll(message.id)}
+                        disabled={loading || !message.draftRun || message.draftRun.steps.every((step) => step.errors.length > 0)}
                       >
-                        Apply and Run
+                        Accept all
                       </button>
                       <button
-                        className="button ghost"
-                        onClick={() => onDismiss(message.id)}
-                        disabled={loading || message.status === 'applied'}
+                        data-testid="assistant-reject-draft"
+                        className="button secondary"
+                        onClick={() => onReject(message.id)}
+                        disabled={loading || !message.draftRun}
                       >
-                        Dismiss
+                        Reject draft
+                      </button>
+                      <button
+                        data-testid="assistant-revise-draft"
+                        className="button ghost"
+                        onClick={() => onRevise(message.id)}
+                        disabled={loading || !message.requestPrompt}
+                      >
+                        Revise
+                      </button>
+                      <button type="button" className="button ghost" onClick={() => textareaRef.current?.focus()}>
+                        Continue chat
                       </button>
                     </div>
                   </div>
@@ -373,24 +405,9 @@ export function AssistantDrawer({
           ))}
         </div>
 
-        {error && !visibleMessages.some((message) => message.error === error) ? (
-          <div className="assistant-error">{error}</div>
-        ) : null}
+        {error && !visibleMessages.some((message) => message.error === error) ? <div className="assistant-error">{error}</div> : null}
 
         <div className="assistant-chat-footer">
-          {canUndo ? (
-            <div className="assistant-footer-actions">
-              <button
-                type="button"
-                className="button secondary"
-                onClick={onUndo}
-                disabled={loading}
-              >
-                Undo
-              </button>
-            </div>
-          ) : null}
-
           <div className="assistant-compose">
             <textarea
               ref={textareaRef}
@@ -409,11 +426,7 @@ export function AssistantDrawer({
               placeholder="Message"
             />
             {loading ? (
-              <button
-                type="button"
-                className="button secondary assistant-send-btn assistant-icon-send"
-                onClick={onStop}
-              >
+              <button type="button" className="button secondary assistant-send-btn assistant-icon-send" onClick={onStop}>
                 ■
               </button>
             ) : (

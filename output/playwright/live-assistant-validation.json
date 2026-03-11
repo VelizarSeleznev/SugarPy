@@ -1,0 +1,23 @@
+{
+  "summary": "Create introductory teaching notebook that steps through solving x^2=2 in SugarPy using markdown explanations and math cells.",
+  "progressText": "Step 1: State the equation we want to solve.",
+  "mathCells": 2,
+  "markdownCells": 2,
+  "badges": [
+    "Assistant applied",
+    "Assistant applied",
+    "Assistant applied",
+    "Assistant applied"
+  ],
+  "mathOutputs": 1,
+  "cellErrors": [],
+  "warnings": [
+    "1. State the equation we want to solve.",
+    "2. Compute and display the solutions using solve.",
+    "3. Show that squaring each solution returns 2.",
+    "Math validation failed: Line 1: Syntax error: invalid syntax (<unknown>, line 1)"
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "url": "http://localhost:5173/"
+}

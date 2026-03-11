@@ -18,19 +18,31 @@ What it does:
 Optional assistant env vars:
 ```bash
 VITE_ASSISTANT_API_KEY=... \
-VITE_ASSISTANT_MODEL=gpt-5.1-codex-mini \
+VITE_ASSISTANT_MODEL=gpt-5-mini \
 ./scripts/run-all.sh
 ```
+
+Provider-specific local overrides are also supported:
+```bash
+VITE_OPENAI_API_KEY=... \
+VITE_GROQ_API_KEY=... \
+VITE_GEMINI_API_KEY=... \
+./scripts/run-all.sh
+```
+
+Do not commit `web/.env.local`. It is intended only for local untracked overrides.
 
 If those env vars are not set, the assistant can still be configured from the in-app
 assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
 - The assistant uses a chat-style drawer with a bottom composer.
-- The default assistant flow is now teaching-first and step-streamed.
-  - The assistant first shows a short outline of the planned steps.
-  - It then inserts cells progressively instead of waiting for a final manual apply step.
-  - Newly inserted assistant cells are marked as draft/validating/applied/failed in the notebook UI.
+- The default assistant flow is now staged and teaching-first.
+  - The assistant first inspects the notebook and builds a structured plan.
+  - It then generates a draft preview with per-step validation results in the drawer.
+  - The live notebook, autosave state, and export payload stay unchanged until `Accept all` or `Accept step`.
+  - `Reject draft` discards the staged draft without resetting the chat.
+  - The main preview is human-readable: `Plan`, `Draft`, `Validation`, and `Changes`.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The available `Thinking level` values are filtered by model family:
@@ -54,12 +66,12 @@ Assistant UX notes:
 - If a math request still produces a draft plan with Code cells, the assistant now retries planning with a stricter Math-cell-only constraint before showing the preview.
 - For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
-- Runnable assistant steps are validated before insertion.
+- Runnable assistant draft steps are validated before acceptance.
   - Validation uses a fresh temporary Jupyter kernel, not the live notebook kernel.
   - Python code uses the existing sandbox presets.
-  - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are inserted.
+  - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are accepted.
   - If a new Math step depends on earlier runnable cells, the validator replays those earlier Code/Math cells inside the temporary kernel first.
-  - A sandbox timeout or runtime error is returned to the model as structured output and also blocks step insertion in the streamed apply flow.
+  - A sandbox timeout or runtime error is surfaced in the preview and blocks acceptance for that step.
 
 Runtime server config without committing secrets:
 - Create `notebooks/sugarpy-assistant-config.json` on the server or local Jupyter contents root.
@@ -67,7 +79,7 @@ Runtime server config without committing secrets:
   ```json
   {
     "apiKey": "your-api-key",
-    "model": "gpt-5.1-codex-mini"
+    "model": "gpt-5-mini"
   }
   ```
 - This file is not tracked by git because `notebooks/` is ignored.
@@ -77,10 +89,11 @@ Runtime server config without committing secrets:
 - Important: this keeps the key out of GitHub, but not out of browser devtools. To fully hide the key, move model calls behind a backend proxy.
 
 Recommended assistant models:
-- `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.
-- `gpt-5-mini`: smaller GPT-5 option.
+- `gpt-5-mini`: default OpenAI path for notebook editing.
+- `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
 - `gpt-5-nano`: cheapest GPT-5 option.
 - `gemini-3.1-flash-lite-preview`: Gemini fallback when you want the Google path.
+- `moonshotai/kimi-k2-instruct-0905`: experimental Groq OpenAI-compatible path for live comparison, not the default flow.
 
 Assistant regression checks:
 - Browser regression coverage lives in `web/e2e/notebook.spec.ts`.
@@ -96,12 +109,21 @@ Assistant regression checks:
 - Optional live assistant env vars:
   ```bash
   ASSISTANT_LIVE_API_KEY=... \
-  ASSISTANT_LIVE_MODELS=gpt-5.1-codex-mini,gpt-5-mini \
+  ASSISTANT_LIVE_MODELS=gpt-5-mini,gpt-5.1-codex-mini,gemini-3.1-flash-lite-preview,moonshotai/kimi-k2-instruct-0905 \
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- Provider-specific live keys are also supported:
+  ```bash
+  ASSISTANT_LIVE_OPENAI_API_KEY=... \
+  ASSISTANT_LIVE_GEMINI_API_KEY=... \
+  ASSISTANT_LIVE_GROQ_API_KEY=... \
+  ASSISTANT_LIVE_MODELS=gpt-5-mini,gpt-5.1-codex-mini,gemini-3.1-flash-lite-preview,moonshotai/kimi-k2-instruct-0905 \
   ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
   ```
 - If `ASSISTANT_LIVE_API_KEY` is omitted, the suite uses the shared runtime key/config already available to the app.
-- This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the preview/apply assistant flow.
-- It also covers isolated assistant sandbox validation, timeout/error reporting, and replay presets such as `imports-only` and `selected-cells`.
+- If `ASSISTANT_LIVE_API_KEY` is set, it overrides the provider-specific live-key env vars.
+- This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the staged preview plus accept/reject flow.
+- It also covers isolated assistant sandbox validation, timeout/error reporting, replay presets such as `imports-only` and `selected-cells`, reject-without-mutation checks, and partial `Accept step` behavior when a draft contains multiple validated steps.
 
 ## Notebook persistence (autosave + recovery)
 - The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.

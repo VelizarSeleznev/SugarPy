@@ -715,6 +715,40 @@ body {
   touch-action: pan-y;
 }
 
+.cell-assistant-badge {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #7c2d12;
+  background: rgba(255, 247, 237, 0.95);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.cell-wrapper.assistant-cell {
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98) 0%, rgba(255, 255, 255, 1) 46%);
+}
+
+.cell-wrapper.assistant-cell-validating {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.18);
+}
+
+.cell-wrapper.assistant-cell-applied {
+  border-color: #86efac;
+}
+
+.cell-wrapper.assistant-cell-failed {
+  border-color: #fca5a5;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.14);
+}
+
 .cell-wrapper.is-active {
   border-color: var(--primary-accent);
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.2);

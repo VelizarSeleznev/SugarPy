@@ -12,9 +12,12 @@ import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   AssistantActivity,
   AssistantConversationEntry,
+  AssistantDraftRun,
+  AssistantDraftStep,
   AssistantNetworkEvent,
   AssistantResponseTrace,
   AssistantSandboxExecutionTrace,
+  AssistantValidationSummary,
   DEFAULT_ASSISTANT_MODEL,
   detectAssistantProvider,
   normalizeThinkingLevel,
@@ -84,6 +87,12 @@ export type CellModel = {
   mathTrigMode?: 'deg' | 'rad';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
+  assistantMeta?: {
+    runId: string;
+    stepId: string;
+    status: 'draft' | 'validating' | 'applied' | 'failed';
+    isRunnable: boolean;
+  };
 };
 
 export type CellOutput =
@@ -152,9 +161,13 @@ type AssistantRuntimeConfig = {
 const matchesAssistantProvider = (apiKey: string, model: string) => {
   const trimmed = apiKey.trim();
   if (!trimmed) return false;
-  const provider = detectAssistantProvider(model);
+  if (trimmed.startsWith('test-')) return true;
+  const provider = detectAssistantProvider(model, trimmed);
   if (provider === 'openai') {
     return trimmed.startsWith('sk-');
+  }
+  if (provider === 'groq') {
+    return trimmed.startsWith('gsk_');
   }
   return trimmed.startsWith('AIza');
 };
@@ -167,7 +180,9 @@ type AssistantChatMessage = {
   status?: 'loading' | 'ready' | 'error' | 'stopped' | 'applied' | 'dismissed';
   activity?: AssistantActivity[];
   plan?: AssistantPlan | null;
+  draftRun?: AssistantDraftRun | null;
   error?: string;
+  requestPrompt?: string;
 };
 
 type AssistantChatSession = {
@@ -365,7 +380,6 @@ function App() {
   const [assistantError, setAssistantError] = useState('');
   const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
   const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
-  const [assistantUndoStack, setAssistantUndoStack] = useState<AssistantSnapshot[]>([]);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -409,6 +423,10 @@ function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const kernelRef = useRef<any>(null);
   const reconnectAttemptsRef = useRef(0);
+  const cellsRef = useRef<CellModel[]>([]);
+  const trigModeRef = useRef<'deg' | 'rad'>('deg');
+  const renderModeRef = useRef<'exact' | 'decimal'>('exact');
+  const activeCellIdRef = useRef<string | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
@@ -429,6 +447,13 @@ function App() {
     ],
     [allFunctions, userFunctions]
   );
+
+  useEffect(() => {
+    cellsRef.current = cells;
+    trigModeRef.current = trigMode;
+    renderModeRef.current = defaultMathRenderMode;
+    activeCellIdRef.current = activeCellId;
+  }, [cells, trigMode, defaultMathRenderMode, activeCellId]);
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
   const connectKernel = async () => {
@@ -1399,7 +1424,8 @@ function App() {
       mathRenderMode: cell.mathRenderMode,
       mathTrigMode: cell.mathTrigMode,
       stoichReaction: cell.stoichState?.reaction ?? '',
-      outputText: getCellDisplayText(cell),
+      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput),
+      outputPreview: getCellDisplayText(cell),
       hasError: !!(
         cell.output?.type === 'error' ||
         cell.mathOutput?.error ||
@@ -1412,7 +1438,9 @@ function App() {
     cells.map((cell) => ({
       id: cell.id,
       type: cell.type ?? 'code',
-      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source
+      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      mathTrigMode: cell.mathTrigMode,
+      mathRenderMode: cell.mathRenderMode
     }));
 
   const runAssistantSandbox = async (
@@ -1428,16 +1456,16 @@ function App() {
     });
 
   const captureAssistantSnapshot = (): AssistantSnapshot => ({
-    cells: cells.map((cell) => ({
+    cells: cellsRef.current.map((cell) => ({
       ...cell,
       mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
       stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
       stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
       output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
     })),
-    trigMode,
-    defaultMathRenderMode,
-    activeCellId
+    trigMode: trigModeRef.current,
+    defaultMathRenderMode: renderModeRef.current,
+    activeCellId: activeCellIdRef.current
   });
 
   const restoreAssistantSnapshot = (snapshot: AssistantSnapshot) => {
@@ -1445,6 +1473,266 @@ function App() {
     setTrigMode(snapshot.trigMode);
     setDefaultMathRenderMode(snapshot.defaultMathRenderMode);
     setActiveCellId(snapshot.activeCellId);
+    cellsRef.current = snapshot.cells;
+    trigModeRef.current = snapshot.trigMode;
+    renderModeRef.current = snapshot.defaultMathRenderMode;
+    activeCellIdRef.current = snapshot.activeCellId;
+  };
+
+  const isRunnableAssistantOperation = (operation: AssistantOperation) =>
+    (operation.type === 'insert_cell' && operation.cellType !== 'markdown') || operation.type === 'update_cell';
+
+  const isReplayableSandboxCell = (cell: AssistantSandboxNotebookCell) =>
+    (cell.type === 'code' || cell.type === 'math') && cell.source.trim().length > 0;
+
+  const cloneSandboxCells = (input: AssistantSandboxNotebookCell[]): AssistantSandboxNotebookCell[] =>
+    input.map((cell) => ({ ...cell }));
+
+  const buildLiveSandboxCells = (): AssistantSandboxNotebookCell[] =>
+    cellsRef.current.map((cell) => ({
+      id: cell.id,
+      type: cell.type ?? 'code',
+      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      mathTrigMode: cell.mathTrigMode,
+      mathRenderMode: cell.mathRenderMode
+    }));
+
+  const runAssistantSandboxForCells = async (
+    request: AssistantSandboxRequest,
+    notebookCells: AssistantSandboxNotebookCell[],
+    onActivity?: (item: AssistantActivity) => void
+  ) =>
+    runIsolatedAssistantSandbox({
+      request,
+      serverSettings: getServerSettings(),
+      notebookCells,
+      bootstrapCode: assistantBootstrapCode,
+      onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
+    });
+
+  const describeAssistantOperationChange = (operation: AssistantOperation) => {
+    switch (operation.type) {
+      case 'insert_cell':
+        return `Add ${operation.cellType} cell at ${operation.index + 1}`;
+      case 'update_cell':
+        return `Update cell ${operation.cellId}`;
+      case 'delete_cell':
+        return `Delete cell ${operation.cellId}`;
+      case 'move_cell':
+        return `Move cell ${operation.cellId} to ${operation.index + 1}`;
+      case 'set_notebook_defaults':
+        return 'Update notebook defaults';
+      default:
+        return operation.type;
+    }
+  };
+
+  const describeValidationOutputKind = (source: string, result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
+    if (result.status === 'timeout') return 'timeout';
+    if (result.status === 'error') return 'error';
+    if (result.target === 'math') {
+      if (/\bplot\s*\(/.test(source) || result.mathValidation?.hasPlot) return 'plot';
+      if (/\bsolve\s*\(/.test(source)) return 'symbolic solve';
+      return result.mathValidation?.kind ?? 'math';
+    }
+    const mimeKeys = Object.keys(result.mimeData ?? {});
+    if (mimeKeys.includes('application/vnd.plotly.v1+json')) return 'plot';
+    if (mimeKeys.includes('text/latex')) return 'latex';
+    if (mimeKeys.includes('text/plain')) return 'text';
+    if (result.stdout.trim()) return 'stdout';
+    return mimeKeys[0] ?? 'code';
+  };
+
+  const describeValidationPreview = (result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
+    if (result.target === 'math') {
+      if (result.mathValidation?.error) return result.mathValidation.error;
+      if (result.mathValidation?.stepsPreview?.length) {
+        return result.mathValidation.stepsPreview.join(' | ');
+      }
+    }
+    const plain = result.mimeData?.['text/plain'];
+    if (plain) return asText(plain);
+    if (result.stdout.trim()) return result.stdout.trim();
+    if (result.stderr.trim()) return result.stderr.trim();
+    return '';
+  };
+
+  const buildValidationSummary = (
+    source: string,
+    result: Awaited<ReturnType<typeof runAssistantSandbox>>
+  ): AssistantValidationSummary => {
+    const rawPreview = describeValidationPreview(result).replace(/\s+/g, ' ').trim();
+    const errorSummary =
+      result.status === 'error'
+        ? result.mathValidation?.error || result.errorValue || result.errorName || 'Validation failed.'
+        : result.status === 'timeout'
+          ? result.errorValue || 'Validation timed out.'
+          : undefined;
+    return {
+      status: result.status,
+      outputKind: describeValidationOutputKind(source, result),
+      outputPreview: rawPreview || (result.status === 'ok' ? 'No visible output.' : ''),
+      errorSummary,
+      replayContextUsed: result.contextPresetUsed,
+      replayedCellIds: result.replayedCellIds
+    };
+  };
+
+  const applyDraftOperationToSandboxCells = (
+    cellsInput: AssistantSandboxNotebookCell[],
+    operation: AssistantOperation,
+    options?: { insertedCellId?: string }
+  ) => {
+    let nextCells = cloneSandboxCells(cellsInput);
+    if (operation.type === 'insert_cell') {
+      const nextCellId = options?.insertedCellId ?? `draft-cell-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const nextCell: AssistantSandboxNotebookCell = {
+        id: nextCellId,
+        type: operation.cellType,
+        source: operation.source
+      };
+      const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+      nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
+      return { cells: nextCells, insertedCellId: nextCellId };
+    }
+    if (operation.type === 'update_cell') {
+      return {
+        cells: nextCells.map((cell) =>
+          cell.id === operation.cellId ? { ...cell, source: operation.source } : cell
+        )
+      };
+    }
+    if (operation.type === 'delete_cell') {
+      return { cells: nextCells.filter((cell) => cell.id !== operation.cellId) };
+    }
+    if (operation.type === 'move_cell') {
+      const currentIndex = nextCells.findIndex((cell) => cell.id === operation.cellId);
+      if (currentIndex === -1) return { cells: nextCells };
+      const [moved] = nextCells.splice(currentIndex, 1);
+      const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+      nextCells.splice(bounded, 0, moved);
+      return { cells: [...nextCells] };
+    }
+    return { cells: nextCells };
+  };
+
+  const buildDraftFromPlan = async (
+    plan: AssistantPlan,
+    onActivity?: (item: AssistantActivity) => void
+  ): Promise<AssistantDraftRun> => {
+    let draftCells = buildLiveSandboxCells();
+    let draftTrigMode = trigModeRef.current;
+    let draftRenderMode = renderModeRef.current;
+    const steps: AssistantDraftStep[] = [];
+
+    for (const step of plan.steps) {
+      const validations: AssistantDraftStep['validations'] = [];
+      const warnings = [...step.warnings];
+      const errors: string[] = [];
+      let workingCells = cloneSandboxCells(draftCells);
+      let workingTrigMode = draftTrigMode;
+      let workingRenderMode = draftRenderMode;
+
+      for (let operationIndex = 0; operationIndex < step.operations.length; operationIndex += 1) {
+        const operation = step.operations[operationIndex];
+        if (operation.type === 'set_notebook_defaults') {
+          if (operation.trigMode) workingTrigMode = operation.trigMode;
+          if (operation.renderMode) workingRenderMode = operation.renderMode;
+          continue;
+        }
+
+        if (!isRunnableAssistantOperation(operation)) {
+          workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
+          continue;
+        }
+
+        const sandboxSource = operation.source;
+        const replayableCellIds = workingCells
+          .filter((cell) => {
+            if (!isReplayableSandboxCell(cell)) return false;
+            return operation.type !== 'update_cell' || cell.id !== operation.cellId;
+          })
+          .map((cell) => cell.id);
+        const usesReplayContext =
+          replayableCellIds.length > 0 &&
+          (operation.type === 'update_cell' || steps.some((entry) => entry.isRunnable));
+        const request: AssistantSandboxRequest =
+          operation.type === 'insert_cell' && operation.cellType === 'math'
+            ? {
+                target: 'math',
+                source: sandboxSource,
+                trigMode: workingTrigMode,
+                renderMode: workingRenderMode,
+                contextPreset: usesReplayContext ? 'selected-cells' : 'none',
+                selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                timeoutMs: 5000
+              }
+            : operation.type === 'update_cell' && workingCells.find((cell) => cell.id === operation.cellId)?.type === 'math'
+              ? {
+                  target: 'math',
+                  source: sandboxSource,
+                  trigMode: workingTrigMode,
+                  renderMode: workingRenderMode,
+                  contextPreset: usesReplayContext ? 'selected-cells' : 'none',
+                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                  timeoutMs: 5000
+                }
+              : {
+                  target: 'code',
+                  code: sandboxSource,
+                  contextPreset: usesReplayContext ? 'selected-cells' : 'bootstrap-only',
+                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                  timeoutMs: 5000
+                };
+
+        onActivity?.({
+          kind: 'phase',
+          label: 'Validating draft step',
+          detail: `${step.title}: ${step.summary}`
+        });
+        const result = await runAssistantSandboxForCells(request, workingCells, onActivity);
+        validations.push({
+          operationIndex,
+          cellType:
+            operation.type === 'insert_cell'
+              ? operation.cellType
+              : (workingCells.find((cell) => cell.id === operation.cellId)?.type ?? 'code'),
+          source: sandboxSource,
+          summary: buildValidationSummary(sandboxSource, result)
+        });
+        if (result.status !== 'ok') {
+          errors.push(buildValidationSummary(sandboxSource, result).errorSummary || 'Validation failed.');
+        }
+        workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
+      }
+
+      steps.push({
+        id: step.id,
+        title: step.title,
+        summary: step.summary,
+        explanation: step.summary,
+        operations: step.operations,
+        validations,
+        warnings,
+        errors,
+        sourcePreview: step.operations
+          .filter((operation) => 'source' in operation && operation.source)
+          .map((operation) => operation.source)
+          .join('\n\n'),
+        changes: step.operations.map(describeAssistantOperationChange),
+        isRunnable: step.operations.some(isRunnableAssistantOperation)
+      });
+
+      draftCells = workingCells;
+      draftTrigMode = workingTrigMode;
+      draftRenderMode = workingRenderMode;
+    }
+
+    return {
+      summary: plan.summary,
+      hasFailures: steps.some((step) => step.errors.length > 0),
+      steps
+    };
   };
 
   const insertCellAt = (
@@ -1634,7 +1922,9 @@ function App() {
                   status: typeof message.status === 'string' ? message.status : undefined,
                   activity: Array.isArray(message.activity) ? message.activity : [],
                   plan: message.plan ?? null,
-                  error: typeof message.error === 'string' ? message.error : undefined
+                  draftRun: message.draftRun ?? null,
+                  error: typeof message.error === 'string' ? message.error : undefined,
+                  requestPrompt: typeof message.requestPrompt === 'string' ? message.requestPrompt : undefined
                 }))
             : []
         })) as AssistantChatSession[];
@@ -1667,6 +1957,7 @@ function App() {
     const envApiKey = (
       import.meta.env.VITE_ASSISTANT_API_KEY ||
       import.meta.env.VITE_OPENAI_API_KEY ||
+      import.meta.env.VITE_GROQ_API_KEY ||
       import.meta.env.VITE_GEMINI_API_KEY ||
       ''
     ).trim();
@@ -1689,9 +1980,9 @@ function App() {
     return runtimeConfig;
   };
 
-  const runAssistant = async () => {
+  const runAssistant = async (promptOverride?: string, options?: { chatId?: string; reviseFromMessageId?: string }) => {
     const runtimeConfig = await hydrateAssistantRuntimeConfig();
-    const chatId = ensureAssistantChat();
+    const chatId = options?.chatId ?? ensureAssistantChat();
     const effectiveModel = (
       runtimeConfig?.model?.trim() ||
       assistantModel.trim() ||
@@ -1710,19 +2001,22 @@ function App() {
         ? defaultApiKey
         : '';
     if (!effectiveApiKey) {
-      const provider = detectAssistantProvider(effectiveModel);
+      const provider = detectAssistantProvider(effectiveModel, overrideApiKey || defaultApiKey);
       setAssistantError(
         provider === 'openai'
           ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
-          : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
+          : provider === 'groq'
+            ? 'No Groq API key is available. Add your own key in settings or configure a shared Groq key on the server.'
+            : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
       );
       return;
     }
-    if (!assistantDraft.trim()) {
+    const promptSource = (promptOverride ?? assistantDraft).trim();
+    if (!promptSource) {
       setAssistantError('Write a request for the assistant first.');
       return;
     }
-    const prompt = assistantDraft.trim();
+    const prompt = promptSource;
     const effectiveThinkingLevel = normalizeThinkingLevel(effectiveModel, assistantThinkingLevel);
     const activeChat =
       assistantChats.find((chat) => chat.id === chatId) ??
@@ -1755,7 +2049,8 @@ function App() {
       content: '',
       createdAt: timestamp,
       status: 'loading',
-      activity: []
+      activity: [],
+      requestPrompt: prompt
     };
 
     updateAssistantChat(chatId, (chat) => ({
@@ -1801,67 +2096,105 @@ function App() {
     const controller = new AbortController();
     assistantAbortRef.current = controller;
     try {
-      const plan = await planNotebookChanges({
-        apiKey: effectiveApiKey,
-        model: effectiveModel,
-        request: prompt,
-        scope: ASSISTANT_SCOPE,
-        preference: ASSISTANT_PREFERENCE,
-        context: buildAssistantContext(),
-        signal: controller.signal,
-        conversationHistory: [...previousConversation, { role: 'user', content: prompt }].slice(-6),
-        thinkingLevel: effectiveThinkingLevel,
-        sandboxRunner: runAssistantSandbox,
-        onNetworkEvent: (event) => {
-          collectedNetwork.push(event);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onResponseTrace: (trace) => {
-          collectedResponses.push(trace);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onSandboxExecution: (trace) => {
-          collectedSandboxExecutions.push(trace);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onActivity: (item) => {
-          collectedActivity.push(item);
+      const requestPlan = async (requestText: string, prependActivityLabel?: string) => {
+        if (prependActivityLabel) {
+          const activityItem = { kind: 'phase' as const, label: prependActivityLabel };
+          collectedActivity.push(activityItem);
           updateAssistantMessage(chatId, assistantMessageId, (message) => ({
             ...message,
-            activity: [...(message.activity ?? []), item]
+            activity: [...(message.activity ?? []), activityItem]
           }));
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
         }
+        return planNotebookChanges({
+          apiKey: effectiveApiKey,
+          model: effectiveModel,
+          request: requestText,
+          scope: ASSISTANT_SCOPE,
+          preference: ASSISTANT_PREFERENCE,
+          context: buildAssistantContext(),
+          signal: controller.signal,
+          conversationHistory: [...previousConversation, { role: 'user', content: requestText }].slice(-6),
+          thinkingLevel: effectiveThinkingLevel,
+          sandboxRunner: runAssistantSandbox,
+          onNetworkEvent: (event) => {
+            collectedNetwork.push(event);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions]
+            });
+          },
+          onResponseTrace: (trace) => {
+            collectedResponses.push(trace);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions]
+            });
+          },
+          onSandboxExecution: (trace) => {
+            collectedSandboxExecutions.push(trace);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions]
+            });
+          },
+          onActivity: (item) => {
+            collectedActivity.push(item);
+            updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+              ...message,
+              activity: [...(message.activity ?? []), item]
+            }));
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions]
+            });
+          }
+        });
+      };
+
+      const reviseMessage = options?.reviseFromMessageId
+        ? activeAssistantChat?.messages.find((entry) => entry.id === options.reviseFromMessageId)
+        : null;
+      const revisedPrompt =
+        reviseMessage?.draftRun
+          ? [
+              prompt,
+              'Revise the previous staged draft.',
+              'Keep the validated parts when possible, but fix any failed validations and improve the preview clarity.',
+              ...reviseMessage.draftRun.steps
+                .filter((step) => step.errors.length > 0)
+                .map((step) => `${step.title}: ${step.errors.join(' ')}`)
+            ].join('\n')
+          : prompt;
+      const plan = await requestPlan(revisedPrompt);
+      const draftRun = await buildDraftFromPlan(plan, (item) => {
+        collectedActivity.push(item);
+        updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+          ...message,
+          activity: [...(message.activity ?? []), item]
+        }));
       });
       updateAssistantMessage(chatId, assistantMessageId, (message) => ({
         ...message,
-        content: plan.userMessage || plan.summary,
+        content:
+          draftRun.hasFailures
+            ? 'Draft ready. Some steps failed validation, so nothing was applied.'
+            : plan.userMessage || plan.summary,
         plan,
-        status: 'ready'
+        draftRun,
+        error: draftRun.hasFailures ? 'One or more draft steps failed validation. Revise or reject the draft.' : undefined,
+        status: draftRun.hasFailures ? 'error' : 'ready'
       }));
       void persistAssistantTrace({
         ...baseTrace,
@@ -1869,12 +2202,13 @@ function App() {
         network: [...collectedNetwork],
         responses: [...collectedResponses],
         sandboxExecutions: [...collectedSandboxExecutions],
-        status: 'completed',
+        status: draftRun.hasFailures ? 'error' : 'completed',
+        error: draftRun.hasFailures ? 'Draft validation failed.' : undefined,
         finishedAt: new Date().toISOString(),
         durationMs: Date.now() - Date.parse(timestamp),
         result: {
           summary: plan.summary,
-          warningCount: plan.warnings.length,
+          warningCount: plan.warnings.length + draftRun.steps.reduce((sum, step) => sum + step.errors.length, 0),
           operationCount: plan.operations.length
         }
       });
@@ -1930,13 +2264,11 @@ function App() {
     assistantAbortRef.current?.abort();
   };
 
-  const applyAssistantPlan = async (messageId: string, plan: AssistantPlan, runAfterApply = false) => {
-    const snapshot = captureAssistantSnapshot();
-    const newCellIds: string[] = [];
-    let nextCells = [...cells];
-    let nextTrigMode = trigMode;
-    let nextRenderMode = defaultMathRenderMode;
-    let nextActiveCellId = activeCellId;
+  const applyAcceptedDraft = async (stepsToApply: AssistantDraftStep[]) => {
+    let nextCells = [...cellsRef.current];
+    let nextTrigMode = trigModeRef.current;
+    let nextRenderMode = renderModeRef.current;
+    let nextActiveCellId = activeCellIdRef.current;
 
     const makeStoichCell = (source: string, indexSeed?: number) => {
       const cell = createCell('stoich', '', indexSeed);
@@ -1953,100 +2285,161 @@ function App() {
       return createCell(operation.cellType, operation.source, operation.index + 1);
     };
 
-    plan.operations.forEach((operation) => {
-      if (operation.type === 'insert_cell') {
-        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-        const nextCell = createFromOperation(operation);
-        nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
-        newCellIds.push(nextCell.id);
-        nextActiveCellId = nextCell.id;
-        return;
-      }
-      if (operation.type === 'update_cell') {
-        nextCells = nextCells.map((cell) => {
-          if (cell.id !== operation.cellId) return cell;
-          if (cell.type === 'stoich') {
+    stepsToApply.forEach((step) => {
+      step.operations.forEach((operation) => {
+        if (operation.type === 'insert_cell') {
+          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+          const nextCell = createFromOperation(operation);
+          nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
+          nextActiveCellId = nextCell.id;
+          return;
+        }
+        if (operation.type === 'update_cell') {
+          nextCells = nextCells.map((cell) => {
+            if (cell.id !== operation.cellId) return cell;
+            if (cell.type === 'stoich') {
+              return {
+                ...cell,
+                source: '',
+                stoichState: createStoichState(operation.source),
+                stoichOutput: undefined
+              };
+            }
             return {
               ...cell,
-              source: '',
-              stoichState: createStoichState(operation.source),
-              stoichOutput: undefined
+              source: operation.source,
+              output: undefined,
+              mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
+              stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput,
+              assistantMeta: undefined
             };
-          }
-          return {
-            ...cell,
-            source: operation.source,
-            output: undefined,
-            mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
-            stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput
-          };
-        });
-        nextActiveCellId = operation.cellId;
-        return;
-      }
-      if (operation.type === 'delete_cell') {
-        nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
-        if (nextActiveCellId === operation.cellId) {
-          nextActiveCellId = nextCells[0]?.id ?? null;
+          });
+          nextActiveCellId = operation.cellId;
+          return;
         }
-        return;
-      }
-      if (operation.type === 'move_cell') {
-        const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
-        if (index === -1) return;
-        const [cell] = nextCells.splice(index, 1);
-        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-        nextCells.splice(bounded, 0, cell);
-        nextCells = [...nextCells];
-        nextActiveCellId = operation.cellId;
-        return;
-      }
-      if (operation.type === 'set_notebook_defaults') {
-        if (operation.trigMode) nextTrigMode = operation.trigMode;
-        if (operation.renderMode) nextRenderMode = operation.renderMode;
-      }
+        if (operation.type === 'delete_cell') {
+          nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
+          if (nextActiveCellId === operation.cellId) {
+            nextActiveCellId = nextCells[0]?.id ?? null;
+          }
+          return;
+        }
+        if (operation.type === 'move_cell') {
+          const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
+          if (index === -1) return;
+          const [cell] = nextCells.splice(index, 1);
+          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+          nextCells.splice(bounded, 0, { ...cell, assistantMeta: undefined });
+          nextCells = [...nextCells];
+          nextActiveCellId = operation.cellId;
+          return;
+        }
+        if (operation.type === 'set_notebook_defaults') {
+          if (operation.trigMode) nextTrigMode = operation.trigMode;
+          if (operation.renderMode) nextRenderMode = operation.renderMode;
+        }
+      });
     });
 
-    setAssistantUndoStack((prev) => [...prev.slice(-9), snapshot]);
     setCells(nextCells);
     setTrigMode(nextTrigMode);
     setDefaultMathRenderMode(nextRenderMode);
     setActiveCellId(nextActiveCellId);
-    if (assistantActiveChatId) {
-      updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
-        ...message,
-        status: 'applied'
-      }));
-    }
-
-    if (runAfterApply) {
-      const runTargets = nextCells.filter(
-        (cell) =>
-          newCellIds.includes(cell.id) ||
-          plan.operations.some(
-            (operation) => operation.type === 'update_cell' && operation.cellId === cell.id
-          )
-      );
-      for (const cell of runTargets) {
-        if (cell.type === 'markdown') continue;
-        await runCellById(cell);
-      }
-    }
+    cellsRef.current = nextCells;
+    trigModeRef.current = nextTrigMode;
+    renderModeRef.current = nextRenderMode;
+    activeCellIdRef.current = nextActiveCellId;
   };
 
-  const undoAssistantPlan = () => {
-    const snapshot = assistantUndoStack[assistantUndoStack.length - 1];
-    if (!snapshot) return;
-    restoreAssistantSnapshot(snapshot);
-    setAssistantUndoStack((prev) => prev.slice(0, -1));
-  };
-
-  const dismissAssistantPlan = (messageId: string) => {
+  const rejectAssistantDraft = (messageId: string) => {
     if (!assistantActiveChatId) return;
     updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
       ...message,
-      status: 'dismissed'
+      content: 'Draft rejected. Notebook unchanged.',
+      plan: null,
+      draftRun: null,
+      status: 'ready',
+      error: undefined
     }));
+  };
+
+  const acceptAssistantSteps = async (messageId: string, stepIds?: string[]) => {
+    if (!assistantActiveChatId) return;
+    const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+    if (!message?.plan || !message.draftRun) return;
+    const acceptedSteps = message.draftRun.steps.filter(
+      (step) =>
+        (stepIds ? stepIds.includes(step.id) : true) &&
+        step.errors.length === 0
+    );
+    if (acceptedSteps.length === 0) {
+      updateAssistantMessage(assistantActiveChatId, messageId, (entry) => ({
+        ...entry,
+        status: 'error',
+        error: 'Nothing to accept. Revise or reject the failed draft first.'
+      }));
+      return;
+    }
+    await applyAcceptedDraft(acceptedSteps);
+    updateAssistantMessage(assistantActiveChatId, messageId, (entry) => {
+      if (!entry.draftRun) {
+        return {
+          ...entry,
+          status: 'applied'
+        };
+      }
+      const remainingSteps = entry.draftRun.steps.filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id));
+      return {
+        ...entry,
+        content:
+          remainingSteps.length > 0
+            ? 'Accepted the selected draft step. The remaining staged draft stays in chat.'
+            : 'Accepted the validated draft.',
+        status: remainingSteps.length > 0 ? 'ready' : 'applied',
+        draftRun:
+          remainingSteps.length > 0
+            ? {
+                ...entry.draftRun,
+                hasFailures: remainingSteps.some((step) => step.errors.length > 0),
+                steps: remainingSteps
+              }
+            : null,
+        plan:
+          remainingSteps.length > 0
+            ? {
+                ...entry.plan!,
+                steps: entry.plan!.steps.filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id)),
+                operations: entry.plan!.steps
+                  .filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id))
+                  .flatMap((step) => step.operations),
+                outline: {
+                  ...entry.plan!.outline,
+                  steps: entry.plan!.steps
+                    .filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id))
+                    .map((step) => step.summary)
+                }
+              }
+            : null,
+        error: undefined
+      };
+    });
+  };
+
+  const reviseAssistantDraft = async (messageId: string) => {
+    if (!assistantActiveChatId) return;
+    const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+    const fallbackPrompt =
+      message?.requestPrompt ||
+      activeAssistantChat?.messages
+        .slice()
+        .reverse()
+        .find((entry) => entry.role === 'user')?.content ||
+      '';
+    if (!fallbackPrompt) {
+      setAssistantError('Could not find the original request for this draft.');
+      return;
+    }
+    await runAssistant(fallbackPrompt, { chatId: assistantActiveChatId, reviseFromMessageId: messageId });
   };
 
   useEffect(() => {
@@ -2647,7 +3040,6 @@ function App() {
             error={assistantError}
             chats={assistantChats}
             activeChatId={assistantActiveChatId}
-            canUndo={assistantUndoStack.length > 0}
             settingsOpen={assistantSettingsOpen}
             onClose={() => setAssistantOpen(false)}
             onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
@@ -2659,18 +3051,16 @@ function App() {
               void runAssistant();
             }}
             onStop={stopAssistant}
-            onApply={(messageId) => {
-              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
-              if (!message?.plan || !assistantActiveChatId) return;
-              void applyAssistantPlan(messageId, message.plan, false);
+            onAcceptAll={(messageId) => {
+              void acceptAssistantSteps(messageId);
             }}
-            onApplyAndRun={(messageId) => {
-              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
-              if (!message?.plan || !assistantActiveChatId) return;
-              void applyAssistantPlan(messageId, message.plan, true);
+            onAcceptStep={(messageId, stepId) => {
+              void acceptAssistantSteps(messageId, [stepId]);
             }}
-            onDismiss={dismissAssistantPlan}
-            onUndo={undoAssistantPlan}
+            onReject={rejectAssistantDraft}
+            onRevise={(messageId) => {
+              void reviseAssistantDraft(messageId);
+            }}
             onSelectChat={setAssistantActiveChatId}
             onNewChat={() => {
               createNewAssistantChat();

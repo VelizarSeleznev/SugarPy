@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 type Props = {
+  className?: string;
+  badgeLabel?: string;
   isActive: boolean;
   status: string;
   onRun?: () => void;
@@ -16,6 +18,8 @@ type Props = {
 };
 
 export function CellWrapper({
+  className,
+  badgeLabel,
   isActive,
   status,
   onRun,
@@ -125,7 +129,7 @@ export function CellWrapper({
         ))}
       </div>
       <div
-        className={`cell-wrapper${isActive ? ' is-active' : ''}`}
+        className={`cell-wrapper${isActive ? ' is-active' : ''}${className ? ` ${className}` : ''}`}
         data-testid="cell-wrapper"
         style={{ transform: `translateX(${swipeOffset}px)` }}
         onTouchStart={handleTouchStart}
@@ -144,6 +148,7 @@ export function CellWrapper({
           onActivate?.();
         }}
       >
+        {badgeLabel ? <div className="cell-assistant-badge">{badgeLabel}</div> : null}
         {statusVisible ? (
           <div className={`cell-status${compactStatus ? ' compact' : ''}`}>
             <button
