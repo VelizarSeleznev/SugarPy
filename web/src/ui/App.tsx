@@ -219,6 +219,14 @@ type AssistantRunTrace = {
   network: AssistantNetworkEvent[];
   responses: AssistantResponseTrace[];
   sandboxExecutions: AssistantSandboxExecutionTrace[];
+  draftValidations: Array<{
+    stepId: string;
+    stepTitle: string;
+    operationIndex: number;
+    cellType: AssistantCellKind;
+    request: AssistantSandboxRequest;
+    summary: AssistantValidationSummary;
+  }>;
   result?: {
     summary: string;
     warningCount: number;
@@ -1618,7 +1626,15 @@ function App() {
 
   const buildDraftFromPlan = async (
     plan: AssistantPlan,
-    onActivity?: (item: AssistantActivity) => void
+    onActivity?: (item: AssistantActivity) => void,
+    onValidation?: (entry: {
+      stepId: string;
+      stepTitle: string;
+      operationIndex: number;
+      cellType: AssistantCellKind;
+      request: AssistantSandboxRequest;
+      summary: AssistantValidationSummary;
+    }) => void
   ): Promise<AssistantDraftRun> => {
     let draftCells = buildLiveSandboxCells();
     let draftTrigMode = trigModeRef.current;
@@ -1691,17 +1707,27 @@ function App() {
           detail: `${step.title}: ${step.summary}`
         });
         const result = await runAssistantSandboxForCells(request, workingCells, onActivity);
+        const cellType =
+          operation.type === 'insert_cell'
+            ? operation.cellType
+            : (workingCells.find((cell) => cell.id === operation.cellId)?.type ?? 'code');
+        const summary = buildValidationSummary(sandboxSource, result);
         validations.push({
           operationIndex,
-          cellType:
-            operation.type === 'insert_cell'
-              ? operation.cellType
-              : (workingCells.find((cell) => cell.id === operation.cellId)?.type ?? 'code'),
+          cellType,
           source: sandboxSource,
-          summary: buildValidationSummary(sandboxSource, result)
+          summary
+        });
+        onValidation?.({
+          stepId: step.id,
+          stepTitle: step.title,
+          operationIndex,
+          cellType,
+          request,
+          summary
         });
         if (result.status !== 'ok') {
-          errors.push(buildValidationSummary(sandboxSource, result).errorSummary || 'Validation failed.');
+          errors.push(summary.errorSummary || 'Validation failed.');
         }
         workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
       }
@@ -2082,12 +2108,14 @@ function App() {
       activity: [],
       network: [],
       responses: [],
-      sandboxExecutions: []
+      sandboxExecutions: [],
+      draftValidations: []
     };
     const collectedActivity: AssistantActivity[] = [];
     const collectedNetwork: AssistantNetworkEvent[] = [];
     const collectedResponses: AssistantResponseTrace[] = [];
     const collectedSandboxExecutions: AssistantSandboxExecutionTrace[] = [];
+    const collectedDraftValidations: AssistantRunTrace['draftValidations'] = [];
     void persistAssistantTrace(baseTrace);
 
     setAssistantLoading(true);
@@ -2123,7 +2151,8 @@ function App() {
               activity: [...collectedActivity],
               network: [...collectedNetwork],
               responses: [...collectedResponses],
-              sandboxExecutions: [...collectedSandboxExecutions]
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
             });
           },
           onResponseTrace: (trace) => {
@@ -2133,7 +2162,8 @@ function App() {
               activity: [...collectedActivity],
               network: [...collectedNetwork],
               responses: [...collectedResponses],
-              sandboxExecutions: [...collectedSandboxExecutions]
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
             });
           },
           onSandboxExecution: (trace) => {
@@ -2143,7 +2173,8 @@ function App() {
               activity: [...collectedActivity],
               network: [...collectedNetwork],
               responses: [...collectedResponses],
-              sandboxExecutions: [...collectedSandboxExecutions]
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
             });
           },
           onActivity: (item) => {
@@ -2157,7 +2188,8 @@ function App() {
               activity: [...collectedActivity],
               network: [...collectedNetwork],
               responses: [...collectedResponses],
-              sandboxExecutions: [...collectedSandboxExecutions]
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
             });
           }
         });
@@ -2178,13 +2210,27 @@ function App() {
             ].join('\n')
           : prompt;
       const plan = await requestPlan(revisedPrompt);
-      const draftRun = await buildDraftFromPlan(plan, (item) => {
-        collectedActivity.push(item);
-        updateAssistantMessage(chatId, assistantMessageId, (message) => ({
-          ...message,
-          activity: [...(message.activity ?? []), item]
-        }));
-      });
+      const draftRun = await buildDraftFromPlan(
+        plan,
+        (item) => {
+          collectedActivity.push(item);
+          updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+            ...message,
+            activity: [...(message.activity ?? []), item]
+          }));
+        },
+        (entry) => {
+          collectedDraftValidations.push(entry);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        }
+      );
       updateAssistantMessage(chatId, assistantMessageId, (message) => ({
         ...message,
         content:
@@ -2202,6 +2248,7 @@ function App() {
         network: [...collectedNetwork],
         responses: [...collectedResponses],
         sandboxExecutions: [...collectedSandboxExecutions],
+        draftValidations: [...collectedDraftValidations],
         status: draftRun.hasFailures ? 'error' : 'completed',
         error: draftRun.hasFailures ? 'Draft validation failed.' : undefined,
         finishedAt: new Date().toISOString(),
@@ -2229,6 +2276,7 @@ function App() {
           network: [...collectedNetwork],
           responses: [...collectedResponses],
           sandboxExecutions: [...collectedSandboxExecutions],
+          draftValidations: [...collectedDraftValidations],
           status: 'stopped',
           finishedAt: new Date().toISOString(),
           durationMs: Date.now() - Date.parse(timestamp)
@@ -2248,6 +2296,7 @@ function App() {
           network: [...collectedNetwork],
           responses: [...collectedResponses],
           sandboxExecutions: [...collectedSandboxExecutions],
+          draftValidations: [...collectedDraftValidations],
           status: 'error',
           error: message,
           finishedAt: new Date().toISOString(),

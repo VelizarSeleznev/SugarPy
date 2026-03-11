@@ -1,9 +1,9 @@
-import {
+import type {
   AssistantSandboxContextPreset,
   AssistantSandboxTarget,
   AssistantSandboxRequest,
   AssistantSandboxResult
-} from './assistantSandbox';
+} from './assistantSandbox.ts';
 
 export type AssistantScope = 'notebook' | 'active';
 export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
@@ -365,15 +365,26 @@ const COMPACT_REFERENCE = [
   '- name := expr assigns a value or symbolic expression to a name; it does not define a callable function.',
   '- name(arg) := expr defines a callable Math-cell function.',
   '- Supported Math-cell input kinds: expression, equation, assignment, unpack assignment, function assignment.',
+  '- Multiple statements per Math cell are allowed and run top-to-bottom in the same namespace.',
   '- Math cells share namespace with Code cells.',
   '- Notebook defaults include trig mode (deg/rad) and render mode (exact/decimal).',
   '- Each Math cell may override trig/render mode.',
   '- Built-in Math helpers include Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
+  '- Inline equations are accepted directly inside CAS calls. Preferred system-solve form: solve((eq1, eq2), (x, y)) or solve(equation1, equation2, (x, y)).',
+  '- Do not default to assigning equation objects like eq1 := a = b and then calling solve({eq1, eq2}, {x, y}) unless that exact pattern is documented.',
+  '- For assistant-generated multi-equation solves, prefer tuple/ordered equation arguments over set literals { ... }.',
+  '- If solve(...) returns structured points, unpack them with documented forms such as (h1, k1), (h2, k2) := solutions.',
+  '- Math container results such as solve(...) solution lists render as LaTeX; prefer showing them directly before extra manipulation.',
+  '- render_decimal(expr, places?) rounds by decimal places; render_exact(expr) forces symbolic display.',
   '- In Math cells, prefer Maple-style plot ranges: x = a..b and y = c..d.',
+  '- Supported plotting options include xmin, xmax, ymin, ymax, equal_axes, showlegend, and title.',
+  '- Compatibility plot range forms such as plot(circle, (x, -8, 12), (y, 20, 40), equal_axes=True) are accepted.',
+  '- In a single plot(...) call, choose exactly one range style: Maple-style x = a..b / y = c..d, compatibility tuples like (x, a, b), or xmin/xmax/ymin/ymax kwargs. Do not mix them.',
   '- Use only documented SugarPy Math syntax; avoid unsupported lambda or arrow-function notation.',
   '- For teaching notebooks, prefer explicit equations, unpack assignment, and direct symbolic expressions over helper-heavy transformations.',
   '- Safe plotting defaults for geometry: prefer implicit equations or directly plottable expressions.',
   '- For circles and geometry, prefer circle := equation and then plot(circle, ..., equal_axes=True).',
+  '- Equation assignments used for plotting are stored internally in = 0 form for CAS work.',
   '- Do not rely on trig parameterizations unless the user explicitly asks for them.',
   '- Trig expressions in Math cells depend on Deg/Rad mode.',
   '- If a graph is requested, generate notebook content that actually renders the graph in SugarPy.',
@@ -401,6 +412,14 @@ const REFERENCE_SECTIONS = {
     '- Math cells share namespace with Code cells.',
     '- Trig mode is deg or rad and affects trig evaluation.',
     '- Built-in helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...).',
+    '- Inline equations are accepted directly inside CAS calls. Prefer solve((equation1, equation2), (x, y)) over undocumented variants.',
+    '- Assistant-safe multi-equation solve pattern: write explicit equations inline and pass an ordered tuple or direct equation arguments to solve(...).',
+    '- Avoid set-literal system forms like solve({eq1, eq2}, {x, y}) in assistant-generated Math cells unless documentation explicitly requires them.',
+    '- Avoid using Eq(...) as the default assistant representation when plain = equations are enough; Eq(...) is a helper, not the preferred default notation.',
+    '- Function definitions are lazy at declaration time: f(x) := expr should be treated as a declaration, not as something to immediately execute or expand.',
+    '- If both exact and decimal views are needed in one cell, wrap each line explicitly with render_exact(...) or render_decimal(...).',
+    '- render_decimal(...) rounds by decimal places, not significant digits.',
+    '- Container results such as solve(...) solution lists/points render as LaTeX, so showing them directly is acceptable and often clearer.',
     '- Prefer Math cells for symbolic equations, solve, expand, factor, N, and plot workflows.',
     '- Prefer direct symbolic expressions and documented solve(...) results over helper-heavy transformations.',
     '- Out of scope in Math cells: Python def blocks, lambda syntax, arrow syntax, Python loops/comprehensions, and undocumented helper functions.'
@@ -411,8 +430,13 @@ const REFERENCE_SECTIONS = {
     '- In Math cells, prefer Maple-style ranges: plot(expr, x = a..b, y = c..d, ...).',
     '- Also supported: xmin/xmax/ymin/ymax kwargs, and compatibility range tuples like (x, a, b).',
     '- Supported options include xmin, xmax, ymin, ymax, equal_axes, showlegend, title.',
+    '- Use one range style per plot call; do not mix Maple-style ranges, compatibility tuples, and xmin/xmax/ymin/ymax kwargs in the same plot(...).',
     '- Geometry-safe pattern: store an implicit equation assignment, then call plot(name, ...).',
     '- Example: circle := (x-2)^2 + (y+10)^2 = 25; plot(circle, x = -5..9, y = 3..17, equal_axes=True).',
+    '- Equation assignments used for implicit plots are stored internally in = 0 form for CAS work.',
+    '- For 1-2 traces the legend is shown by default; showlegend=True|False can override this.',
+    '- title="..." is supported but should be used only when it materially helps the notebook.',
+    '- Double-clicking the graph resets to the initial requested range.',
     '- Do not assume parametric plotting support from plot(x(t), y(t), t=...).',
     '- Trig-based plotting in Math cells depends on the Deg/Rad mode.',
     '- If a non-trig form exists, prefer it.'
@@ -949,11 +973,20 @@ const MATH_ASSISTANT_SPEC = [
   '- Supported statement types: expression, equation, assignment, unpack assignment, function assignment.',
   '- Use = for equations and := for assignment.',
   '- Preferred helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
+  '- Multiple statements per Math cell are allowed and run top-to-bottom.',
   '- For teaching notebooks, prefer explicit equations, unpack assignment, direct arithmetic, and direct symbolic expressions.',
+  '- Inline equations are accepted inside CAS calls; for systems, prefer solve((equation1, equation2), (x, y)) or another documented ordered form.',
+  '- Do not generate assistant Math cells that assign equation objects and then solve set literals like solve({eq1, eq2}, {x, y}) unless that exact pattern is documented and validated.',
   '- If solve(...) returns structured points, unpack them with documented assignment forms such as (h1, k1), (h2, k2) := solutions.',
   '- For one-variable solve(...) results, avoid guessing container indexes; instead show the solve result directly and verify with explicit symbolic expressions.',
+  '- Prefer plain = equation syntax over Eq(...) unless Eq(...) is specifically needed for a documented helper pattern.',
+  '- If both exact and decimal displays are needed in one cell, wrap lines explicitly with render_exact(...) or render_decimal(...).',
+  '- render_decimal(...) rounds by decimal places, not significant digits.',
+  '- Math container results render readably; it is fine to show solutions directly before unpacking or plotting.',
   '- Forbidden: ->, lambda, map(...), subs(...), Python comprehensions, Python loops, def blocks, and undocumented helper functions.',
-  '- If plotting is needed, prefer implicit equations or directly plottable expressions with Maple-style ranges x = a..b and y = c..d.'
+  '- If plotting is needed, prefer implicit equations or directly plottable expressions with Maple-style ranges x = a..b and y = c..d.',
+  '- Supported plot options include equal_axes, showlegend, title, xmin/xmax/ymin/ymax, and compatibility range tuple forms.',
+  '- In one plot(...) call, use one range convention only; do not combine tuple ranges with xmin/xmax/ymin/ymax kwargs.',
 ].join('\n');
 
 const planHasUnsupportedMathSyntax = (plan: AssistantPlan) =>
@@ -988,19 +1021,27 @@ const planHasRiskySolveIndexing = (plan: AssistantPlan) => {
   );
 };
 
-const normalizeSandboxRequest = (args: Record<string, unknown>): AssistantSandboxRequest => ({
-  target: args.target === 'math' ? 'math' : 'code',
-  code: String(args.code ?? ''),
-  source: String(args.source ?? ''),
-  trigMode: args.trigMode === 'rad' ? 'rad' : 'deg',
-  renderMode: args.renderMode === 'decimal' ? 'decimal' : 'exact',
-  contextPreset: (
-    typeof args.contextPreset === 'string' ? args.contextPreset : 'bootstrap-only'
-  ) as AssistantSandboxContextPreset,
-  selectedCellIds: Array.isArray(args.selectedCellIds) ? args.selectedCellIds.map((value) => String(value)) : [],
-  timeoutMs:
-    typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) ? Math.round(args.timeoutMs) : 5000
-});
+export const normalizeSandboxRequest = (args: Record<string, unknown>): AssistantSandboxRequest => {
+  const target = args.target === 'math' ? 'math' : 'code';
+  const code = String(args.code ?? '');
+  const source =
+    target === 'math'
+      ? String(args.code ?? args.source ?? '')
+      : String(args.source ?? '');
+  return {
+    target,
+    code,
+    source,
+    trigMode: args.trigMode === 'rad' ? 'rad' : 'deg',
+    renderMode: args.renderMode === 'decimal' ? 'decimal' : 'exact',
+    contextPreset: (
+      typeof args.contextPreset === 'string' ? args.contextPreset : 'bootstrap-only'
+    ) as AssistantSandboxContextPreset,
+    selectedCellIds: Array.isArray(args.selectedCellIds) ? args.selectedCellIds.map((value) => String(value)) : [],
+    timeoutMs:
+      typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) ? Math.round(args.timeoutMs) : 5000
+  };
+};
 
 const summarizeSandboxExecution = (
   request: AssistantSandboxRequest,
@@ -3236,6 +3277,10 @@ export async function planNotebookChanges(params: {
     'For follow-up verification steps in Math cells, prefer explicit symbolic expressions such as sqrt(2)^2 or direct equation checks over anonymous-function patterns.',
     'Forbidden in Math cells unless explicitly documented: ->, lambda, map(...), subs(...), Python comprehensions, Python for-loops, def blocks.',
     'Allowed Math-cell building blocks should stay narrow and explicit: symbolic assignments with :=, equations with =, unpack assignment, solve(...), Eq(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), direct arithmetic, direct symbolic expressions, and plot(...).',
+    'For multi-equation CAS solves, prefer documented ordered forms such as solve((equation1, equation2), (x, y)) or direct inline equations passed to solve(...).',
+    'Do not generate assistant plans that build intermediate equation objects like eq1 := a = b and then call solve({eq1, eq2}, {x, y}) unless that exact representation is documented and known-safe in SugarPy.',
+    'Use Eq(...) only when it is specifically necessary for a documented helper pattern; do not switch from plain equation syntax to Eq(...) speculatively during repair.',
+    'For plot(...), choose one range convention per call. Do not mix Maple-style x = a..b / y = c..d, compatibility tuples like (x, a, b), and xmin/xmax/ymin/ymax kwargs in the same plot.',
     'By default, prefer SugarPy Math cells and CAS-native syntax for mathematical work.',
     'If the request is mathematical, solve it in SugarPy Math cells by default.',
     'Do not switch a math request into Python/Code cells just because code could also solve it.',

@@ -33,6 +33,17 @@ Important distinction:
 - Inline equations are also accepted inside CAS calls, for example
   `solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))`.
 
+For assistant-generated multi-equation solves, prefer documented ordered forms such as:
+- `solutions := solve((x^2 + y^2 = 25, y = 2*x + 1), (x, y))`
+- `solutions := solve(eqA, eqB, (h, k))`
+
+Avoid assistant-generated system forms that rely on undocumented or weakly specified equation-object handling, for example:
+- `eq1 := x^2 + y^2 = 25`
+  `eq2 := y = 2*x + 1`
+  `solutions := solve({eq1, eq2}, {x, y})`
+
+That style may look SymPy-like, but it is not the preferred assistant-safe SugarPy pattern.
+
 You can also place multiple statements in one Math cell (one per line).
 They run top-to-bottom and share the same Math namespace.
 
@@ -50,6 +61,14 @@ When the notebook assistant generates Math cells for teaching/demo flows, it sho
 - statement types: expression, equation, assignment, unpack assignment, function assignment
 - helper calls: `Eq(...)`, `solve(...)`, `linsolve(...)`, `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`, `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`, `plot(...)`
 - verification style: explicit symbolic expressions or documented unpack assignment, not undocumented helper shortcuts
+
+Additional assistant-safe rules:
+- Prefer plain `=` equation syntax over `Eq(...)` unless `Eq(...)` is specifically needed for a documented helper pattern.
+- For systems of equations, prefer inline equations passed directly to `solve(...)` in an ordered form.
+- Do not generate assistant Math cells that first assign equation objects and then pass set literals like `{eq1, eq2}` into `solve(...)` unless that exact pattern is documented and validated.
+- If `solve(...)` returns a container of points, it is fine to show that container directly before unpacking it.
+- If both exact and decimal presentations are needed in one cell, wrap lines explicitly with `render_exact(...)` or `render_decimal(...)`.
+- `render_decimal(...)` rounds by decimal places, not significant digits.
 
 The assistant should avoid undocumented or out-of-scope constructs even if they might look SymPy-like, for example:
 - arrow syntax like `x -> ...`
@@ -127,6 +146,8 @@ Current plotting options:
 - Compatibility forms are also accepted:
   `plot(circle, (x, -8, 12), (y, 20, 40), equal_axes=True)` and
   `plot(circle, x, -8, 12, y, 20, 40, equal_axes=True)`.
+- Use one range style per `plot(...)` call. Do not mix tuple forms like `(x, -8, 12)` with
+  `xmin/xmax/ymin/ymax` kwargs in the same plot command.
 
 Simple geometry workflow:
 - You can store a circle or other geometric relation as an equation assignment such as
