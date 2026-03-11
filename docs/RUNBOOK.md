@@ -27,6 +27,10 @@ assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
 - The assistant uses a chat-style drawer with a bottom composer.
+- The default assistant flow is now teaching-first and step-streamed.
+  - The assistant first shows a short outline of the planned steps.
+  - It then inserts cells progressively instead of waiting for a final manual apply step.
+  - Newly inserted assistant cells are marked as draft/validating/applied/failed in the notebook UI.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The available `Thinking level` values are filtered by model family:
@@ -46,14 +50,16 @@ Assistant UX notes:
 - For direct geometry tasks such as finding circles from concrete points and a radius, the assistant is biased toward short Math-cell CAS workflows: write the point equations directly, call `solve(...)`, and derive the final circle equations from the returned centers instead of generating Python-heavy scaffolding.
 - In `auto` mode, math requests are treated as Math-cell/CAS tasks by default. The assistant should stay out of Code cells unless the user explicitly asks for Python or SugarPy CAS clearly cannot express the task.
 - For math/geometry/plotting requests, the assistant now inspects SugarPy references first, especially `math_cells` and `plotting`, before planning edits. Code is treated as a last-resort fallback after documented Math-cell workflows are considered.
+- For teaching/demo Math requests, the assistant is constrained to a documented Math-cell subset from `docs/MATH_CELL_SPEC.md` instead of free-form SymPy-like helper invention.
 - If a math request still produces a draft plan with Code cells, the assistant now retries planning with a stricter Math-cell-only constraint before showing the preview.
 - For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
+- Runnable assistant steps are validated before insertion.
   - Validation uses a fresh temporary Jupyter kernel, not the live notebook kernel.
-  - The default validation mode is `bootstrap-only` with a hard 5-second timeout.
-  - Available context presets are `none`, `bootstrap-only`, `imports-only`, `selected-cells`, and `full-notebook-replay`.
-  - Validation is Python/code-cell only in v1. Math and Stoich edits still rely on preview plus normal notebook execution.
-  - A sandbox timeout or runtime error is returned to the model as structured output so it can revise the draft or warn explicitly.
+  - Python code uses the existing sandbox presets.
+  - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are inserted.
+  - If a new Math step depends on earlier runnable cells, the validator replays those earlier Code/Math cells inside the temporary kernel first.
+  - A sandbox timeout or runtime error is returned to the model as structured output and also blocks step insertion in the streamed apply flow.
 
 Runtime server config without committing secrets:
 - Create `notebooks/sugarpy-assistant-config.json` on the server or local Jupyter contents root.
@@ -78,10 +84,22 @@ Recommended assistant models:
 
 Assistant regression checks:
 - Browser regression coverage lives in `web/e2e/notebook.spec.ts`.
+- Live assistant regression scenarios live in `web/e2e/assistant.live.spec.ts`.
 - The targeted assistant suite can be run with:
   ```bash
   cd web && npx playwright test e2e/notebook.spec.ts --grep "Assistant"
   ```
+- The live-model assistant suite can be run with:
+  ```bash
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- Optional live assistant env vars:
+  ```bash
+  ASSISTANT_LIVE_API_KEY=... \
+  ASSISTANT_LIVE_MODELS=gpt-5.1-codex-mini,gpt-5-mini \
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- If `ASSISTANT_LIVE_API_KEY` is omitted, the suite uses the shared runtime key/config already available to the app.
 - This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the preview/apply assistant flow.
 - It also covers isolated assistant sandbox validation, timeout/error reporting, and replay presets such as `imports-only` and `selected-cells`.
 
