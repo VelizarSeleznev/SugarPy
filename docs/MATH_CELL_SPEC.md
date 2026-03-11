@@ -32,17 +32,20 @@ Important distinction:
 - Use plain `f := ...` when you want to reuse that expression as a symbolic object, for example `solve(f = 0, x)` or `expand(f)`.
 - Inline equations are also accepted inside CAS calls, for example
   `solutions := solve((h-3)^2 + (k-38)^2 = r^2, (h-26)^2 + (k-25)^2 = r^2, (h, k))`.
+- `Eq(...)` is also accepted when you need an explicit equation helper form.
+  Assignments such as `line := Eq(y, 4 - x)` are stored internally in implicit `= 0`
+  form, so they stay compatible with both `solve(...)` and `plot(...)`.
 
 For assistant-generated multi-equation solves, prefer documented ordered forms such as:
 - `solutions := solve((x^2 + y^2 = 25, y = 2*x + 1), (x, y))`
 - `solutions := solve(eqA, eqB, (h, k))`
 
-Avoid assistant-generated system forms that rely on undocumented or weakly specified equation-object handling, for example:
+Assistant output should still prefer ordered system forms over set literals, for example:
 - `eq1 := x^2 + y^2 = 25`
   `eq2 := y = 2*x + 1`
   `solutions := solve({eq1, eq2}, {x, y})`
 
-That style may look SymPy-like, but it is not the preferred assistant-safe SugarPy pattern.
+That style is accepted, but ordered tuple/direct-argument forms remain the preferred assistant-safe SugarPy pattern.
 
 You can also place multiple statements in one Math cell (one per line).
 They run top-to-bottom and share the same Math namespace.
@@ -65,7 +68,7 @@ When the notebook assistant generates Math cells for teaching/demo flows, it sho
 Additional assistant-safe rules:
 - Prefer plain `=` equation syntax over `Eq(...)` unless `Eq(...)` is specifically needed for a documented helper pattern.
 - For systems of equations, prefer inline equations passed directly to `solve(...)` in an ordered form.
-- Do not generate assistant Math cells that first assign equation objects and then pass set literals like `{eq1, eq2}` into `solve(...)` unless that exact pattern is documented and validated.
+- Assigned equation forms such as `eq1 := a = b` and `eq1 := Eq(a, b)` are both supported, but ordered tuple/direct-argument solves are still preferred over set literals for deterministic output.
 - If `solve(...)` returns a container of points, it is fine to show that container directly before unpacking it.
 - If both exact and decimal presentations are needed in one cell, wrap lines explicitly with `render_exact(...)` or `render_decimal(...)`.
 - `render_decimal(...)` rounds by decimal places, not significant digits.
@@ -152,8 +155,11 @@ Current plotting options:
 Simple geometry workflow:
 - You can store a circle or other geometric relation as an equation assignment such as
   `circle := (x-2)^2 + (y-30)^2 = 60`
-- SugarPy stores that assignment internally in `= 0` form for CAS work.
+- Or use an explicit helper form such as `line := Eq(y, 4 - x)`.
+- SugarPy stores those assignments internally in `= 0` form for CAS work.
 - After that, `plot(circle)` renders the implicit curve directly.
+- Direct inline equation traces are also accepted in plot calls, for example
+  `plot(y = 4 - x, y = x^2 - 3*x + 2, x = -1..4, y = -2..6, equal_axes=True)`.
 
 Plot defaults:
 - SugarPy uses the requested range as the authoritative starting view.
@@ -168,6 +174,10 @@ This enables multi-step symbolic workflows directly in Math cells, for example:
 - `line := expand(c1 - c2)`
 - `solve(Eq(line, 0), y)`
 - `solve((Eq(c1, 0), Eq(c2, 0)), (x, y))`
+- `parabola := Eq(y, x^2 - 3*x + 2)`
+- `line := y = 4 - x`
+- `solve((parabola, line), (x, y))`
+- `plot(parabola, line, x = -1..4, y = -2..6, equal_axes=True)`
 
 ## Output payload (render_math_cell)
 `render_math_cell(source, mode='deg', render_mode='exact'|'decimal')`

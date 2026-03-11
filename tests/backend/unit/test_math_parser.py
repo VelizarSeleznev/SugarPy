@@ -1,4 +1,5 @@
 import pytest
+import sympy as sp
 
 from sugarpy.math_parser import MathParseError, parse_math_input, parse_sympy_expression
 
@@ -173,5 +174,46 @@ def test_plot_flat_positional_range_args_are_rewritten_to_plot_kwargs():
         "xmax": 1.5,
         "ymin": -1.5,
         "ymax": 1.5,
+        "equal_axes": True,
+    }
+
+
+def test_assigned_eq_values_can_be_used_in_solve_calls():
+    x, y = sp.symbols("x y")
+
+    expr = parse_sympy_expression(
+        "solve((eq1, eq2), (x, y))",
+        mode="deg",
+        user_ns={
+            "eq1": x + y - 4,
+            "eq2": -x**2 + 3*x + y - 2,
+        },
+    )
+
+    assert isinstance(expr, list)
+    assert len(expr) == 2
+
+
+def test_plot_eq_calls_are_normalized_before_dispatch():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(Eq(y, 4 - x), Eq(y, x^2 - 3*x + 2), x = -1..4, y = -2..6, equal_axes=True)",
+        mode="deg",
+        user_ns={"plot": plot},
+    )
+
+    x, y = sp.symbols("x y")
+    assert captured["args"] == (x + y - 4, -x**2 + 3*x + y - 2)
+    assert captured["kwargs"] == {
+        "xmin": -1,
+        "xmax": 4,
+        "ymin": -2,
+        "ymax": 6,
         "equal_axes": True,
     }

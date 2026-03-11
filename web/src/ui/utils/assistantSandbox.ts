@@ -247,7 +247,14 @@ const buildMathValidationCode = (source: string, trigMode: 'deg' | 'rad', render
     'import json',
     'from sugarpy.math_cell import render_math_cell',
     `_result = render_math_cell(${JSON.stringify(source)}, mode=${JSON.stringify(trigMode)}, render_mode=${JSON.stringify(renderMode)})`,
-    'print(json.dumps(_result))'
+    '_summary = {',
+    "  'kind': _result.get('kind'),",
+    "  'error': _result.get('error'),",
+    "  'warnings': _result.get('warnings') or [],",
+    "  'steps': (_result.get('steps') or [])[:6],",
+    "  'plotly_figure': bool(_result.get('plotly_figure')),",
+    '}',
+    'print(json.dumps(_summary))'
   ].join('\n');
 
 const executeMathOnKernel = async (

@@ -215,6 +215,64 @@ def test_math_assignment_with_equation_rhs_smoke():
         assert "14.5" in (numeric["value"] or "")
 
 
+def test_math_assignment_with_eq_rhs_is_canonicalized_for_solve_and_plot():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        eq1 = render_math_cell("eq1 := Eq(y, 4 - x)")
+        eq2 = render_math_cell("eq2 := Eq(y, x^2 - 3*x + 2)")
+        solved = render_math_cell("solve((eq1, eq2), (x, y))")
+        plotted = render_math_cell("plot(eq1, eq2, x = -1..4, y = -2..6, equal_axes=True)")
+
+    assert eq1["ok"]
+    assert eq2["ok"]
+    assert dummy.user_ns["eq1"] == x + y - 4
+    assert dummy.user_ns["eq2"] == -x**2 + 3*x + y - 2
+    assert solved["ok"]
+    assert "\\sqrt{3}" in (solved["value"] or "")
+    assert plotted["ok"]
+    assert plotted["plotly_figure"] is not None
+    assert len(plotted["plotly_figure"]["data"]) >= 2
+
+
+def test_math_plot_accepts_inline_equations_without_assignment():
+    plotted = render_math_cell(
+        "plot(y = 4 - x, y = x^2 - 3*x + 2, x = -1..4, y = -2..6, equal_axes=True)"
+    )
+
+    assert plotted["ok"]
+    assert plotted["plotly_figure"] is not None
+    assert len(plotted["plotly_figure"]["data"]) >= 2
+
+
+def test_math_solve_and_plot_workflow_accepts_mixed_equation_forms():
+    class DummyShell:
+        def __init__(self):
+            self.user_ns = {}
+
+    dummy = DummyShell()
+
+    with patch("sugarpy.math_cell.get_ipython", return_value=dummy):
+        setup = render_math_cell(
+            "parabola := y = x^2 - 3*x + 2\n"
+            "line := Eq(y, 4 - x)\n"
+            "solutions := solve((parabola, line), (x, y))\n"
+            "plot(parabola, line, x = -1..4, y = -2..6, equal_axes=True)"
+        )
+
+    assert setup["ok"]
+    assert dummy.user_ns["parabola"] == -x**2 + 3*x + y - 2
+    assert dummy.user_ns["line"] == x + y - 4
+    assert dummy.user_ns["solutions"]
+    plot_items = [item for item in setup["trace"] if item.get("plotly_figure") is not None]
+    assert plot_items
+    assert len(plot_items[0]["plotly_figure"]["data"]) >= 2
+
+
 def test_math_assignment_with_inline_solve_equations_smoke():
     class DummyShell:
         def __init__(self):

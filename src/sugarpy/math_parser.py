@@ -72,6 +72,28 @@ class RenderDirective:
     places: int | None = None
 
 
+def is_equation_like(value: Any) -> bool:
+    return isinstance(value, sp.Equality)
+
+
+def canonicalize_equation(value: Any) -> Any:
+    """Convert equation-like values to SugarPy's implicit `lhs - rhs` form."""
+    if isinstance(value, sp.Equality):
+        return sp.simplify(value.lhs - value.rhs)
+    if isinstance(value, list):
+        return [canonicalize_equation(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(canonicalize_equation(item) for item in value)
+    if isinstance(value, set):
+        return {canonicalize_equation(item) for item in value}
+    if isinstance(value, dict):
+        return {
+            canonicalize_equation(key): canonicalize_equation(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _scan_top_level(source: str) -> Dict[str, list[int]]:
     depth = 0
     quote: str | None = None
@@ -587,17 +609,6 @@ def build_math_locals(
     def render_exact(value: Any) -> RenderDirective:
         return RenderDirective(value=value, mode="exact", places=None)
 
-    def _normalize_equations_for_solve(value: Any) -> Any:
-        if isinstance(value, sp.Equality):
-            return sp.simplify(value.lhs - value.rhs)
-        if isinstance(value, list):
-            return [_normalize_equations_for_solve(item) for item in value]
-        if isinstance(value, tuple):
-            return tuple(_normalize_equations_for_solve(item) for item in value)
-        if isinstance(value, set):
-            return {_normalize_equations_for_solve(item) for item in value}
-        return value
-
     def _is_symbol_spec(value: Any) -> bool:
         if isinstance(value, sp.Symbol):
             return True
@@ -623,7 +634,7 @@ def build_math_locals(
         else:
             normalized_input = tuple(grouped_equations)
 
-        normalized = _normalize_equations_for_solve(normalized_input)
+        normalized = canonicalize_equation(normalized_input)
         try:
             return sp.solve(normalized, *remaining_args, **kwargs)
         except Exception as exc:
@@ -686,15 +697,18 @@ def build_math_locals(
     }
 
     plot_fn = user_ns.get("plot")
-    if callable(plot_fn):
-        mapping["plot"] = plot_fn
-    else:
+    if not callable(plot_fn):
         try:
             from sugarpy.startup import plot as startup_plot
         except Exception:
             startup_plot = None
-        if startup_plot is not None:
-            mapping["plot"] = startup_plot
+        plot_fn = startup_plot
+    if callable(plot_fn):
+        def _plot(*plot_args: Any, **plot_kwargs: Any) -> Any:
+            normalized_args = tuple(canonicalize_equation(arg) for arg in plot_args)
+            return plot_fn(*normalized_args, **plot_kwargs)
+
+        mapping["plot"] = _plot
 
     if mode == "deg":
         def sind(x: Any, **_kwargs: Any) -> Any:
