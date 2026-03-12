@@ -961,8 +961,7 @@ const getUnsupportedMathPatterns = (source: string) => {
     { pattern: /\bmap\s*\(/g, label: 'map(...) helper' },
     { pattern: /\blambda\b/g, label: 'lambda syntax' },
     { pattern: /\bfor\b.+\bin\b/g, label: 'Python-style loop syntax' },
-    { pattern: /\bdef\b/g, label: 'Python def block' },
-    { pattern: /\bsubs\s*\(/g, label: 'undocumented subs(...) helper' }
+    { pattern: /\bdef\b/g, label: 'Python def block' }
   ];
   return patterns.filter(({ pattern }) => pattern.test(source)).map(({ label }) => label);
 };
@@ -972,7 +971,7 @@ const MATH_ASSISTANT_SPEC = [
   '- Use only documented SugarPy Math syntax.',
   '- Supported statement types: expression, equation, assignment, unpack assignment, function assignment.',
   '- Use = for equations and := for assignment.',
-  '- Preferred helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
+  '- Preferred helpers: Eq(...), solve(...), linsolve(...), simplify(...), expand(...), factor(...), subs(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), plot(...).',
   '- Multiple statements per Math cell are allowed and run top-to-bottom.',
   '- For teaching notebooks, prefer explicit equations, unpack assignment, direct arithmetic, and direct symbolic expressions.',
   '- Inline equations are accepted inside CAS calls; for systems, prefer solve((equation1, equation2), (x, y)) or another documented ordered form.',
@@ -983,7 +982,8 @@ const MATH_ASSISTANT_SPEC = [
   '- If both exact and decimal displays are needed in one cell, wrap lines explicitly with render_exact(...) or render_decimal(...).',
   '- render_decimal(...) rounds by decimal places, not significant digits.',
   '- Math container results render readably; it is fine to show solutions directly before unpacking or plotting.',
-  '- Forbidden: ->, lambda, map(...), subs(...), Python comprehensions, Python loops, def blocks, and undocumented helper functions.',
+  '- subs(...) is supported for post-processing symbolic results, but prefer simpler direct symbolic expressions or direct solve(...) output when they are clearer.',
+  '- Forbidden: ->, lambda, map(...), Python comprehensions, Python loops, def blocks, and undocumented helper functions.',
   '- If plotting is needed, prefer implicit equations or directly plottable expressions with Maple-style ranges x = a..b and y = c..d.',
   '- Supported plot options include equal_axes, showlegend, title, xmin/xmax/ymin/ymax, and compatibility range tuple forms.',
   '- In one plot(...) call, use one range convention only; do not combine tuple ranges with xmin/xmax/ymin/ymax kwargs.',
@@ -3275,11 +3275,12 @@ export async function planNotebookChanges(params: {
     'Do not invent lambda, arrow-function, or functional-programming helpers such as x -> expr or map(...) unless the documented SugarPy Math syntax explicitly supports them.',
     MATH_ASSISTANT_SPEC,
     'For follow-up verification steps in Math cells, prefer explicit symbolic expressions such as sqrt(2)^2 or direct equation checks over anonymous-function patterns.',
-    'Forbidden in Math cells unless explicitly documented: ->, lambda, map(...), subs(...), Python comprehensions, Python for-loops, def blocks.',
-    'Allowed Math-cell building blocks should stay narrow and explicit: symbolic assignments with :=, equations with =, unpack assignment, solve(...), Eq(...), linsolve(...), simplify(...), expand(...), factor(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), direct arithmetic, direct symbolic expressions, and plot(...).',
+    'Forbidden in Math cells unless explicitly documented: ->, lambda, map(...), Python comprehensions, Python for-loops, def blocks.',
+    'Allowed Math-cell building blocks should stay narrow and explicit: symbolic assignments with :=, equations with =, unpack assignment, solve(...), Eq(...), linsolve(...), simplify(...), expand(...), factor(...), subs(...), N(...), render_decimal(...), render_exact(...), set_decimal_places(...), direct arithmetic, direct symbolic expressions, and plot(...).',
     'For multi-equation CAS solves, prefer documented ordered forms such as solve((equation1, equation2), (x, y)) or direct inline equations passed to solve(...).',
     'Assigned equation forms like eq1 := a = b and eq1 := Eq(a, b) are supported, but assistant plans should still prefer ordered solve(...) forms over set literals for deterministic output.',
     'Use plain equation syntax by default; Eq(...) is supported for compatibility, but it should not replace simpler = notation without a reason.',
+    'subs(...) is available for symbolic post-processing, but it is not the preferred default for demos or teaching flows when a more direct symbolic expression would be clearer.',
     'For plot(...), choose one range convention per call. Do not mix Maple-style x = a..b / y = c..d, compatibility tuples like (x, a, b), and xmin/xmax/ymin/ymax kwargs in the same plot.',
     'By default, prefer SugarPy Math cells and CAS-native syntax for mathematical work.',
     'If the request is mathematical, solve it in SugarPy Math cells by default.',

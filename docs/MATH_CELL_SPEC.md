@@ -66,13 +66,13 @@ Statements can span multiple lines when parentheses/brackets are still open
 ## Built-in CAS helpers in Math cells
 - `Eq(...)`
 - `solve(...)`, `linsolve(...)`
-- `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`
+- `simplify(...)`, `expand(...)`, `factor(...)`, `subs(...)`, `N(...)`
 - `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`
 
 ## Assistant-safe subset
 When the notebook assistant generates Math cells for teaching/demo flows, it should stay inside a narrow documented subset:
 - statement types: expression, equation, assignment, unpack assignment, function assignment
-- helper calls: `Eq(...)`, `solve(...)`, `linsolve(...)`, `simplify(...)`, `expand(...)`, `factor(...)`, `N(...)`, `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`, `plot(...)`
+- helper calls: `Eq(...)`, `solve(...)`, `linsolve(...)`, `simplify(...)`, `expand(...)`, `factor(...)`, `subs(...)`, `N(...)`, `render_decimal(...)`, `render_exact(...)`, `set_decimal_places(...)`, `plot(...)`
 - verification style: explicit symbolic expressions or documented unpack assignment, not undocumented helper shortcuts
 
 Additional assistant-safe rules:
@@ -83,6 +83,7 @@ Additional assistant-safe rules:
   It is not a promise that SugarPy will expose internal helper forms such as `Eq(...)` or
   `lhs-rhs`.
 - If `solve(...)` returns a container of points, it is fine to show that container directly before unpacking it.
+- `subs(...)` is supported for post-processing symbolic results, but assistant output should not jump to it when a simpler direct symbolic expression or direct `solve(...)` result would be clearer.
 - If both exact and decimal presentations are needed in one cell, wrap lines explicitly with `render_exact(...)` or `render_decimal(...)`.
 - `render_decimal(...)` rounds by decimal places, not significant digits.
 
@@ -91,7 +92,6 @@ The assistant should avoid undocumented or out-of-scope constructs even if they 
 - `lambda`
 - `map(...)`
 - Python comprehensions / loops / `def` blocks
-- undocumented helper names such as `subs(...)`
 
 For multi-step teaching notebooks, prefer longer but simpler Math cells with nearby Markdown explanations over dense helper-heavy transformations.
 
