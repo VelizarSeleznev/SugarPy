@@ -9,5 +9,7 @@ dist/
 artifacts/
 *.egg-info/
 web/test-results/
+web/playwright-report/
+output/playwright/
 web/.env.local
 notebooks/
