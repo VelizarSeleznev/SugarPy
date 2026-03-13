@@ -357,6 +357,8 @@ def _bootstrap_code() -> str:
             "from IPython.display import display as __sugarpy_display",
             "from sugarpy.startup import plot",
             "def __sugarpy_emit_output(value):",
+            "    if value is None:",
+            "        return",
             "    payload = {'text/plain': repr(value)}",
             "    if isinstance(value, sp.Basic):",
             "        payload['text/plain'] = str(value)",
@@ -380,6 +382,22 @@ def _build_stoich_code(reaction: str, inputs: dict[str, Any]) -> str:
         [
             "from sugarpy.stoichiometry import display_stoichiometry",
             f"_ = display_stoichiometry({json.dumps(reaction)}, {json.dumps(inputs)})",
+        ]
+    )
+
+
+def _build_regression_code(custom_cell: dict[str, Any]) -> str:
+    state = custom_cell.get("state") if isinstance(custom_cell.get("state"), dict) else {}
+    output = custom_cell.get("output") if isinstance(custom_cell.get("output"), dict) else {}
+    bindings = output.get("bindings") if isinstance(output.get("bindings"), dict) else {}
+    points = state.get("points") if isinstance(state.get("points"), list) else []
+    model = str(state.get("model") or "linear")
+    export_bindings = bool(state.get("exportBindings")) or bool(bindings)
+    binding_prefix = str(state.get("bindingPrefix") or bindings.get("prefix") or "regression")
+    return "\n".join(
+        [
+            "from sugarpy.regression import display_regression",
+            f"_ = display_regression({json.dumps(points)}, model={json.dumps(model)}, export_bindings={json.dumps(export_bindings)}, binding_prefix={json.dumps(binding_prefix)})",
         ]
     )
 
@@ -419,6 +437,12 @@ def _cell_source_for_execution(cell: dict[str, Any], trig_mode: str, render_mode
         reaction = str(state.get("reaction") or "")
         inputs = state.get("inputs") if isinstance(state.get("inputs"), dict) else {}
         return _build_stoich_code(reaction, inputs)
+    if cell_type == "custom":
+        custom_cell = cell.get("customCell") if isinstance(cell.get("customCell"), dict) else {}
+        template_id = str(custom_cell.get("templateId") or "").strip().lower()
+        if template_id == "regression":
+            return _build_regression_code(custom_cell)
+        raise web.HTTPError(400, reason=f"Unsupported custom cell template: {template_id or 'unknown'}")
     return _wrap_code_for_notebook_display(str(cell.get("source") or ""))
 
 
@@ -466,7 +490,13 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     replay_cells = [
         cell
         for cell in notebook_cells[:target_index]
-        if str(cell.get("type") or "code") in {"code", "math"} and str(cell.get("source") or "").strip()
+        if str(cell.get("type") or "code") in {"code", "math", "custom"} and (
+            str(cell.get("source") or "").strip()
+            or (
+                str(cell.get("type") or "code") == "custom"
+                and isinstance(cell.get("customCell"), dict)
+            )
+        )
     ][:MAX_REPLAY_CELLS]
 
     kernel = AsyncKernelManager(kernel_name="python3")
@@ -554,6 +584,19 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
             }
         return response
 
+    if target_type == "custom":
+        custom_payload = result["mimeData"].get("application/vnd.sugarpy.custom+json")
+        if isinstance(custom_payload, dict):
+            response["customOutput"] = custom_payload
+        else:
+            response["customOutput"] = {
+                "schema_version": 1,
+                "template_id": "unknown",
+                "ok": False,
+                "error": result.get("errorValue") or "Custom cell execution failed.",
+            }
+        return response
+
     if result["status"] == "error":
         response["output"] = {
             "type": "error",
@@ -562,7 +605,12 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return response
 
-    response["output"] = {"type": "mime", "data": result["mimeData"]}
+    output_data = dict(result["mimeData"])
+    stdout = result.get("stdout") or ""
+    if stdout:
+        existing_plain = str(output_data.get("text/plain") or "")
+        output_data["text/plain"] = f"{stdout}{existing_plain}"
+    response["output"] = {"type": "mime", "data": output_data}
     return response
 
 

@@ -141,7 +141,7 @@ Assistant regression checks:
 ## Open the demo notebook
 - Open `notebooks/CoreFeaturesDemo.ipynb` in Jupyter and run top-to-bottom.
 - The notebook demonstrates the core Math + Code flow and optional chemistry helpers.
-- For the native SugarPy experience (with Text/Code/Math/Stoich cells), import:
+- For the native SugarPy experience (with Text/Code/Math/Stoich/Regression cells), import:
   `notebooks/CoreFeaturesDemo.sugarpy` from the SugarPy UI.
 - Legacy files with `.sugarpy.json` are still supported on import.
 - CAS-first circle intersection demo (2 Math cells + plot):

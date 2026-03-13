@@ -37,9 +37,11 @@ export function CellWrapper({
   children
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLElement | null>(null);
+  const showActionBar = isActive || isHovered;
   const combinedMenuActions: CellMenuAction[] = [
     ...quickActions.map((action) => ({
       label: action.label,
@@ -61,6 +63,11 @@ export function CellWrapper({
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (isActive) return;
+    setMenuOpen(false);
+  }, [isActive]);
 
   useEffect(() => {
     if (!isActive) {
@@ -108,6 +115,13 @@ export function CellWrapper({
       className={`cell-shell cell-type-${cellType}${isActive ? ' is-active' : ''}`}
       data-testid="cell-wrapper"
       onClick={() => onActivate?.()}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        if (!isActive) {
+          setMenuOpen(false);
+        }
+      }}
     >
       <div className="cell-gutter">
         {onRun ? (
@@ -133,10 +147,10 @@ export function CellWrapper({
       </div>
 
       <div className="cell-main">
-        {isActive ? (
+        {showActionBar ? (
           <div
-            className={`cell-action-bar${floatingStyle ? ' floating' : ''}`}
-            style={floatingStyle ?? undefined}
+            className={`cell-action-bar${isActive && floatingStyle ? ' floating' : ''}`}
+            style={isActive ? floatingStyle ?? undefined : undefined}
             role="toolbar"
             aria-label="Cell actions"
           >

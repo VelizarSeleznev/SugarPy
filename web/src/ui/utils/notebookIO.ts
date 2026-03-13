@@ -173,6 +173,9 @@ const stripRuntimeOutputs = (cell: Omit<CellModel, 'isRunning'>): Omit<CellModel
   delete nextCell.output;
   delete nextCell.mathOutput;
   delete nextCell.stoichOutput;
+  if (nextCell.customCell) {
+    nextCell.customCell = { ...nextCell.customCell, output: undefined };
+  }
   return nextCell;
 };
 
@@ -262,6 +265,27 @@ const stoichToMarkdown = (cell: CellModel) => {
   return lines.join('\n');
 };
 
+const customToMarkdown = (cell: CellModel) => {
+  const customCell = cell.customCell;
+  if (!customCell) return '### Custom Cell';
+  if (customCell.templateId === 'regression') {
+    const state = customCell.state as any;
+    const output = customCell.output as any;
+    const lines = ['### Regression Cell', '', `Model: ${state?.model ?? 'linear'}`, ''];
+    lines.push('| x | y |');
+    lines.push('| --- | --- |');
+    for (const point of Array.isArray(state?.points) ? state.points : []) {
+      lines.push(`| ${point?.x ?? ''} | ${point?.y ?? ''} |`);
+    }
+    if (output?.equation_text) {
+      lines.push('');
+      lines.push(`Fit: ${output.equation_text}`);
+    }
+    return lines.join('\n');
+  }
+  return `### Custom Cell\n\nTemplate: ${customCell.templateId}`;
+};
+
 export const serializeIpynb = (params: {
   id: string;
   name: string;
@@ -281,6 +305,18 @@ export const serializeIpynb = (params: {
           }
         },
         source: toLines(stoichToMarkdown(cell))
+      };
+    }
+    if (cell.type === 'custom') {
+      return {
+        cell_type: 'markdown',
+        metadata: {
+          sugarpy: {
+            type: 'custom',
+            customCell: cell.customCell ?? null
+          }
+        },
+        source: toLines(customToMarkdown(cell))
       };
     }
     if (cell.type === 'markdown') {
@@ -360,6 +396,18 @@ export const deserializeIpynb = (data: any) => {
         type: 'stoich',
         stoichState: sugarpy.stoichState ?? { reaction: '', inputs: {} },
         stoichOutput: sugarpy.stoichOutput ?? undefined,
+        ui: {
+          outputCollapsed: false
+        },
+        isRunning: false
+      };
+    }
+    if (sugarpy?.type === 'custom') {
+      return {
+        id: `cell-${Date.now()}-${idx}`,
+        source: '',
+        type: 'custom',
+        customCell: sugarpy.customCell ?? undefined,
         ui: {
           outputCollapsed: false
         },

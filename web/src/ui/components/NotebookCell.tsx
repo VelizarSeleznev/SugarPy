@@ -1,10 +1,12 @@
 import React from 'react';
 import { CellModel } from '../App';
 import { CodeEditor } from './CodeEditor';
+import { CustomCell } from './CustomCell';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
 import { StoichiometryCell } from './StoichiometryCell';
 import { StoichState } from '../utils/stoichTypes';
+import { CustomCellData } from '../utils/customCellTypes';
 import { CellWrapper, CellMenuAction } from './CellWrapper';
 import { OutputArea } from './OutputArea';
 
@@ -19,6 +21,8 @@ type Props = {
   onRunMath: (value: string) => void;
   onRunStoich: (state: StoichState) => void;
   onChangeStoich: (state: StoichState) => void;
+  onRunCustom: (customCell: CustomCellData, options?: { exportBindings?: boolean }) => void;
+  onChangeCustom: (customCell: CustomCellData) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
@@ -38,12 +42,12 @@ type Props = {
 
 const statusFromCell = (cell: CellModel) => {
   if (cell.isRunning) return '*';
-  if (cell.type === 'markdown' || cell.type === 'stoich') return '';
+  if (cell.type === 'markdown' || cell.type === 'stoich' || cell.type === 'custom') return '';
   if (cell.execCount === null || cell.execCount === undefined) return '';
   return String(cell.execCount);
 };
 
-const hasOutput = (cell: CellModel) => !!(cell.output || cell.mathOutput || cell.stoichOutput);
+const hasOutput = (cell: CellModel) => !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.customCell?.output);
 
 const TrashIcon = () => (
   <svg
@@ -83,6 +87,8 @@ export function NotebookCell({
   onRunMath,
   onRunStoich,
   onChangeStoich,
+  onRunCustom,
+  onChangeCustom,
   onMoveUp,
   onMoveDown,
   onDelete,
@@ -105,7 +111,7 @@ export function NotebookCell({
   const outputHidden = !!cell.ui?.outputCollapsed;
   const outputAvailable = hasOutput(cell);
   const runHandler =
-    cellType === 'markdown' || cellType === 'stoich'
+    cellType === 'markdown' || cellType === 'stoich' || cellType === 'custom'
       ? undefined
       : () => {
           if (cellType === 'math') onRunMath(cell.source);
@@ -243,6 +249,17 @@ export function NotebookCell({
             onCompute={onRunStoich}
             kernelReady={kernelReady}
             showOutput={!outputHidden}
+          />
+        ) : null}
+
+        {cellType === 'custom' && cell.customCell ? (
+          <CustomCell
+            cell={cell.customCell}
+            isRunning={cell.isRunning}
+            kernelReady={kernelReady}
+            showOutput={!outputHidden}
+            onChange={onChangeCustom}
+            onCompute={onRunCustom}
           />
         ) : null}
       </CellWrapper>

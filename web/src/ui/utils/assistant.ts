@@ -9,7 +9,7 @@ import { buildAssistantProxyBaseUrl } from './backendApi';
 export type AssistantScope = 'notebook' | 'active';
 export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
 
-export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich';
+export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich' | 'custom';
 
 export type NotebookCellSnapshot = {
   id: string;
@@ -760,7 +760,7 @@ const PLAN_SCHEMA = {
           index: { type: 'NUMBER' },
           cellType: {
             type: 'STRING',
-            enum: ['code', 'markdown', 'math', 'stoich']
+            enum: ['code', 'markdown', 'math', 'stoich', 'custom']
           },
           source: { type: 'STRING' },
           cellId: { type: 'STRING' },
@@ -804,7 +804,7 @@ const OPENAI_PLAN_SCHEMA = {
           },
           cellType: {
             type: ['string', 'null'],
-            enum: ['code', 'markdown', 'math', 'stoich', null]
+            enum: ['code', 'markdown', 'math', 'stoich', 'custom', null]
           },
           source: {
             type: ['string', 'null']

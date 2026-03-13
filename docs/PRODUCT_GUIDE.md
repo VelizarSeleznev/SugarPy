@@ -6,6 +6,7 @@ It combines:
 - Python code execution.
 - CAS-style Math cells for SymPy workflows.
 - Stoichiometry table cells for chemistry exercises.
+- Template-driven custom cells for interactive teaching widgets such as regression.
 - Notebook import/export and recovery flows.
 - A lightweight reference wiki for classroom use.
 
@@ -27,17 +28,20 @@ Use it together with:
 - `Code`: Python editor with kernel execution.
 - `Text`: Markdown editor with rendered preview.
 - `Math`: CAS-style symbolic editor rendered as a Math card after execution.
-- `Stoich`: chemistry stoichiometry table driven by a reaction equation and optional inputs.
+- `Stoich`: special chemistry worksheet cell driven by a reaction equation and optional inputs.
+- `Regression`: special data-fitting cell with table input, metrics, plot, and optional namespace export.
 
 ## Notebook UI
 
 ### Header actions
 - Notebook name field.
+- `Special` opens the special-cell command palette.
 - `Run All` for all runnable cells from top to bottom.
 - `Assistant` button for optional AI-powered notebook editing.
 - Connection status pill.
 - `⋮` menu for notebook, file, and reference actions.
 - Header overlays dismiss on outside click or `Escape`.
+- `Cmd/Ctrl+K` also opens the special-cell command palette.
 
 ### Notebook actions
 - `Clear Outputs`: removes current code, Math, and stoichiometry results without deleting cells or cell source.
@@ -155,6 +159,31 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Mismatch highlighting appears when provided values are inconsistent.
 - Blurring the reaction field can replace the input with the balanced reaction.
 
+## Custom cells
+
+### Purpose
+Custom cells are schema-driven notebook widgets that keep a structured editor, a structured compute payload, and a structured frontend renderer inside one notebook cell.
+
+### Current templates
+- `Regression`: editable x/y table, selectable model (`linear`, `quadratic`, `exponential`), fit summary, and Plotly chart.
+
+### Regression behavior
+- A Regression cell stores points and model choice directly in cell state.
+- Recompute updates the fitted equation, R², RMSE, and plot.
+- `Export bindings` reruns the cell and writes named results into notebook namespace with the chosen prefix.
+- Current exported names are:
+  - `<prefix>_model`
+  - `<prefix>_coefficients`
+  - `<prefix>_equation`
+  - `<prefix>_r2`
+  - `<prefix>_rmse`
+  - `<prefix>_predict`
+
+### Persistence
+- `.sugarpy` preserves custom cell template id, state, and output directly.
+- `.ipynb` stores custom cell metadata under `metadata.sugarpy.type = 'custom'`.
+- Existing Math and Stoich round-trip behavior remains unchanged.
+
 ## Function library and autocomplete
 
 ### Built-in library
@@ -169,6 +198,20 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Code cells combine built-in functions and session/user functions.
 - Math cells expose a smaller CAS-oriented suggestion list.
 - Code cells also support slash-style command discovery from the function catalog.
+- Special cells are not inserted from Code-cell slash commands.
+
+## Special-cell discovery
+
+### Purpose
+Special cells are rare structured widgets such as `Stoich` and `Regression`.
+They are discoverable, but they are not treated like primary notebook cell types.
+
+### Discovery paths
+- The primary search surface is the `Special` command palette.
+- The regular add-cell menus expose a secondary `Special…` submenu.
+- The first special-cell catalog contains:
+  - `Stoich`
+  - `Regression`
 
 ## AI assistant
 

@@ -44,6 +44,8 @@
     `application/vnd.sugarpy.math+json` (`display_data` channel).
   - `sugarpy.stoichiometry.display_stoichiometry` emits structured frontend payload via
     `application/vnd.sugarpy.stoich+json` (`display_data` channel).
+  - Template-driven custom cells emit structured frontend payload via
+    `application/vnd.sugarpy.custom+json` (`display_data` channel).
 
 ## Data and catalogs
 - Built-in function catalog: `web/public/functions.json`.
@@ -65,11 +67,12 @@
 - CAS UI behavior for code cells is MIME-first:
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
-  - `text/plain` -> plain text fallback.
+  - `text/plain` -> plain text fallback, including merged `stdout` for print-only runs.
   - `error` -> concise `ename: evalue` output.
-- Math/Stoich transport contract is MIME-first (no stdout marker parsing):
+- Math/Stoich/Custom transport contract is MIME-first (no stdout marker parsing):
   - `application/vnd.sugarpy.math+json` -> `cell.mathOutput`.
   - `application/vnd.sugarpy.stoich+json` -> `cell.stoichOutput`.
+  - `application/vnd.sugarpy.custom+json` -> `cell.customCell.output`.
 - Behavior/architecture changes must include matching updates in `docs/`.
 - Keep project language in English across code, UI text, docs, tests, and logs.
 - Math cell semantics are fixed:

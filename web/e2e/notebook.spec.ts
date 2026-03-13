@@ -142,6 +142,33 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const insertSpecialCellFromHeaderMenu = async (page: any, label: string) => {
+  await page.getByTestId('add-cell-button').click();
+  const menu = page.locator('.add-cell-menu');
+  await menu.getByRole('button', { name: 'Special…' }).click();
+  await menu.getByRole('button', { name: label }).click();
+};
+
+const insertSpecialCellFromDivider = async (page: any, dividerIndex: number, label: string) => {
+  const divider = page.getByTestId(`cell-divider-${dividerIndex}`);
+  await divider.hover();
+  await divider.getByRole('button', { name: 'Special cells' }).click();
+  await divider.getByRole('button', { name: label }).click();
+};
+
+const insertSpecialCellFromPalette = async (page: any, query: string, title: string, useShortcut = false) => {
+  if (useShortcut) {
+    await page.keyboard.press('ControlOrMeta+K');
+  } else {
+    await page.getByTestId('special-cell-palette-button').click();
+  }
+  const palette = page.getByTestId('special-cell-palette');
+  await expect(palette).toBeVisible();
+  const input = palette.getByPlaceholder('Search special cells');
+  await input.fill(query);
+  await palette.getByRole('button', { name: new RegExp(title) }).click();
+};
+
 const setMathInLastCell = async (page: any, source: string) => {
   const mathCell = page.locator('[data-testid="cell-row-math"]').last();
   const editor = mathCell.locator('.cm-content').first();
@@ -258,6 +285,18 @@ test.describe('Notebook CAS outputs', () => {
     await expect(codeCell.locator('.cell-action-bar')).toHaveCount(0);
   });
 
+  test('Notebook chrome: hover reveals cell actions without activating the cell', async ({ page }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    await page.locator('.app-header').click();
+    await expect(codeCell.locator('.cell-action-bar')).toHaveCount(0);
+    await codeCell.hover();
+    await expect(codeCell.locator('.cell-action-bar')).toBeVisible();
+    await page.locator('.app-header').hover();
+    await expect(codeCell.locator('.cell-action-bar')).toHaveCount(0);
+  });
+
   test('Notebook chrome: code and math outputs can collapse and reopen', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
@@ -348,6 +387,105 @@ test.describe('Notebook CAS outputs', () => {
     await page.goto('/');
     await setCodeInFirstCell(page, 'Integral(x**2, x)');
     await expect(page.getByTestId('katex-formula')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Special palette button: inserts Stoich cell from dedicated picker', async ({ page }) => {
+    await page.goto('/');
+    await insertSpecialCellFromPalette(page, 'stoich', 'Stoichiometry');
+    await expect(page.locator('[data-testid="cell-row-stoich"]')).toHaveCount(1);
+  });
+
+  test('Special palette shortcut: inserts Regression cell from dedicated picker', async ({ page }) => {
+    await page.goto('/');
+    await insertSpecialCellFromPalette(page, 'regress', 'Regression', true);
+    await expect(page.locator('[data-testid="cell-row-custom"]')).toHaveCount(1);
+  });
+
+  test('Header add menu: Special submenu inserts Stoich and Regression cells', async ({ page }) => {
+    await page.goto('/');
+    await insertSpecialCellFromHeaderMenu(page, 'Stoich cell');
+    await expect(page.locator('[data-testid="cell-row-stoich"]')).toHaveCount(1);
+    await insertSpecialCellFromHeaderMenu(page, 'Regression cell');
+    await expect(page.locator('[data-testid="cell-row-custom"]')).toHaveCount(1);
+  });
+
+  test('Divider add menu: Special submenu inserts Stoich and Regression cells', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await insertSpecialCellFromDivider(page, 1, 'Stoich cell');
+    await expect(page.locator('[data-testid="cell-row-stoich"]')).toHaveCount(1);
+    await insertSpecialCellFromDivider(page, 2, 'Regression cell');
+    await expect(page.locator('[data-testid="cell-row-custom"]')).toHaveCount(1);
+  });
+
+  test('Divider add menu: Special submenu resets after outside click', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+
+    const divider = page.getByTestId('cell-divider-1');
+    await divider.hover();
+    await divider.getByRole('button', { name: 'Special cells' }).click();
+    await expect(page.getByTestId('divider-special-submenu-1')).toBeVisible();
+
+    await page.locator('.app-header').click();
+    await expect(page.getByTestId('divider-special-submenu-1')).toHaveCount(0);
+
+    await divider.hover();
+    await divider.getByRole('button', { name: 'Special cells' }).click();
+    await expect(page.getByTestId('divider-special-submenu-1')).toBeVisible();
+    await divider.getByRole('button', { name: 'Stoich cell' }).click();
+    await expect(page.locator('[data-testid="cell-row-stoich"]')).toHaveCount(1);
+  });
+
+  test('Code-cell slash keeps functions but does not insert special cells', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    const editor = codeCell.locator('.cm-content').first();
+    const editorShell = codeCell.locator('.cm-editor').first();
+
+    await editor.click();
+    await page.keyboard.type('/stoichiometry_table');
+    await editorShell.press('Enter');
+    await expect(page.locator('[data-testid="cell-row-stoich"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="cell-row-custom"]')).toHaveCount(0);
+    await expect(codeCell.locator('.cm-content')).toContainText('/stoichiometry_table');
+
+    await editor.click();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('/balance_equation');
+    await editorShell.press('Enter');
+    await expect(codeCell.locator('.cm-content')).toContainText("balance_equation('H2 + O2 -> H2O')");
+  });
+
+  test('Custom regression cell: computes fit, renders plot, and exports bindings to code cells', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await insertSpecialCellFromHeaderMenu(page, 'Regression cell');
+
+    const regressionCell = page.locator('[data-testid="cell-row-custom"]').last();
+    await expect(regressionCell).toBeVisible();
+
+    await regressionCell.getByRole('button', { name: 'Recompute' }).click();
+    await expect(regressionCell.locator('.regression-summary')).toBeVisible();
+    await expect(regressionCell.locator('.regression-metric').filter({ hasText: 'R²:' }).first()).toContainText('1');
+    await expect(regressionCell.getByTestId('plotly-graph')).toBeVisible();
+
+    await regressionCell.getByRole('button', { name: 'Export bindings' }).click();
+    await expect(regressionCell.locator('.regression-bindings')).toContainText('regression_predict');
+
+    await regressionCell.click();
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Code cell' }).click();
+    const codeCell = page.locator('[data-testid="cell-row-code"]').last();
+    const editor = codeCell.locator('.cm-content').first();
+    await editor.click();
+    await page.keyboard.type('round(regression_predict(4), 2)');
+    await codeCell.locator('[data-testid="run-cell"]').click();
+    await expect(codeCell.getByTestId('cell-plain-output')).toContainText('9');
+
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -461,10 +599,8 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('cell-row-code').first().getByTestId('cell-error')).toHaveCount(0);
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
     await expect(mathCell.getByTestId('math-latex')).toHaveCount(0);
-    await expect(mathCell.locator('.math-empty')).toContainText('Click to edit.');
-    await expect(page.locator('[data-testid="cell-row-code"]').first().locator('.cm-content')).toContainText('1/0');
-    await mathCell.getByTestId('math-output').click();
     await expect(mathCell.locator('.cm-content')).toContainText('x^2 = 2');
+    await expect(page.locator('[data-testid="cell-row-code"]').first().locator('.cm-content')).toContainText('1/0');
     await expectNoGlobalErrors(page, guards);
   });
 

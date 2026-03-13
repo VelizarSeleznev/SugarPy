@@ -3,6 +3,7 @@ from unittest.mock import patch
 from sugarpy.chem import balance_equation
 from sugarpy.library import load_catalog
 from sugarpy.math_cell import display_math_cell, render_math_cell
+from sugarpy.regression import display_regression, render_regression
 from sugarpy.startup import plot, sqrt, x, y
 from sugarpy.stoichiometry import display_stoichiometry, render_stoichiometry
 
@@ -84,6 +85,25 @@ def test_stoichiometry_smoke():
     assert render_stoichiometry("Fe + O2 -> Fe2O3", {"Fe": {"m": 10}})["balanced"] == "4Fe + 3O2 -> 2Fe2O3"
 
 
+def test_regression_smoke():
+    linear = render_regression(
+        [{"x": 0, "y": 1}, {"x": 1, "y": 3}, {"x": 2, "y": 5}],
+        model="linear",
+    )
+    assert linear["ok"] is True
+    assert linear["model"] == "linear"
+    assert linear["equation_text"] == "y = 2x + 1"
+    assert abs(linear["metrics"]["r2"] - 1.0) < 1e-9
+
+    quadratic = render_regression(
+        [{"x": -1, "y": 1}, {"x": 0, "y": 0}, {"x": 1, "y": 1}, {"x": 2, "y": 4}],
+        model="quadratic",
+    )
+    assert quadratic["ok"] is True
+    assert quadratic["model"] == "quadratic"
+    assert quadratic["plotly_figure"]["data"][0]["type"] == "scatter"
+
+
 def test_math_display_mime_smoke():
     with patch("sugarpy.utils.display") as display_mock:
         payload = display_math_cell("2 + 2")
@@ -102,6 +122,20 @@ def test_stoich_display_mime_smoke():
     raw_payload = display_mock.call_args[0][0]
     assert "application/vnd.sugarpy.stoich+json" in raw_payload
     assert raw_payload["application/vnd.sugarpy.stoich+json"]["schema_version"] == 1
+
+
+def test_regression_display_mime_smoke():
+    with patch("sugarpy.utils.display") as display_mock:
+        payload = display_regression(
+            [{"x": 0, "y": 1}, {"x": 1, "y": 3}, {"x": 2, "y": 5}],
+            model="linear",
+            export_bindings=False,
+        )
+    assert payload["ok"] is True
+    assert display_mock.called
+    raw_payload = display_mock.call_args[0][0]
+    assert "application/vnd.sugarpy.custom+json" in raw_payload
+    assert raw_payload["application/vnd.sugarpy.custom+json"]["template_id"] == "regression"
 
 
 def test_math_namespace_sharing_smoke():

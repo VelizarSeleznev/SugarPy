@@ -8,6 +8,8 @@ import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
 import { moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
+import { createCustomCellData, CustomCellData, CustomCellTemplateId } from './utils/customCellTypes';
+import { SpecialCellDescriptor, specialCellRegistry, specialFunctionIds } from './utils/specialCells';
 import {
   AssistantActivity,
   AssistantConversationEntry,
@@ -60,7 +62,7 @@ export type CellModel = {
   id: string;
   source: string;
   output?: CellOutput;
-  type?: 'code' | 'markdown' | 'math' | 'stoich';
+  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'custom';
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -95,6 +97,7 @@ export type CellModel = {
   mathTrigMode?: 'deg' | 'rad';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
+  customCell?: CustomCellData;
   assistantMeta?: {
     runId: string;
     stepId: string;
@@ -147,6 +150,7 @@ const asText = (value: unknown) => {
 
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
+const SUGARPY_MIME_CUSTOM = 'application/vnd.sugarpy.custom+json';
 const ASSISTANT_HISTORY_STORAGE_PREFIX = 'sugarpy:assistant:history:v1:';
 const ASSISTANT_TRACE_STORAGE_PREFIX = 'sugarpy:assistant:traces:v1:';
 const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:api:key';
@@ -341,6 +345,10 @@ function App() {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
+  const [addCellSpecialMenuOpen, setAddCellSpecialMenuOpen] = useState(false);
+  const [dividerSpecialMenuIndex, setDividerSpecialMenuIndex] = useState<number | null>(null);
+  const [specialPaletteOpen, setSpecialPaletteOpen] = useState(false);
+  const [specialPaletteQuery, setSpecialPaletteQuery] = useState('');
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [touchUiEnabled, setTouchUiEnabled] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -387,6 +395,8 @@ function App() {
   const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const addCellMenuRef = useRef<HTMLDivElement | null>(null);
+  const specialPaletteRef = useRef<HTMLDivElement | null>(null);
+  const specialPaletteInputRef = useRef<HTMLInputElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
   const assistantRuntimeConfigAttemptedRef = useRef(false);
@@ -403,6 +413,7 @@ function App() {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
     allFunctions.forEach((fn) => {
+      if (specialFunctionIds.has(fn.id)) return;
       const name = getCommandName(fn);
       if (!name || map.has(name)) return;
       map.set(name, fn);
@@ -412,9 +423,17 @@ function App() {
   }, [allFunctions]);
   const slashCommands = slashData.list;
   const slashCommandMap = slashData.map;
+  const filteredSpecialCells = useMemo(() => {
+    const needle = specialPaletteQuery.trim().toLowerCase();
+    if (!needle) return specialCellRegistry;
+    return specialCellRegistry.filter((entry) => {
+      const haystack = [entry.title, entry.description, ...entry.aliases].join('\n').toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [specialPaletteQuery]);
   const codeSuggestions = useMemo(
     () => [
-      ...buildSuggestions(allFunctions),
+      ...buildSuggestions(allFunctions.filter((fn) => !specialFunctionIds.has(fn.id))),
       ...userFunctions.map((name) => ({ label: name, detail: 'user function' }))
     ],
     [allFunctions, userFunctions]
@@ -427,6 +446,12 @@ function App() {
     activeCellIdRef.current = activeCellId;
   }, [cells, trigMode, defaultMathRenderMode, activeCellId]);
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
+
+  useEffect(() => {
+    if (!specialPaletteOpen) return;
+    specialPaletteInputRef.current?.focus();
+    specialPaletteInputRef.current?.select();
+  }, [specialPaletteOpen]);
 
   const connectBackend = async () => {
     if (connectingRef.current) return;
@@ -599,18 +624,27 @@ function App() {
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
+      if (target && !document.querySelector('.cell-divider:hover')) {
+        setDividerSpecialMenuIndex(null);
+      }
       if (headerMenuOpen && headerMenuRef.current && target && !headerMenuRef.current.contains(target)) {
         setHeaderMenuOpen(false);
       }
       if (addCellMenuOpen && addCellMenuRef.current && target && !addCellMenuRef.current.contains(target)) {
         setAddCellMenuOpen(false);
+        setAddCellSpecialMenuOpen(false);
+        setDividerSpecialMenuIndex(null);
+      }
+      if (specialPaletteOpen && specialPaletteRef.current && target && !specialPaletteRef.current.contains(target)) {
+        setSpecialPaletteOpen(false);
       }
       if (
         target &&
         notebookStackRef.current &&
         !notebookStackRef.current.contains(target) &&
         !headerMenuRef.current?.contains(target) &&
-        !addCellMenuRef.current?.contains(target)
+        !addCellMenuRef.current?.contains(target) &&
+        !specialPaletteRef.current?.contains(target)
       ) {
         setActiveCellId(null);
       }
@@ -626,9 +660,24 @@ function App() {
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setSpecialPaletteOpen(true);
+        setSpecialPaletteQuery('');
+        setHeaderMenuOpen(false);
+        setAddCellMenuOpen(false);
+        setAddCellSpecialMenuOpen(false);
+        setDividerSpecialMenuIndex(null);
+        return;
+      }
       if (event.key !== 'Escape') return;
       if (headerMenuOpen) setHeaderMenuOpen(false);
-      if (addCellMenuOpen) setAddCellMenuOpen(false);
+      if (addCellMenuOpen) {
+        setAddCellMenuOpen(false);
+        setAddCellSpecialMenuOpen(false);
+        setDividerSpecialMenuIndex(null);
+      }
+      if (specialPaletteOpen) setSpecialPaletteOpen(false);
       if (assistantOpen) setAssistantOpen(false);
     };
 
@@ -638,7 +687,7 @@ function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [addCellMenuOpen, assistantOpen, headerMenuOpen]);
+  }, [addCellMenuOpen, assistantOpen, headerMenuOpen, specialPaletteOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -694,7 +743,7 @@ function App() {
     };
   }, []);
 
-  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich') =>
+  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich' | 'custom') =>
     cellsRef.current.map((cell) =>
       cell.id === cellId
         ? {
@@ -707,6 +756,11 @@ function App() {
                     reaction: cell.stoichState?.reaction ?? source,
                     inputs: cell.stoichState?.inputs ?? {}
                   }
+                }
+              : {}),
+            ...(type === 'custom'
+              ? {
+                  customCell: cell.customCell
                 }
               : {})
           }
@@ -738,6 +792,23 @@ function App() {
               isRunning: false,
               execCount: nextExecCount ?? cell.execCount,
               stoichOutput: response.stoichOutput as any,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            };
+          }
+          if (response.cellType === 'custom') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              customCell: cell.customCell
+                ? {
+                    ...cell.customCell,
+                    output: response.customOutput as CustomCellData['output']
+                  }
+                : cell.customCell,
               ui: {
                 ...cell.ui,
                 outputCollapsed: false
@@ -923,6 +994,77 @@ function App() {
     }
   };
 
+  const runCustomCell = async (
+    cellId: string,
+    customCell: CustomCellData,
+    options?: { exportBindings?: boolean }
+  ) => {
+    if (!activeKernel) return;
+    const nextCustomCell: CustomCellData = {
+      ...customCell,
+      state: {
+        ...customCell.state,
+        ...(options?.exportBindings ? { exportBindings: true } : { exportBindings: false }),
+      } as CustomCellData['state'],
+    };
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              isRunning: true,
+              customCell: nextCustomCell,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            }
+          : cell
+      )
+    );
+    try {
+      const nextCells = cellsRef.current.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              type: 'custom',
+              customCell: nextCustomCell
+            }
+          : cell
+      );
+      const response = await executeNotebookCell({
+        cells: nextCells as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      applyExecutionResult(cellId, response, true);
+    } catch (error) {
+      setCells((prev) =>
+        prev.map((cell) =>
+          cell.id === cellId
+            ? {
+                ...cell,
+                isRunning: false,
+                customCell: cell.customCell
+                  ? {
+                      ...cell.customCell,
+                      output: {
+                        schema_version: 1,
+                        template_id: cell.customCell.templateId,
+                        ok: false,
+                        error: error instanceof Error ? error.message : String(error),
+                      } as CustomCellData['output']
+                    }
+                  : cell.customCell
+              }
+            : cell
+        )
+      );
+    }
+  };
+
   const runAllCells = async () => {
     if (isRunningAll) return;
     if (!activeKernel) {
@@ -948,6 +1090,10 @@ function App() {
           await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
           continue;
         }
+        if (cell.type === 'custom' && cell.customCell) {
+          await runCustomCell(cell.id, cell.customCell);
+          continue;
+        }
         await runCell(cell.id, cell.source);
       }
     } finally {
@@ -956,9 +1102,10 @@ function App() {
   };
 
   const createCell = (
-    type: 'code' | 'markdown' | 'math' | 'stoich',
+    type: 'code' | 'markdown' | 'math' | 'stoich' | 'custom',
     source = '',
-    indexSeed?: number
+    indexSeed?: number,
+    options?: { templateId?: CustomCellTemplateId }
   ): CellModel => {
     const idSuffix = indexSeed ? `${indexSeed}-${Date.now()}` : `${Date.now()}`;
     if (type === 'stoich') {
@@ -967,6 +1114,17 @@ function App() {
         source,
         type,
         stoichState: createStoichState(),
+        ui: {
+          outputCollapsed: false
+        }
+      };
+    }
+    if (type === 'custom') {
+      return {
+        id: `cell-${idSuffix}`,
+        source: '',
+        type,
+        customCell: createCustomCellData(options?.templateId ?? 'regression'),
         ui: {
           outputCollapsed: false
         }
@@ -1026,6 +1184,7 @@ function App() {
               output: undefined,
               mathOutput: undefined,
               stoichOutput: undefined,
+              customCell: cell.customCell ? { ...cell.customCell, output: undefined } : undefined,
               ui: {
                 ...cell.ui,
                 outputCollapsed: false,
@@ -1035,6 +1194,24 @@ function App() {
           : cell
       )
     );
+  };
+
+  const clearNotebookOutputs = () => {
+    setCells((prev) =>
+      prev.map((cell) => ({
+        ...cell,
+        output: undefined,
+        mathOutput: undefined,
+        stoichOutput: undefined,
+        customCell: cell.customCell ? { ...cell.customCell, output: undefined } : undefined,
+        ui: {
+          ...cell.ui,
+          outputCollapsed: false,
+          ...(cell.type === 'math' ? { mathView: 'source' as const } : {})
+        }
+      }))
+    );
+    setHeaderMenuOpen(false);
   };
 
   const toggleMathView = (cellId: string) => {
@@ -1060,6 +1237,12 @@ function App() {
     if (cell.type === 'stoich') {
       return cell.stoichState?.reaction ?? '';
     }
+    if (cell.type === 'custom') {
+      const output = cell.customCell?.output;
+      if (output && 'error' in output && output.error) return output.error;
+      if (output && 'equation_text' in output && output.equation_text) return output.equation_text;
+      return cell.customCell?.templateId ?? '';
+    }
     if (cell.output?.type === 'error') {
       return `${cell.output.ename}: ${cell.output.evalue}`;
     }
@@ -1080,17 +1263,18 @@ function App() {
     activeCellId,
     cells: cells.map((cell) => ({
       id: cell.id,
-      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich',
+      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich' | 'custom',
       source: cell.source,
       mathRenderMode: cell.mathRenderMode,
       mathTrigMode: cell.mathTrigMode,
       stoichReaction: cell.stoichState?.reaction ?? '',
-      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput),
+      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.customCell?.output),
       outputPreview: getCellDisplayText(cell),
       hasError: !!(
         cell.output?.type === 'error' ||
         cell.mathOutput?.error ||
-        (cell.stoichOutput && cell.stoichOutput.ok === false)
+        (cell.stoichOutput && cell.stoichOutput.ok === false) ||
+        (cell.customCell?.output && 'ok' in cell.customCell.output && cell.customCell.output.ok === false)
       )
     }))
   });
@@ -1099,7 +1283,12 @@ function App() {
     cells.map((cell) => ({
       id: cell.id,
       type: cell.type ?? 'code',
-      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      source:
+        cell.type === 'stoich'
+          ? cell.stoichState?.reaction ?? ''
+          : cell.type === 'custom'
+            ? cell.customCell?.templateId ?? ''
+            : cell.source,
       mathTrigMode: cell.mathTrigMode,
       mathRenderMode: cell.mathRenderMode
     }));
@@ -1121,6 +1310,7 @@ function App() {
       mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
       stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
       stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
+      customCell: cell.customCell ? JSON.parse(JSON.stringify(cell.customCell)) : undefined,
       output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
     })),
     trigMode: trigModeRef.current,
@@ -1152,7 +1342,12 @@ function App() {
     cellsRef.current.map((cell) => ({
       id: cell.id,
       type: cell.type ?? 'code',
-      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      source:
+        cell.type === 'stoich'
+          ? cell.stoichState?.reaction ?? ''
+          : cell.type === 'custom'
+            ? cell.customCell?.templateId ?? ''
+            : cell.source,
       mathTrigMode: cell.mathTrigMode,
       mathRenderMode: cell.mathRenderMode
     }));
@@ -1414,29 +1609,60 @@ function App() {
 
   const insertCellAt = (
     index: number,
-    type: 'code' | 'markdown' | 'math',
-    source = ''
+    type: 'code' | 'markdown' | 'math' | 'custom',
+    source = '',
+    options?: { templateId?: CustomCellTemplateId }
   ) => {
     const bounded = Math.max(0, Math.min(index, cells.length));
-    const nextCell = createCell(type, source, bounded + 1);
+    const nextCell = createCell(type, source, bounded + 1, options);
     setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
     setActiveCellId(nextCell.id);
     setAddCellMenuOpen(false);
+    setAddCellSpecialMenuOpen(false);
+    setDividerSpecialMenuIndex(null);
   };
 
-  const insertCellBelowActive = (type: 'code' | 'markdown' | 'math') => {
+  const insertSpecialCellAt = (index: number, descriptor: SpecialCellDescriptor) => {
+    if (descriptor.kind === 'stoich') {
+      const bounded = Math.max(0, Math.min(index, cells.length));
+      const nextCell = createCell('stoich', '', bounded + 1);
+      setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
+      setActiveCellId(nextCell.id);
+      setAddCellMenuOpen(false);
+      setAddCellSpecialMenuOpen(false);
+      setDividerSpecialMenuIndex(null);
+      setSpecialPaletteOpen(false);
+      setSpecialPaletteQuery('');
+      return;
+    }
+    insertCellAt(index, 'custom', '', { templateId: descriptor.templateId });
+    setSpecialPaletteOpen(false);
+    setSpecialPaletteQuery('');
+  };
+
+  const insertCellBelowActive = (type: 'code' | 'markdown' | 'math' | 'custom', options?: { templateId?: CustomCellTemplateId }) => {
     const activeIndex = activeCellId ? cells.findIndex((cell) => cell.id === activeCellId) : -1;
     const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
-    insertCellAt(targetIndex, type);
+    insertCellAt(targetIndex, type, '', options);
+  };
+
+  const insertSpecialCellBelowActive = (descriptor: SpecialCellDescriptor) => {
+    const activeIndex = activeCellId ? cells.findIndex((cell) => cell.id === activeCellId) : -1;
+    const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
+    insertSpecialCellAt(targetIndex, descriptor);
   };
 
   const insertSiblingCell = (cellId: string, position: 'above' | 'below') => {
     const sourceIndex = cells.findIndex((cell) => cell.id === cellId);
     if (sourceIndex < 0) return;
     const sourceCell = cells[sourceIndex];
+    const targetIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
+    if (sourceCell.type === 'custom') {
+      insertCellAt(targetIndex, 'custom', '', { templateId: sourceCell.customCell?.templateId ?? 'regression' });
+      return;
+    }
     const nextType: 'code' | 'markdown' | 'math' =
       sourceCell.type === 'markdown' || sourceCell.type === 'math' ? sourceCell.type : 'code';
-    const targetIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
     insertCellAt(targetIndex, nextType);
   };
 
@@ -1446,6 +1672,10 @@ function App() {
 
   const updateStoichState = (cellId: string, state: StoichState) => {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
+  };
+
+  const updateCustomCell = (cellId: string, customCell: CustomCellData) => {
+    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, customCell } : c)));
   };
 
   const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
@@ -1501,22 +1731,6 @@ function App() {
     setCells((prev) =>
       prev.map((cell) => {
         if (cell.id !== cellId) return cell;
-        if (entry.id === 'chem.stoichiometry_table') {
-          return {
-            ...cell,
-            type: 'stoich',
-            source: '',
-            output: undefined,
-            execCount: undefined,
-            isRunning: false,
-            mathOutput: undefined,
-            stoichOutput: undefined,
-            stoichState: createStoichState(),
-            ui: {
-              outputCollapsed: false
-            }
-          };
-        }
         return {
           ...cell,
           type: 'code',
@@ -1526,6 +1740,7 @@ function App() {
           isRunning: false,
           mathOutput: undefined,
           stoichOutput: undefined,
+          customCell: undefined,
           stoichState: undefined,
           ui: {
             outputCollapsed: false
@@ -2421,7 +2636,11 @@ function App() {
               <button
                 className="menu-button"
                 data-testid="add-cell-button"
-                onClick={() => setAddCellMenuOpen((prev) => !prev)}
+                onClick={() => {
+                  setAddCellMenuOpen((prev) => !prev);
+                  setAddCellSpecialMenuOpen(false);
+                  setDividerSpecialMenuIndex(null);
+                }}
                 aria-label="Add cell below selected"
               >
                 ＋
@@ -2432,9 +2651,43 @@ function App() {
                   <button className="menu-item" onClick={() => insertCellBelowActive('code')}>Code cell</button>
                   <button className="menu-item" onClick={() => insertCellBelowActive('markdown')}>Text cell</button>
                   <button className="menu-item" onClick={() => insertCellBelowActive('math')}>Math cell</button>
+                  <button
+                    className="menu-item"
+                    onClick={() => setAddCellSpecialMenuOpen((prev) => !prev)}
+                    aria-expanded={addCellSpecialMenuOpen}
+                  >
+                    Special…
+                  </button>
+                  {addCellSpecialMenuOpen ? (
+                    <div className="menu-submenu" data-testid="header-special-submenu">
+                      {specialCellRegistry.map((entry) => (
+                        <button
+                          key={`header-special-${entry.id}`}
+                          className="menu-item submenu-item"
+                          onClick={() => insertSpecialCellBelowActive(entry)}
+                        >
+                          {entry.insertLabel}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
+            <button
+              className="button secondary"
+              data-testid="special-cell-palette-button"
+              onClick={() => {
+                setSpecialPaletteOpen(true);
+                setSpecialPaletteQuery('');
+                setHeaderMenuOpen(false);
+                setAddCellMenuOpen(false);
+                setAddCellSpecialMenuOpen(false);
+                setDividerSpecialMenuIndex(null);
+              }}
+            >
+              Special
+            </button>
             <button className="button" onClick={runAllCells} disabled={isRunningAll || status === 'connecting'}>
               {isRunningAll ? 'Running…' : 'Run All'}
             </button>
@@ -2482,6 +2735,7 @@ function App() {
                   >
                     Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
+                  <button className="menu-item" onClick={clearNotebookOutputs}>Clear Outputs</button>
                   <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
@@ -2518,12 +2772,38 @@ function App() {
                 {Array.from({ length: cells.length + 1 }).map((_, index) => (
                   <React.Fragment key={`cell-slot-${index}`}>
                     {!touchUiEnabled && cells.length > 0 ? (
-                      <div className="cell-divider" data-testid={`cell-divider-${index}`}>
+                      <div
+                        className="cell-divider"
+                        data-testid={`cell-divider-${index}`}
+                        onMouseLeave={() => setDividerSpecialMenuIndex((prev) => (prev === index ? null : prev))}
+                      >
                         <div className="cell-divider-line" />
                         <div className="divider-menu" role="menu" aria-label="Insert cell type">
                           <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
                           <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
                           <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                          <button
+                            className="divider-btn divider-btn-icon"
+                            onClick={() => setDividerSpecialMenuIndex((prev) => (prev === index ? null : index))}
+                            aria-expanded={dividerSpecialMenuIndex === index}
+                            aria-label="Special cells"
+                            title="Special cells"
+                          >
+                            ⋮
+                          </button>
+                          {dividerSpecialMenuIndex === index ? (
+                            <div className="divider-submenu" data-testid={`divider-special-submenu-${index}`}>
+                              {specialCellRegistry.map((entry) => (
+                                <button
+                                  key={`divider-special-${index}-${entry.id}`}
+                                  className="divider-btn divider-submenu-btn"
+                                  onClick={() => insertSpecialCellAt(index, entry)}
+                                >
+                                  {entry.insertLabel}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -2547,6 +2827,8 @@ function App() {
                         }
                         onRunStoich={(state) => runStoichCell(cells[index].id, state)}
                         onChangeStoich={(state) => updateStoichState(cells[index].id, state)}
+                        onRunCustom={(customCell, options) => runCustomCell(cells[index].id, customCell, options)}
+                        onChangeCustom={(customCell) => updateCustomCell(cells[index].id, customCell)}
                         onMoveUp={() => setCells((prev) => moveCellUp(prev, cells[index].id))}
                         onMoveDown={() => setCells((prev) => moveCellDown(prev, cells[index].id))}
                         onDelete={() => setCells((prev) => deleteCell(prev, cells[index].id))}
@@ -2598,6 +2880,55 @@ function App() {
             className="file-input"
           />
         </main>
+        {specialPaletteOpen ? (
+          <div className="special-palette-backdrop">
+            <div
+              ref={specialPaletteRef}
+              className="special-palette"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Insert special cell"
+              data-testid="special-cell-palette"
+            >
+              <div className="special-palette-header">
+                <div>
+                  <div className="special-palette-title">Insert Special Cell</div>
+                  <div className="special-palette-subtitle">Rare structured widgets like Stoich and Regression</div>
+                </div>
+                <button
+                  className="menu-button"
+                  onClick={() => setSpecialPaletteOpen(false)}
+                  aria-label="Close special cell palette"
+                >
+                  ×
+                </button>
+              </div>
+              <input
+                ref={specialPaletteInputRef}
+                className="special-palette-input"
+                placeholder="Search special cells"
+                value={specialPaletteQuery}
+                onChange={(event) => setSpecialPaletteQuery(event.target.value)}
+              />
+              <div className="special-palette-results">
+                {filteredSpecialCells.map((entry) => (
+                  <button
+                    key={`special-palette-${entry.id}`}
+                    className="special-palette-item"
+                    onClick={() => insertSpecialCellBelowActive(entry)}
+                  >
+                    <span className="special-palette-item-title">{entry.title}</span>
+                    <span className="special-palette-item-description">{entry.description}</span>
+                  </button>
+                ))}
+                {filteredSpecialCells.length === 0 ? (
+                  <div className="special-palette-empty">No special cells match that search.</div>
+                ) : null}
+              </div>
+              <div className="special-palette-hint">Shortcut: Cmd/Ctrl+K</div>
+            </div>
+          </div>
+        ) : null}
         <div ref={assistantDrawerRef}>
           <AssistantDrawer
             open={assistantOpen}
