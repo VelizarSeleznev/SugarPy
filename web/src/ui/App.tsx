@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ContentsManager, KernelManager, ServerConnection } from '@jupyterlab/services';
 
 import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
@@ -32,6 +31,15 @@ import {
   buildAssistantBootstrapCode,
   runAssistantSandbox as runIsolatedAssistantSandbox
 } from './utils/assistantSandbox';
+import {
+  executeNotebookCell,
+  fetchRuntimeConfig,
+  loadServerAutosave as loadServerAutosaveRequest,
+  persistAssistantTraceToServer,
+  saveNotebookDocument,
+  saveServerAutosave as saveServerAutosaveRequest,
+  SugarPyRuntimeConfig
+} from './utils/backendApi';
 import {
   createNotebookId,
   deserializeIpynb,
@@ -139,9 +147,6 @@ const asText = (value: unknown) => {
 
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
-const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
-const ASSISTANT_TRACE_SERVER_DIR = 'notebooks/sugarpy-assistant-traces';
-const ASSISTANT_SERVER_CONFIG_PATH = 'notebooks/sugarpy-assistant-config.json';
 const ASSISTANT_HISTORY_STORAGE_PREFIX = 'sugarpy:assistant:history:v1:';
 const ASSISTANT_TRACE_STORAGE_PREFIX = 'sugarpy:assistant:traces:v1:';
 const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:api:key';
@@ -158,8 +163,12 @@ type AssistantSnapshot = {
 };
 
 type AssistantRuntimeConfig = {
-  apiKey?: string;
   model?: string;
+  providers?: {
+    openai?: boolean;
+    gemini?: boolean;
+    groq?: boolean;
+  };
 };
 
 const matchesAssistantProvider = (apiKey: string, model: string) => {
@@ -306,32 +315,6 @@ const awaitFutureDoneWithTimeout = async (future: any, kernel: any) => {
   }
 };
 
-const resolveDefaultServerUrl = () => {
-  const envUrl = (import.meta.env.VITE_JUPYTER_URL || '').trim();
-  const host = window.location.hostname.toLowerCase();
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-  if (envUrl) {
-    const envLooksLocal =
-      envUrl.startsWith('http://localhost') || envUrl.startsWith('http://127.0.0.1') || envUrl.startsWith('https://localhost');
-    if (envLooksLocal && !isLocalHost) {
-      return '/jupyter/';
-    }
-    return envUrl;
-  }
-  return isLocalHost ? 'http://localhost:8888' : '/jupyter/';
-};
-
-const resolveServerConfig = (rawServerUrl: string) => {
-  const fallback = resolveDefaultServerUrl();
-  const trimmed = (rawServerUrl || '').trim() || fallback;
-  const resolved = new URL(trimmed, window.location.origin);
-  const protocol = resolved.protocol.toLowerCase();
-  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
-  const baseUrl = resolved.toString().replace(/\/?$/, '/');
-  const wsUrl = `${wsProtocol}//${resolved.host}${resolved.pathname.replace(/\/?$/, '/')}`;
-  return { baseUrl, wsUrl };
-};
-
 const readOptionalStorageItem = (key: string) => {
   try {
     return window.localStorage.getItem(key);
@@ -341,16 +324,11 @@ const readOptionalStorageItem = (key: string) => {
 };
 
 function App() {
-  const defaultServerUrl = resolveDefaultServerUrl();
-  const [serverUrl, setServerUrl] = useState(defaultServerUrl);
-  const [token, setToken] = useState(import.meta.env.VITE_JUPYTER_TOKEN || 'sugarpy');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [kernel, setKernel] = useState<any>(null);
   const [cells, setCells] = useState<CellModel[]>([]);
   const { allFunctions } = useFunctionLibrary();
-  const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
   const [execCounter, setExecCounter] = useState(0);
   const [trigMode, setTrigMode] = useState<'deg' | 'rad'>('deg');
@@ -363,16 +341,12 @@ function App() {
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
-  const [configureConnection, setConfigureConnection] = useState(false);
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [touchUiEnabled, setTouchUiEnabled] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantApiKey, setAssistantApiKey] = useState('');
-  const [assistantDefaultApiKey, setAssistantDefaultApiKey] = useState(
-    import.meta.env.VITE_ASSISTANT_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || ''
-  );
   const [assistantModel, setAssistantModel] = useState(
-    import.meta.env.VITE_ASSISTANT_MODEL || import.meta.env.VITE_OPENAI_MODEL || import.meta.env.VITE_GEMINI_MODEL || DEFAULT_ASSISTANT_MODEL
+    import.meta.env.VITE_ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL
   );
   const [assistantThinkingLevel, setAssistantThinkingLevel] = useState<AssistantThinkingLevel>('dynamic');
   const [assistantDraft, setAssistantDraft] = useState('');
@@ -381,6 +355,7 @@ function App() {
   const [assistantError, setAssistantError] = useState('');
   const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
   const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
+  const [runtimeConfig, setRuntimeConfig] = useState<SugarPyRuntimeConfig | null>(null);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -408,7 +383,6 @@ function App() {
   const localAutosaveWarningShown = useRef(false);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
-  const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -420,12 +394,7 @@ function App() {
   const assistantAbortRef = useRef<AbortController | null>(null);
   const assistantTracePendingRef = useRef<Map<string, AssistantRunTrace>>(new Map());
   const assistantTraceFlushRef = useRef<Map<string, Promise<void>>>(new Map());
-  const ensuredServerDirsRef = useRef<Set<string>>(new Set());
-  const ensuringServerDirsRef = useRef<Map<string, Promise<void>>>(new Map());
   const connectingRef = useRef(false);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const kernelRef = useRef<any>(null);
-  const reconnectAttemptsRef = useRef(0);
   const cellsRef = useRef<CellModel[]>([]);
   const trigModeRef = useRef<'deg' | 'rad'>('deg');
   const renderModeRef = useRef<'exact' | 'decimal'>('exact');
@@ -459,128 +428,28 @@ function App() {
   }, [cells, trigMode, defaultMathRenderMode, activeCellId]);
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
-  const connectKernel = async () => {
+  const connectBackend = async () => {
     if (connectingRef.current) return;
     connectingRef.current = true;
     setStatus('connecting');
-    setStatusDetail('Initializing environment...');
+    setStatusDetail('Checking restricted runtime...');
     setErrorMsg('');
     try {
-      if (kernel) {
-        try {
-          await kernel.shutdown();
-        } catch (_err) {
-          // ignore stale kernel shutdown failures
-        }
-        setKernel(null);
-        kernelRef.current = null;
-      }
-      const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-      const settings = ServerConnection.makeSettings({
-        baseUrl,
-        token,
-        wsUrl,
-        appendToken: true
-      });
-      const manager = new KernelManager({ serverSettings: settings });
-      const newKernel = await withTimeout(manager.startNew({ name: 'python3' }), 12000, 'Kernel start');
-      kernelRef.current = newKernel;
-      newKernel.statusChanged.connect((_sender: any, nextStatus: string) => {
-        if (kernelRef.current !== newKernel) return;
-        if (nextStatus === 'dead' || nextStatus === 'terminating') {
-          setStatus('error');
-          setStatusDetail('');
-          setErrorMsg('Kernel is dead. Reconnect to continue.');
-        }
-      });
-      newKernel.connectionStatusChanged.connect((_sender: any, nextStatus: string) => {
-        if (kernelRef.current !== newKernel) return;
-        const runReconnectAttempt = () => {
-          if (kernelRef.current !== newKernel) return;
-          if ((newKernel as any).isDisposed) {
-            setStatus('connecting');
-            setStatusDetail('Kernel was disposed. Starting a new session...');
-            connectKernel().catch(() => undefined);
-            return;
-          }
-          reconnectAttemptsRef.current += 1;
-          if (reconnectAttemptsRef.current > 3) {
-            setStatus('error');
-            setStatusDetail('');
-            setErrorMsg('Kernel connection lost. Please reconnect.');
-            return;
-          }
-          setStatus('connecting');
-          setStatusDetail(`Reinitializing environment (${reconnectAttemptsRef.current}/3)...`);
-          let reconnectPromise: Promise<void>;
-          try {
-            reconnectPromise = newKernel.reconnect();
-          } catch (_err) {
-            if (kernelRef.current !== newKernel) return;
-            setStatus('connecting');
-            setStatusDetail('Kernel reconnect failed. Starting a new session...');
-            connectKernel().catch(() => undefined);
-            return;
-          }
-          withTimeout(reconnectPromise, 8000, 'Kernel reconnect').catch(() => {
-            if (kernelRef.current !== newKernel) return;
-            if (reconnectTimerRef.current) return;
-            reconnectTimerRef.current = window.setTimeout(() => {
-              reconnectTimerRef.current = null;
-              runReconnectAttempt();
-            }, 1600);
-          });
-        };
-
-        if (nextStatus === 'disconnected') {
-          if (reconnectTimerRef.current) return;
-          setStatus('connecting');
-          setStatusDetail('Kernel disconnected. Waiting for reconnection...');
-          reconnectTimerRef.current = window.setTimeout(() => {
-            reconnectTimerRef.current = null;
-            runReconnectAttempt();
-          }, 1200);
-          return;
-        }
-        if (nextStatus === 'connected' && reconnectTimerRef.current) {
-          window.clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = null;
-        }
-        if (nextStatus === 'connected') {
-          reconnectAttemptsRef.current = 0;
-          setStatusDetail('');
-        }
-      });
-      setKernel(newKernel);
-      setBootstrapLoaded(false);
+      const config = await fetchRuntimeConfig();
+      setRuntimeConfig(config);
       setStatus('connected');
-      setStatusDetail('');
+      setStatusDetail(config.mode ? `Mode: ${config.mode}` : 'Restricted runtime ready');
       setErrorMsg('');
-      reconnectAttemptsRef.current = 0;
     } catch (err) {
       setStatus('error');
       setStatusDetail('');
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to connect.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to connect to SugarPy backend.');
     } finally {
       connectingRef.current = false;
     }
   };
 
-  const activeKernel = kernel;
-
-  const getServerSettings = () => {
-    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-    return ServerConnection.makeSettings({
-      baseUrl,
-      token,
-      wsUrl,
-      appendToken: true
-    });
-  };
-
-  const getAutosavePath = (id: string) => `${SERVER_AUTOSAVE_DIR}/${id}.sugarpy`;
-  const getAssistantTraceServerPath = (trace: AssistantRunTrace) =>
-    `${ASSISTANT_TRACE_SERVER_DIR}/${trace.notebookId}/${trace.id}.json`;
+  const activeKernel = status === 'connected';
 
   const buildSnapshot = (
     nextCells: CellModel[],
@@ -597,72 +466,17 @@ function App() {
       cells: nextCells.map(({ isRunning, ...rest }) => rest)
     });
 
-  const ensureContents = () => {
-    if (!contentsRef.current) {
-      contentsRef.current = new ContentsManager({ serverSettings: getServerSettings() });
-    }
-    return contentsRef.current;
-  };
-
   const loadAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
-    const contents = ensureContents();
     try {
-      const directory = await contents.get('notebooks', { content: true });
-      const entries = Array.isArray(directory.content) ? directory.content : [];
-      const hasConfig = entries.some(
-        (entry: any) => entry?.type === 'file' && entry?.path === ASSISTANT_SERVER_CONFIG_PATH
-      );
-      if (!hasConfig) return null;
-      const model = await contents.get(ASSISTANT_SERVER_CONFIG_PATH, { content: true });
-      const raw = typeof model.content === 'string' ? model.content : '';
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
-      const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
-      const runtimeModel =
-        typeof parsed.model === 'string'
-          ? parsed.model.trim()
-          : typeof parsed.defaultModel === 'string'
-            ? parsed.defaultModel.trim()
-            : '';
+      const parsed = await fetchRuntimeConfig();
+      setRuntimeConfig(parsed);
+      const runtimeModel = typeof parsed.model === 'string' ? parsed.model.trim() : '';
       return {
-        apiKey: apiKey || undefined,
-        model: runtimeModel || undefined
+        model: runtimeModel || undefined,
+        providers: parsed.providers
       };
     } catch (_err) {
       return null;
-    }
-  };
-
-  const ensureServerDir = async (path: string) => {
-    const contents = ensureContents();
-    const parts = path.split('/').filter(Boolean);
-    let current = '';
-    for (const part of parts) {
-      current = current ? `${current}/${part}` : part;
-      if (ensuredServerDirsRef.current.has(current)) {
-        continue;
-      }
-      const pending = ensuringServerDirsRef.current.get(current);
-      if (pending) {
-        await pending;
-        continue;
-      }
-      const ensurePromise = (async () => {
-        try {
-          await contents.save(current, { type: 'directory' as any });
-        } catch (_err) {
-          // Directory may already exist or server may return noisy 4xx for nested checks.
-          // Fall through: later writes will surface real failures if path is unusable.
-        }
-        ensuredServerDirsRef.current.add(current);
-      })();
-      ensuringServerDirsRef.current.set(current, ensurePromise);
-      try {
-        await ensurePromise;
-      } finally {
-        ensuringServerDirsRef.current.delete(current);
-      }
     }
   };
 
@@ -693,14 +507,7 @@ function App() {
         assistantTracePendingRef.current.delete(trace.id);
         if (!nextTrace) continue;
         try {
-          const notebookTraceDir = `${ASSISTANT_TRACE_SERVER_DIR}/${nextTrace.notebookId}`;
-          await ensureServerDir(ASSISTANT_TRACE_SERVER_DIR);
-          await ensureServerDir(notebookTraceDir);
-          await ensureContents().save(getAssistantTraceServerPath(nextTrace), {
-            type: 'file' as any,
-            format: 'text' as any,
-            content: JSON.stringify(nextTrace, null, 2)
-          });
+          await persistAssistantTraceToServer(nextTrace as unknown as Record<string, unknown>);
         } catch (_err) {
           // trace persistence must never block assistant execution
         }
@@ -719,16 +526,9 @@ function App() {
   };
 
   const loadServerAutosave = async (id: string) => {
-    const contents = ensureContents();
-    const path = getAutosavePath(id);
     try {
-      await ensureServerDir(SERVER_AUTOSAVE_DIR);
-      const model = await contents.get(path, { content: true });
-      const raw = typeof model.content === 'string' ? model.content : '';
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed?.version !== 1) return null;
-      return parsed;
+      const parsed = await loadServerAutosaveRequest(id);
+      return parsed && (parsed as any).version === 1 ? parsed : null;
     } catch (_err) {
       return null;
     }
@@ -746,7 +546,6 @@ function App() {
       if (!params.silent) {
         setSyncMessage('Saving to server...');
       }
-      await ensureServerDir(SERVER_AUTOSAVE_DIR);
       const payload = serializeSugarPy({
         id: params.id,
         name: params.name,
@@ -754,11 +553,7 @@ function App() {
         defaultMathRenderMode: params.defaultMathRenderMode,
         cells: params.cells
       });
-      await ensureContents().save(getAutosavePath(params.id), {
-        type: 'file' as any,
-        format: 'text' as any,
-        content: JSON.stringify(payload, null, 2)
-      });
+      await saveServerAutosaveRequest(payload as unknown as Record<string, unknown>);
       if (!params.silent) {
         setSyncMessage('Saved to server autosave.');
       }
@@ -768,10 +563,6 @@ function App() {
       return null;
     }
   };
-
-  useEffect(() => {
-    contentsRef.current = null;
-  }, [serverUrl, token]);
 
   useEffect(() => {
     if (cells.length === 0) {
@@ -786,9 +577,7 @@ function App() {
   useEffect(() => {
     if (connectOnce.current) return;
     connectOnce.current = true;
-    connectKernel().catch(() => {
-      // handled in connectKernel
-    });
+    connectBackend().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -852,19 +641,6 @@ function App() {
   }, [addCellMenuOpen, assistantOpen, headerMenuOpen]);
 
   useEffect(() => {
-    return () => {
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
-      if (!kernel) return;
-      if (kernelRef.current === kernel) {
-        kernelRef.current = null;
-      }
-      kernel.shutdown().catch(() => undefined);
-    };
-  }, [kernel]);
-
-  useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
       const lastId = loadLastOpenId();
@@ -916,179 +692,131 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [serverUrl, token]);
+  }, []);
 
-  const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
-    if (!activeKernel) return;
-    if (showOutput) {
-      setCells((prev) => {
-        const exists = prev.some((c) => c.id === cellId);
-        if (exists) return prev;
-        return [
-          ...prev,
-          {
-            id: cellId,
-            source: code,
-            type: 'code',
-            ui: {
-              outputCollapsed: false
-            }
+  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich') =>
+    cellsRef.current.map((cell) =>
+      cell.id === cellId
+        ? {
+            ...cell,
+            type,
+            source,
+            ...(type === 'stoich'
+              ? {
+                  stoichState: {
+                    reaction: cell.stoichState?.reaction ?? source,
+                    inputs: cell.stoichState?.inputs ?? {}
+                  }
+                }
+              : {})
           }
-        ];
-      });
-    }
-    let future: any;
-    try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
-    } catch (error) {
-      if (showOutput) {
-        const message = isCanceledFutureError(error)
-          ? 'Kernel execution was canceled.'
-          : String(error instanceof Error ? error.message : error);
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId ? { ...c, output: { type: 'error', ename: 'ExecutionError', evalue: message }, isRunning: false } : c
-          )
-        );
-      }
-      return;
-    }
-    let streamText = '';
-    let mimeData: Record<string, unknown> = {};
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId
-          ? {
-              ...c,
-              isRunning: true,
-              output: undefined,
+        : cell
+    );
+
+  const applyExecutionResult = (cellId: string, response: SugarPyExecutionResponse, countExecution = true) => {
+    const updateCellState = (nextExecCount?: number) => {
+      setCells((prev) =>
+        prev.map((cell) => {
+          if (cell.id !== cellId) return cell;
+          if (response.cellType === 'math') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              mathOutput: response.mathOutput as any,
+              output: response.output as any,
               ui: {
-                ...c.ui,
+                ...cell.ui,
                 outputCollapsed: false,
                 mathView: 'rendered'
               }
-            }
-          : c
-      )
-    );
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'stream') {
-        // @ts-ignore
-        streamText += msg.content.text ?? '';
-        mimeData = { ...mimeData, 'text/plain': streamText };
-      }
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const merged: Record<string, unknown> = { ...mimeData };
-        Object.entries(data).forEach(([mime, value]) => {
-          if (mime === 'text/plain') {
-            const existing = asText(merged['text/plain']);
-            merged['text/plain'] = `${existing}${asText(value)}`;
-          } else {
-            merged[mime] = value as unknown;
+            };
           }
-        });
-        mimeData = merged;
-      }
-      if (msg.header.msg_type === 'error') {
-        const ename = (msg.content as any).ename ?? 'Error';
-        const evalue = (msg.content as any).evalue ?? '';
-        if (showOutput) {
-          setCells((prev) =>
-            prev.map((c) =>
-              c.id === cellId
-                ? {
-                    ...c,
-                    output: { type: 'error', ename, evalue }
-                  }
-                : c
-            )
-          );
-        }
-        return;
-      }
-      if (showOutput) {
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: { type: 'mime', data: mimeData }
-                }
-              : c
-          )
-        );
-      }
+          if (response.cellType === 'stoich') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              stoichOutput: response.stoichOutput as any,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            };
+          }
+          return {
+            ...cell,
+            isRunning: false,
+            execCount: nextExecCount ?? cell.execCount,
+            output: response.output as any,
+            ui: {
+              ...cell.ui,
+              outputCollapsed: false
+            }
+          };
+        })
+      );
     };
-    let reply: any = null;
-    try {
-      reply = await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      const evalue = isExecutionTimeoutError(error)
-        ? String(error instanceof Error ? error.message : error)
-        : 'Kernel execution was canceled.';
-      if (showOutput) {
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: {
-                    type: 'error',
-                    ename: isExecutionTimeoutError(error) ? 'ExecutionTimeout' : 'ExecutionCanceled',
-                    evalue
-                  },
-                  isRunning: false
-                }
-              : c
-          )
-        );
-      }
+    if (countExecution && response.execCountIncrement) {
+      setExecCounter((prev) => {
+        const next = prev + 1;
+        updateCellState(next);
+        return next;
+      });
       return;
     }
-    if (showOutput) {
-      const content = (reply as any)?.content;
-      if (content?.status === 'error') {
-        const ename = content.ename ?? 'Error';
-        const evalue = content.evalue ?? '';
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: { type: 'error', ename, evalue }
-                }
-              : c
-          )
-        );
+    updateCellState();
+  };
+
+  const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
+    if (!activeKernel) return;
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              source: code,
+              isRunning: true,
+              output: undefined,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            }
+          : cell
+      )
+    );
+    try {
+      const response = await executeNotebookCell({
+        cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      if (showOutput) {
+        applyExecutionResult(cellId, response, countExecution);
       }
-    }
-    if (showOutput) {
       const defs = extractFunctionNames(code);
       if (defs.length > 0) {
         setUserFunctions((prev) => Array.from(new Set([...prev, ...defs])));
       }
-    }
-    if (countExecution) {
-      setExecCounter((prev) => {
-        const next = prev + 1;
-        setCells((cellsPrev) =>
-          cellsPrev.map((c) =>
-            c.id === cellId ? { ...c, isRunning: false, execCount: next } : c
-          )
-        );
-        return next;
-      });
-    } else {
-      setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, isRunning: false } : c)));
+    } catch (error) {
+      setCells((prev) =>
+        prev.map((cell) =>
+          cell.id === cellId
+            ? {
+                ...cell,
+                isRunning: false,
+                output: {
+                  type: 'error',
+                  ename: 'ExecutionError',
+                  evalue: error instanceof Error ? error.message : String(error)
+                }
+              }
+            : cell
+        )
+      );
     }
   };
 
@@ -1105,14 +833,6 @@ function App() {
       renderModeOverride ??
       (cell?.mathRenderMode === 'decimal' ? 'decimal' : defaultMathRenderMode);
     const mode = trigModeOverride ?? cell?.mathTrigMode ?? trigMode;
-    const payload = JSON.stringify({ source, mode });
-    const code = [
-      'import json',
-      'from sugarpy.math_cell import display_math_cell',
-      `_payload = json.loads(${JSON.stringify(payload)})`,
-      `_ = display_math_cell(_payload['source'], _payload['mode'], ${JSON.stringify(renderMode)})`
-    ].join('\n');
-
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
@@ -1128,9 +848,15 @@ function App() {
           : c
       )
     );
-    let future: any;
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      const response = await executeNotebookCell({
+        cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      applyExecutionResult(cellId, response, true);
     } catch (error) {
       setCells((prev) =>
         prev.map((c) =>
@@ -1149,135 +875,11 @@ function App() {
             : c
         )
       );
-      return;
     }
-    let streamText = '';
-    let mimeData: Record<string, unknown> = {};
-    let parsed: (CellModel['mathOutput'] & { plotly_figure?: unknown }) | null = null;
-
-    const setMimeOutput = (nextData: Record<string, unknown>) => {
-      if (Object.keys(nextData).length === 0) return;
-      setCells((prev) =>
-        prev.map((c) => (c.id === cellId ? { ...c, output: { type: 'mime', data: nextData } } : c))
-      );
-    };
-
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'stream') {
-        // @ts-ignore
-        const text = msg.content.text ?? '';
-        streamText += text;
-        const nextData = { ...mimeData, 'text/plain': streamText };
-        mimeData = nextData;
-        setMimeOutput(nextData);
-      }
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const merged: Record<string, unknown> = { ...mimeData };
-        Object.entries(data).forEach(([mime, value]) => {
-          if (mime === SUGARPY_MIME_MATH && value && typeof value === 'object') {
-            parsed = value as CellModel['mathOutput'] & { plotly_figure?: unknown };
-            return;
-          }
-          if (mime === 'text/plain') {
-            const existing = asText(merged['text/plain']);
-            merged['text/plain'] = `${existing}${asText(value)}`;
-          } else {
-            merged[mime] = value as unknown;
-          }
-        });
-        mimeData = merged;
-        setMimeOutput(merged);
-      }
-      if (msg.header.msg_type === 'error') {
-        // @ts-ignore
-        const err = (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '');
-        parsed = { kind: 'expression', steps: [], error: err, mode, warnings: [] };
-      }
-      if (parsed) {
-        setCells((prev) =>
-          prev.map((c) => {
-            if (c.id !== cellId) return c;
-            const next: any = { ...c, mathOutput: parsed };
-            const fig = (parsed as any)?.plotly_figure;
-            if (fig && typeof fig === 'object') {
-              next.output = { type: 'mime', data: { 'application/vnd.plotly.v1+json': fig } };
-            }
-            next.ui = {
-              ...c.ui,
-              outputCollapsed: false,
-              mathView: 'rendered'
-            };
-            return next;
-          })
-        );
-      }
-    };
-    try {
-      await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      setCells((prev) =>
-        prev.map((c) =>
-          c.id === cellId
-            ? {
-                ...c,
-                isRunning: false,
-                mathOutput: {
-                  kind: 'expression',
-                  steps: [],
-                  error: isExecutionTimeoutError(error)
-                    ? String(error instanceof Error ? error.message : error)
-                    : 'Kernel execution was canceled.',
-                  mode,
-                  warnings: []
-                }
-              }
-            : c
-        )
-      );
-      return;
-    }
-    setMimeOutput(mimeData);
-    setExecCounter((prev) => {
-      const next = prev + 1;
-      setCells((cellsPrev) =>
-        cellsPrev.map((c) =>
-          c.id === cellId
-            ? {
-                ...c,
-                isRunning: false,
-                execCount: next,
-                ui: {
-                  ...c.ui,
-                  outputCollapsed: false,
-                  mathView: 'rendered'
-                }
-              }
-            : c
-        )
-      );
-      return next;
-    });
   };
 
   const runStoichCell = async (cellId: string, state: StoichState) => {
     if (!activeKernel) return;
-    const payload = JSON.stringify({ reaction: state.reaction, inputs: state.inputs });
-    const code = [
-      'import json',
-      'from sugarpy.stoichiometry import display_stoichiometry',
-      `_payload = json.loads(${JSON.stringify(payload)})`,
-      "_ = display_stoichiometry(_payload.get('reaction', ''), _payload.get('inputs'))"
-    ].join('\n');
-
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
@@ -1292,10 +894,24 @@ function App() {
           : c
       )
     );
-
-    let future: any;
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      const nextCells = cellsRef.current.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              type: 'stoich',
+              stoichState: state
+            }
+          : cell
+      );
+      const response = await executeNotebookCell({
+        cells: nextCells as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      applyExecutionResult(cellId, response, true);
     } catch (error) {
       setCells((prev) =>
         prev.map((c) =>
@@ -1304,70 +920,14 @@ function App() {
             : c
         )
       );
-      return;
     }
-    let parsed: StoichOutput | null = null;
-
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const payload = data[SUGARPY_MIME_STOICH];
-        if (payload && typeof payload === 'object') {
-          parsed = payload as StoichOutput;
-        }
-      }
-      if (msg.header.msg_type === 'error') {
-        const ename = (msg.content as any).ename ?? 'Error';
-        const evalue = (msg.content as any).evalue ?? '';
-        parsed = { ok: false, error: `${ename}: ${evalue}`, species: [] };
-      }
-    };
-
-    try {
-      await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      parsed = {
-        ok: false,
-        error: isExecutionTimeoutError(error)
-          ? String(error instanceof Error ? error.message : error)
-          : 'Kernel execution was canceled.',
-        species: []
-      };
-    }
-    if (!parsed) {
-      parsed = { ok: false, error: 'No structured output received.', species: [] };
-    }
-
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId
-          ? {
-              ...c,
-              stoichOutput: parsed ?? undefined,
-              isRunning: false,
-              ui: {
-                ...c.ui,
-                outputCollapsed: false
-              }
-            }
-          : c
-      )
-    );
   };
 
   const runAllCells = async () => {
     if (isRunningAll) return;
     if (!activeKernel) {
-      await connectKernel();
-      if (!kernelRef.current) return;
+      await connectBackend();
+      if (status !== 'connected') return;
     }
     setIsRunningAll(true);
     try {
@@ -1550,7 +1110,6 @@ function App() {
   ) =>
     runIsolatedAssistantSandbox({
       request,
-      serverSettings: getServerSettings(),
       notebookCells: buildAssistantSandboxCells(),
       bootstrapCode: assistantBootstrapCode,
       onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
@@ -1605,7 +1164,6 @@ function App() {
   ) =>
     runIsolatedAssistantSandbox({
       request,
-      serverSettings: getServerSettings(),
       notebookCells,
       bootstrapCode: assistantBootstrapCode,
       onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
@@ -2089,37 +1647,25 @@ function App() {
 
   const hydrateAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
     if (assistantRuntimeConfigAttemptedRef.current) {
-      return assistantDefaultApiKey.trim()
-        ? { apiKey: assistantDefaultApiKey.trim(), model: assistantModel.trim() || undefined }
+      return runtimeConfig
+        ? {
+            model: runtimeConfig.model?.trim() || undefined,
+            providers: runtimeConfig.providers
+          }
         : null;
     }
     const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
     const storedModel =
       readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ?? readOptionalStorageItem('sugarpy:assistant:gemini:model');
-    const envApiKey = (
-      import.meta.env.VITE_ASSISTANT_API_KEY ||
-      import.meta.env.VITE_OPENAI_API_KEY ||
-      import.meta.env.VITE_GROQ_API_KEY ||
-      import.meta.env.VITE_GEMINI_API_KEY ||
-      ''
-    ).trim();
-    const envModel = (
-      import.meta.env.VITE_ASSISTANT_MODEL ||
-      import.meta.env.VITE_OPENAI_MODEL ||
-      import.meta.env.VITE_GEMINI_MODEL ||
-      ''
-    ).trim();
-    if (storedKey || envApiKey) return null;
+    const envModel = (import.meta.env.VITE_ASSISTANT_MODEL || '').trim();
+    if (storedKey) return null;
     assistantRuntimeConfigAttemptedRef.current = true;
-    const runtimeConfig = await loadAssistantRuntimeConfig();
-    if (!runtimeConfig) return null;
-    if (runtimeConfig.apiKey) {
-      setAssistantDefaultApiKey(runtimeConfig.apiKey);
+    const nextRuntimeConfig = await loadAssistantRuntimeConfig();
+    if (!nextRuntimeConfig) return null;
+    if (!storedModel && !envModel && nextRuntimeConfig.model) {
+      setAssistantModel(nextRuntimeConfig.model);
     }
-    if (!storedModel && !envModel && runtimeConfig.model) {
-      setAssistantModel(runtimeConfig.model);
-    }
-    return runtimeConfig;
+    return nextRuntimeConfig;
   };
 
   const runAssistant = async (promptOverride?: string, options?: { chatId?: string; reviseFromMessageId?: string }) => {
@@ -2136,20 +1682,23 @@ function App() {
       setAssistantModel(effectiveModel);
     }
     const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
-    const defaultApiKey = (runtimeConfig?.apiKey?.trim() || assistantDefaultApiKey.trim()).trim();
+    const provider = detectAssistantProvider(effectiveModel, overrideApiKey);
+    const serverProviderAvailable =
+      (provider === 'openai' && !!runtimeConfig?.providers?.openai) ||
+      (provider === 'gemini' && !!runtimeConfig?.providers?.gemini) ||
+      (provider === 'groq' && !!runtimeConfig?.providers?.groq);
     const effectiveApiKey = matchesAssistantProvider(overrideApiKey, effectiveModel)
       ? overrideApiKey
-      : matchesAssistantProvider(defaultApiKey, effectiveModel)
-        ? defaultApiKey
+      : serverProviderAvailable
+        ? `server-proxy:${provider}`
         : '';
     if (!effectiveApiKey) {
-      const provider = detectAssistantProvider(effectiveModel, overrideApiKey || defaultApiKey);
       setAssistantError(
         provider === 'openai'
-          ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
+          ? 'No OpenAI API key is available. Add your own key in settings or configure a server proxy key.'
           : provider === 'groq'
-            ? 'No Groq API key is available. Add your own key in settings or configure a shared Groq key on the server.'
-            : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
+            ? 'No Groq API key is available. Add your own key in settings or configure a server proxy key.'
+            : 'No Gemini API key is available. Add your own key in settings or configure a server proxy key.'
       );
       return;
     }
@@ -2608,20 +2157,6 @@ function App() {
   };
 
   useEffect(() => {
-    const bootstrap = async () => {
-      if (!activeKernel || bootstrapLoaded) return;
-      if (!assistantBootstrapCode) return;
-      try {
-        await runCell(`bootstrap-${Date.now()}`, assistantBootstrapCode, false, false);
-      } catch (_error) {
-        return;
-      }
-      setBootstrapLoaded(true);
-    };
-    bootstrap().catch(() => undefined);
-  }, [activeKernel, bootstrapLoaded, assistantBootstrapCode]);
-
-  useEffect(() => {
     if (!hydrated.current) return;
     const snapshot = buildSnapshot(cells, trigMode, defaultMathRenderMode, notebookName, notebookId);
     if (snapshot === lastSnapshot.current) return;
@@ -2752,18 +2287,7 @@ function App() {
   };
 
   const handleSaveToServer = async () => {
-    const name = notebookName.trim() || 'Untitled';
-    const filename = name.endsWith('.ipynb') ? name : `${name}.ipynb`;
-    const path = filename.includes('/') ? filename : `notebooks/${filename}`;
-    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-    const settings = ServerConnection.makeSettings({
-      baseUrl,
-      token,
-      wsUrl,
-      appendToken: true
-    });
-    const contents = new ContentsManager({ serverSettings: settings });
-    const payload = serializeIpynb({
+    const payload = serializeSugarPy({
       id: notebookId,
       name: notebookName,
       trigMode,
@@ -2771,11 +2295,7 @@ function App() {
       cells
     });
     try {
-      await contents.save(path, {
-        type: 'notebook',
-        format: 'json',
-        content: payload
-      });
+      await saveNotebookDocument(payload as unknown as Record<string, unknown>);
       await saveServerAutosave({
         id: notebookId,
         name: notebookName,
@@ -2948,8 +2468,8 @@ function App() {
                     {dirty ? ' · editing…' : ''}
                     {syncMessage ? ` · ${syncMessage}` : ''}
                   </div>
-                  <button className="menu-item" onClick={connectKernel}>
-                    {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
+                  <button className="menu-item" onClick={connectBackend}>
+                    {activeKernel ? 'Restricted Runtime Ready' : 'Reconnect Backend'}
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}
@@ -2962,28 +2482,6 @@ function App() {
                   >
                     Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
-                  <button
-                    className="menu-item"
-                    onClick={() => setConfigureConnection((prev) => !prev)}
-                  >
-                    {configureConnection ? 'Hide Connection Settings' : 'Configure Connection'}
-                  </button>
-                  {configureConnection ? (
-                    <div className="menu-connection-form">
-                      <input
-                        className="input"
-                        value={serverUrl}
-                        onChange={(e) => setServerUrl(e.target.value)}
-                        placeholder="Server URL"
-                      />
-                      <input
-                        className="input"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        placeholder="Token"
-                      />
-                    </div>
-                  ) : null}
                   <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
@@ -3005,8 +2503,6 @@ function App() {
           {status === 'error' ? (
             <div className="output">
               {errorMsg}
-              {'\n'}
-              Check that Jupyter Server is running on {serverUrl} and the token is correct.
             </div>
           ) : null}
 
@@ -3106,7 +2602,7 @@ function App() {
           <AssistantDrawer
             open={assistantOpen}
             apiKey={assistantApiKey}
-            hasDefaultApiKey={matchesAssistantProvider(assistantDefaultApiKey, assistantModel)}
+            hasDefaultApiKey={false}
             model={assistantModel}
             thinkingLevel={assistantThinkingLevel}
             draft={assistantDraft}

@@ -62,7 +62,7 @@ fi
 echo "Waiting for Jupyter Server..."
 READY=0
 for i in {1..60}; do
-  if curl -s "http://localhost:8888/api/status?token=sugarpy" >/dev/null; then
+  if curl -s "http://localhost:8888/api/status" >/dev/null; then
     echo "Jupyter Server is ready."
     READY=1
     break

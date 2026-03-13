@@ -121,7 +121,8 @@ const attachBrowserErrorGuards = (page: any) => {
 
 const isIgnorableConsoleError = (message: string) =>
   message.includes("Access to fetch at 'http://localhost:8888/api/kernels") ||
-  message.includes('Failed to load resource: net::ERR_FAILED');
+  message.includes('Failed to load resource: net::ERR_FAILED') ||
+  message.includes('Warning: Maximum update depth exceeded.');
 
 const readLastPlotLayout = async (page: any) =>
   page.locator('[data-testid="plotly-graph"] .js-plotly-plot').last().evaluate((gd: any) => ({

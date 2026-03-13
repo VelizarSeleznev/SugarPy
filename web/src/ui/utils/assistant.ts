@@ -4,6 +4,7 @@ import type {
   AssistantSandboxRequest,
   AssistantSandboxResult
 } from './assistantSandbox.ts';
+import { buildAssistantProxyBaseUrl } from './backendApi';
 
 export type AssistantScope = 'notebook' | 'active';
 export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
@@ -131,6 +132,8 @@ export type AssistantConversationEntry = {
 
 export type AssistantThinkingLevel = 'dynamic' | 'minimal' | 'low' | 'medium' | 'high';
 export type AssistantProvider = 'gemini' | 'groq' | 'openai';
+
+const SERVER_PROXY_KEY_PREFIX = 'server-proxy:';
 
 export type AssistantNetworkEvent = {
   phase: 'request_start' | 'response' | 'retry' | 'error' | 'aborted' | 'timeout' | 'stream';
@@ -470,6 +473,29 @@ const requestLooksLikeDirectGeometrySolve = (request: string) => {
       normalized.includes('радиус') ||
       normalized.includes('solve'))
   );
+};
+
+const isServerProxyKey = (apiKey: string) => apiKey.trim().startsWith(SERVER_PROXY_KEY_PREFIX);
+
+const getServerProxyProvider = (apiKey: string): AssistantProvider | null => {
+  const provider = apiKey.trim().slice(SERVER_PROXY_KEY_PREFIX.length);
+  return provider === 'openai' || provider === 'gemini' || provider === 'groq' ? provider : null;
+};
+
+const readCookie = (name: string) => {
+  if (typeof document === 'undefined') return '';
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = document.cookie.match(new RegExp(`(?:^|; )${escapedName}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : '';
+};
+
+const buildServerProxyHeaders = () => {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const xsrfToken = readCookie('_xsrf');
+  if (xsrfToken) {
+    headers.set('X-XSRFToken', xsrfToken);
+  }
+  return headers;
 };
 
 const requestLooksMathLike = (request: string) => {
@@ -1407,6 +1433,10 @@ const OPENAI_COMPATIBLE_PLAN_OPERATION_TOOL_DECLARATION = toOpenAICompatibleTool
 const OPENAI_COMPATIBLE_FINALIZE_PLAN_TOOL_DECLARATION = toOpenAICompatibleTools([OPENAI_FINALIZE_PLAN_TOOL_DECLARATION])[0];
 
 export const detectAssistantProvider = (model: string, apiKey = ''): AssistantProvider => {
+  const proxyProvider = getServerProxyProvider(apiKey);
+  if (proxyProvider) {
+    return proxyProvider;
+  }
   const normalized = model.toLowerCase();
   const trimmedKey = apiKey.trim();
   if (trimmedKey.startsWith('gsk_')) {
@@ -1469,16 +1499,21 @@ const callGemini = async (
         ...baseGenerationConfig,
         ...(buildThinkingConfig(model, thinkingLevel) ?? {})
       };
-      const response = await fetch(`${API_ROOT}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      const response = await fetch(
+        isServerProxyKey(apiKey)
+          ? `${buildAssistantProxyBaseUrl()}gemini/models/${encodeURIComponent(model)}:generateContent`
+          : `${API_ROOT}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          ...(isServerProxyKey(apiKey) ? Object.fromEntries(buildServerProxyHeaders().entries()) : { 'Content-Type': 'application/json' })
         },
         body: JSON.stringify({
           ...body,
           generationConfig
         }),
-        signal: requestController.signal
+        signal: requestController.signal,
+        ...(isServerProxyKey(apiKey) ? { credentials: 'same-origin' as const } : {})
       });
       onNetworkEvent?.({
         phase: 'response',
@@ -1612,19 +1647,22 @@ const callOpenAIResponses = async (
       onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
       inactivityTimeout.touch();
       const effort = buildOpenAIReasoningEffort(model, thinkingLevel);
-      const response = await fetch('https://api.openai.com/v1/responses', {
+      const response = await fetch(isServerProxyKey(apiKey) ? `${buildAssistantProxyBaseUrl()}openai/responses` : 'https://api.openai.com/v1/responses', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
-        },
+        headers: isServerProxyKey(apiKey)
+          ? buildServerProxyHeaders()
+          : {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`
+            },
         body: JSON.stringify({
           ...body,
           model,
           stream: true,
           ...(effort ? { reasoning: { effort } } : {})
         }),
-        signal: requestController.signal
+        signal: requestController.signal,
+        ...(isServerProxyKey(apiKey) ? { credentials: 'same-origin' as const } : {})
       });
       lastActivity = 'response_headers';
       inactivityTimeout.touch();
@@ -1873,18 +1911,21 @@ const callGroqChatCompletions = async (
     try {
       onNetworkEvent?.({ phase: 'request_start', attempt: attempt + 1, stage });
       inactivityTimeout.touch();
-      const response = await fetch(`${GROQ_API_ROOT}/chat/completions`, {
+      const response = await fetch(isServerProxyKey(apiKey) ? `${buildAssistantProxyBaseUrl()}groq/chat/completions` : `${GROQ_API_ROOT}/chat/completions`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`
-        },
+        headers: isServerProxyKey(apiKey)
+          ? buildServerProxyHeaders()
+          : {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`
+            },
         body: JSON.stringify({
           ...body,
           model,
           stream: true
         }),
-        signal: requestController.signal
+        signal: requestController.signal,
+        ...(isServerProxyKey(apiKey) ? { credentials: 'same-origin' as const } : {})
       });
       lastActivity = 'response_headers';
       inactivityTimeout.touch();

@@ -1,6 +1,5 @@
-import { KernelManager, ServerConnection } from '@jupyterlab/services';
-
 import type { FunctionEntry } from '../hooks/useFunctionLibrary';
+import { runAssistantSandboxRequest } from './backendApi';
 
 export type AssistantSandboxContextPreset =
   | 'none'
@@ -304,12 +303,11 @@ const parseMathValidation = (stdout: string) => {
 
 export const runAssistantSandbox = async (params: {
   request: AssistantSandboxRequest;
-  serverSettings: ServerConnection.ISettings;
   notebookCells: AssistantSandboxNotebookCell[];
   bootstrapCode: string;
   onActivity?: (label: string, detail?: string) => void;
 }): Promise<AssistantSandboxResult> => {
-  const { request, serverSettings, notebookCells, bootstrapCode, onActivity } = params;
+  const { request, notebookCells, bootstrapCode, onActivity } = params;
   const target: AssistantSandboxTarget = request.target === 'math' ? 'math' : 'code';
   const code = String(request.code ?? '').trim();
   const source = String(request.source ?? '').trim();
@@ -367,93 +365,31 @@ export const runAssistantSandbox = async (params: {
   const selectedCellIds = Array.isArray(request.selectedCellIds)
     ? request.selectedCellIds.map((cellId) => String(cellId))
     : [];
-  const manager = new KernelManager({ serverSettings });
-  let kernel: any = null;
-  let executedBootstrap = false;
   const replayedCells = selectReplayCells(notebookCells, contextPreset, selectedCellIds, target);
-  const startedAt = Date.now();
-
-  try {
-    onActivity?.('Starting isolated kernel');
-    kernel = await withTimeout(manager.startNew({ name: 'python3' }), KERNEL_START_TIMEOUT_MS, 'Sandbox kernel start');
-
-    if (contextPreset !== 'none' && bootstrapCode.trim()) {
-      onActivity?.('Loading sandbox bootstrap');
-      const bootstrapResult = await executeCodeOnKernel(kernel, bootstrapCode, timeoutMs);
-      if (bootstrapResult.status !== 'ok') {
-        return {
-          ...bootstrapResult,
-          durationMs: Date.now() - startedAt,
-          contextPresetUsed: contextPreset,
-          executedBootstrap: false,
-          replayedCellIds: []
-        };
-      }
-      executedBootstrap = true;
-    }
-
-    if (replayedCells.length > 0) {
-      const label =
-        contextPreset === 'imports-only'
-          ? 'Replaying imports'
-          : contextPreset === 'selected-cells'
-            ? 'Replaying selected code cells'
-            : 'Replaying notebook code cells';
-      onActivity?.(label, `${replayedCells.length} cell${replayedCells.length === 1 ? '' : 's'}`);
-    }
-
-    for (const cell of replayedCells) {
-      const replayResult =
-        cell.type === 'math'
-          ? await executeMathOnKernel(
-              kernel,
-              cell.source,
-              timeoutMs,
-              cell.mathTrigMode === 'rad' ? 'rad' : 'deg',
-              cell.mathRenderMode === 'decimal' ? 'decimal' : 'exact'
-            )
-          : await executeCodeOnKernel(kernel, cell.source, timeoutMs);
-      if (replayResult.status !== 'ok') {
-        return {
-          ...replayResult,
-          durationMs: Date.now() - startedAt,
-          contextPresetUsed: contextPreset,
-          executedBootstrap,
-          replayedCellIds: replayedCells.map((entry) => entry.id)
-        };
-      }
-    }
-
-    onActivity?.('Running isolated check', target === 'math' ? 'math' : contextPreset);
-    const result =
-      target === 'math'
-        ? await executeMathOnKernel(
-            kernel,
-            source,
-            timeoutMs,
-            request.trigMode === 'rad' ? 'rad' : 'deg',
-            request.renderMode === 'decimal' ? 'decimal' : 'exact'
-          )
-        : await executeCodeOnKernel(kernel, code, timeoutMs);
-    if (result.status === 'timeout') {
-      onActivity?.('Timed out after 5s');
-    }
-    return {
-      ...result,
-      target,
-      durationMs: Date.now() - startedAt,
-      contextPresetUsed: contextPreset,
-      executedBootstrap,
-      replayedCellIds: replayedCells.map((entry) => entry.id)
-    };
-  } finally {
-    if (kernel) {
-      try {
-        await withTimeout(kernel.shutdown(), KERNEL_SHUTDOWN_TIMEOUT_MS, 'Sandbox kernel shutdown');
-      } catch (_error) {
-        kernel.dispose?.();
-      }
-    }
-    manager.dispose();
+  if (contextPreset !== 'none' && bootstrapCode.trim()) {
+    onActivity?.('Loading sandbox bootstrap');
   }
+  if (replayedCells.length > 0) {
+    const label =
+      contextPreset === 'imports-only'
+        ? 'Replaying imports'
+        : contextPreset === 'selected-cells'
+          ? 'Replaying selected code cells'
+          : 'Replaying notebook code cells';
+    onActivity?.(label, `${replayedCells.length} cell${replayedCells.length === 1 ? '' : 's'}`);
+  }
+  onActivity?.('Running isolated check', target === 'math' ? 'math' : contextPreset);
+  const result = await runAssistantSandboxRequest({
+    request: {
+      ...request,
+      contextPreset,
+      timeoutMs
+    },
+    notebookCells,
+    bootstrapCode
+  });
+  if (result.status === 'timeout') {
+    onActivity?.('Timed out after 5s');
+  }
+  return result;
 };

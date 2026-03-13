@@ -7,13 +7,27 @@ Type=simple
 User=sugarpy
 WorkingDirectory=/opt/sugarpy/current
 Environment=IPYTHONDIR=/opt/sugarpy/shared/.ipython
+Environment=JUPYTER_CONFIG_DIR=/opt/sugarpy/shared/.jupyter
+Environment=JUPYTER_RUNTIME_DIR=/opt/sugarpy/shared/.jupyter-runtime
 Environment=UV_PROJECT_ENVIRONMENT=/opt/sugarpy/shared/.venv
-ExecStart=/bin/bash -lc 'mkdir -p "$IPYTHONDIR/profile_default/startup"; printf "from sugarpy.startup import *\n" > "$IPYTHONDIR/profile_default/startup/00-sugarpy.py"; uv sync --extra lab --frozen; source "$UV_PROJECT_ENVIRONMENT/bin/activate"; exec jupyter server --no-browser --ip=127.0.0.1 --ServerApp.port=8888 --ServerApp.port_retries=0 --ServerApp.base_url=/jupyter/ --IdentityProvider.token=sugarpy --ServerApp.log_level=ERROR --LabApp.log_level=ERROR --ServerApp.websocket_ping_interval=30000 --ServerApp.websocket_ping_timeout=30000 --ServerApp.allow_origin=* --ServerApp.allow_remote_access=True --ServerApp.allow_credentials=True --ServerApp.disable_check_xsrf=True --MappingKernelManager.cull_idle_timeout=1800 --MappingKernelManager.cull_interval=60'
+EnvironmentFile=-/etc/sugarpy/assistant.env
+Environment=SUGARPY_SECURITY_PROFILE=restricted-demo
+Environment=SUGARPY_STORAGE_ROOT=/opt/sugarpy/shared/runtime
+Environment=SUGARPY_ENABLE_ASSISTANT_TRACES=0
+ExecStart=/opt/sugarpy/current/scripts/start-jupyter-service.sh
 Restart=on-failure
 RestartSec=5
 MemoryMax=8G
 MemorySwapMax=0
 CPUQuota=200%
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+PrivateDevices=yes
+ReadWritePaths=/opt/sugarpy/shared
 
 [Install]
 WantedBy=multi-user.target

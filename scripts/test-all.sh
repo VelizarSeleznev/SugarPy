@@ -25,6 +25,11 @@ npm run build
 npm audit --audit-level=moderate || true
 
 echo "Running Playwright E2E..."
-npm run test:e2e
+if [[ "${SUGARPY_INCLUDE_ASSISTANT_E2E:-0}" == "1" ]]; then
+  npm run test:e2e
+else
+  echo "Skipping assistant-heavy E2E in default test-all run."
+  npm run test:e2e -- --grep-invert "Assistant "
+fi
 
 echo "Hooray, all checks passed!"

@@ -12,21 +12,13 @@
 What it does:
 - Syncs Python deps with `uv` into `.venv`.
 - Syncs user functions.
-- Starts Jupyter Server on `http://localhost:8888`.
-- Starts Vite dev server for the UI (`http://localhost:5173`).
+- Starts the restricted SugarPy backend on `http://localhost:8888`.
+- Starts Vite dev server for the UI (`http://localhost:5173`) with a `/api` proxy to the backend.
 
 Optional assistant env vars:
 ```bash
 VITE_ASSISTANT_API_KEY=... \
 VITE_ASSISTANT_MODEL=gpt-5-mini \
-./scripts/run-all.sh
-```
-
-Provider-specific local overrides are also supported:
-```bash
-VITE_OPENAI_API_KEY=... \
-VITE_GROQ_API_KEY=... \
-VITE_GEMINI_API_KEY=... \
 ./scripts/run-all.sh
 ```
 
@@ -54,9 +46,8 @@ Assistant UX notes:
 - The default visible workflow is whole-notebook + auto mode; advanced scope/preference selectors are no longer shown in the main UI.
 - Up to 5 recent chats are stored locally per notebook.
 - A new notebook starts with a fresh assistant chat history.
-- Assistant runs are persisted as JSON traces on the Jupyter contents side at:
-  `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`
-- Those traces are intended for debugging stuck or failed assistant requests and include per-attempt HTTP telemetry, compact summaries of successful model responses, and compact summaries of any isolated sandbox executions.
+- Assistant traces are now backend-owned and disabled by default in restricted deployments.
+- When enabled, traces are persisted outside the public web root and are redacted before writing.
 - On the OpenAI path, the assistant consumes streaming Responses API events, refreshes the request timeout when new stream activity arrives, and stores stream-stage hints in trace/network telemetry so timeouts report the last observed stream event or activity instead of only a generic timeout.
 - On the OpenAI path, final plan submission now prefers a `submit_plan` function call instead of depending only on a strict JSON text response.
 - For direct geometry tasks such as finding circles from concrete points and a radius, the assistant is biased toward short Math-cell CAS workflows: write the point equations directly, call `solve(...)`, and derive the final circle equations from the returned centers instead of generating Python-heavy scaffolding.
@@ -67,26 +58,16 @@ Assistant UX notes:
 - For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
 - Runnable assistant draft steps are validated before acceptance.
-  - Validation uses a fresh temporary Jupyter kernel, not the live notebook kernel.
+  - Validation uses a fresh backend-owned temporary kernel, not a browser-managed live kernel.
   - Python code uses the existing sandbox presets.
   - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are accepted.
   - If a new Math step depends on earlier runnable cells, the validator replays those earlier Code/Math cells inside the temporary kernel first.
   - A sandbox timeout or runtime error is surfaced in the preview and blocks acceptance for that step.
 
-Runtime server config without committing secrets:
-- Create `notebooks/sugarpy-assistant-config.json` on the server or local Jupyter contents root.
-- Example:
-  ```json
-  {
-    "apiKey": "your-api-key",
-    "model": "gpt-5-mini"
-  }
-  ```
-- This file is not tracked by git because `notebooks/` is ignored.
-- The frontend will auto-load it and prefill the assistant.
-- The shared server key is used automatically, but it is not copied into the visible settings field.
-- The settings API-key input is treated as a user override.
-- Important: this keeps the key out of GitHub, but not out of browser devtools. To fully hide the key, move model calls behind a backend proxy.
+Runtime server config for restricted deployments:
+- Store shared assistant keys only in server-owned env files such as `/etc/sugarpy/assistant.env`.
+- The browser must never read keys from `notebooks/` or any public contents path.
+- The settings API-key input is treated as a user override for local/dev use only.
 
 Recommended assistant models:
 - `gpt-5-mini`: default OpenAI path for notebook editing.
@@ -129,11 +110,10 @@ Assistant regression checks:
 - The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.
 - Local autosave stores notebook structure and cell source/state, but skips heavy runtime outputs so large plots do not exhaust browser storage.
 - SugarPy keeps only the current local notebook snapshot; older local notebook autosaves are pruned automatically.
-- The UI also writes a server autosave (`.sugarpy`) to:
-  `notebooks/sugarpy-autosave/<notebook-id>.sugarpy`
+- The UI also writes a backend-owned server autosave (`.sugarpy`) outside the public web root.
 - On startup, SugarPy restores the newest version between local autosave and server autosave.
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
-- Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
+- Manual **Save to Server** now writes the normalized SugarPy notebook document through the backend API and refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
 - The optional AI assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
@@ -213,7 +193,7 @@ After deploy:
 - Confirm the frontend is reachable from `http://127.0.0.1:18081/` on the server.
 - Confirm Jupyter health from `http://127.0.0.1:18081/jupyter/api/status?token=sugarpy`.
 - Confirm the public Cloudflare URL is reachable and report `https://sugarpy.tech/`.
-- Keep in mind that `/jupyter/` is currently public behind the same origin and uses a shared demo token.
+- The public edge serves only `/` and `/api/*`; `/jupyter/` remains internal-only behind the backend runtime.
 - Deploys now build into `/opt/sugarpy/releases/<sha>` and then atomically switch `/opt/sugarpy/current`.
 
 ## Start backend only
@@ -229,7 +209,8 @@ After deploy:
 What it covers:
 - Frontend install/build/audit.
 - Backend pytest suite (`tests/backend/`).
-- Playwright E2E suite (`web/e2e/`) including smoke checks.
+- Playwright E2E suite (`web/e2e/`) excluding assistant-heavy scenarios by default.
+- Set `SUGARPY_INCLUDE_ASSISTANT_E2E=1` to include assistant browser scenarios in the same run.
 - Testing standards and maintenance rules are defined in `docs/TESTING_PRINCIPLES.md`.
 
 ## Manual visual QA (Pinchtab)

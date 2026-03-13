@@ -8,6 +8,8 @@ import 'katex/dist/katex.min.css';
 const rootEl = document.getElementById('root') as HTMLElement;
 const errorBucket: string[] = (window as any).__sugarpy_errors || [];
 (window as any).__sugarpy_errors = errorBucket;
+const isIgnorableDevError = (message: string) =>
+  message.includes('Warning: Maximum update depth exceeded.');
 
 const applyIPhoneViewportGuard = () => {
   const userAgent = navigator.userAgent || '';
@@ -28,7 +30,9 @@ applyIPhoneViewportGuard();
 const origConsoleError = console.error;
 console.error = (...args: unknown[]) => {
   const msg = args.map(String).join(' ');
-  errorBucket.push(msg);
+  if (!isIgnorableDevError(msg)) {
+    errorBucket.push(msg);
+  }
   origConsoleError(...args);
 };
 

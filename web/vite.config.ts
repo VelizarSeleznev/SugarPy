@@ -11,6 +11,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000
   },
   server: {
-    port: 5173
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8888',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '/sugarpy/api')
+      }
+    }
   }
 });
