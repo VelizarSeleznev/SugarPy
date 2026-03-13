@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ContentsManager, KernelManager, ServerConnection } from '@jupyterlab/services';
 
 import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
@@ -12,10 +11,12 @@ import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   AssistantActivity,
   AssistantConversationEntry,
+  AssistantDraftRun,
+  AssistantDraftStep,
   AssistantNetworkEvent,
   AssistantResponseTrace,
   AssistantSandboxExecutionTrace,
-  AssistantTransport,
+  AssistantValidationSummary,
   DEFAULT_ASSISTANT_MODEL,
   detectAssistantProvider,
   normalizeThinkingLevel,
@@ -30,6 +31,15 @@ import {
   buildAssistantBootstrapCode,
   runAssistantSandbox as runIsolatedAssistantSandbox
 } from './utils/assistantSandbox';
+import {
+  executeNotebookCell,
+  fetchRuntimeConfig,
+  loadServerAutosave as loadServerAutosaveRequest,
+  persistAssistantTraceToServer,
+  saveNotebookDocument,
+  saveServerAutosave as saveServerAutosaveRequest,
+  SugarPyRuntimeConfig
+} from './utils/backendApi';
 import {
   createNotebookId,
   deserializeIpynb,
@@ -85,6 +95,16 @@ export type CellModel = {
   mathTrigMode?: 'deg' | 'rad';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
+  assistantMeta?: {
+    runId: string;
+    stepId: string;
+    status: 'draft' | 'validating' | 'applied' | 'failed';
+    isRunnable: boolean;
+  };
+  ui?: {
+    outputCollapsed?: boolean;
+    mathView?: 'source' | 'rendered';
+  };
 };
 
 export type CellOutput =
@@ -125,20 +145,8 @@ const asText = (value: unknown) => {
   return String(value);
 };
 
-const clearRuntimeStateFromCell = (cell: CellModel): CellModel => ({
-  ...cell,
-  output: undefined,
-  mathOutput: undefined,
-  stoichOutput: undefined,
-  execCount: undefined,
-  isRunning: false
-});
-
 const SUGARPY_MIME_MATH = 'application/vnd.sugarpy.math+json';
 const SUGARPY_MIME_STOICH = 'application/vnd.sugarpy.stoich+json';
-const SERVER_AUTOSAVE_DIR = 'notebooks/sugarpy-autosave';
-const ASSISTANT_TRACE_SERVER_DIR = 'notebooks/sugarpy-assistant-traces';
-const ASSISTANT_SERVER_CONFIG_PATH = 'notebooks/sugarpy-assistant-config.json';
 const ASSISTANT_HISTORY_STORAGE_PREFIX = 'sugarpy:assistant:history:v1:';
 const ASSISTANT_TRACE_STORAGE_PREFIX = 'sugarpy:assistant:traces:v1:';
 const ASSISTANT_API_KEY_STORAGE = 'sugarpy:assistant:api:key';
@@ -155,20 +163,24 @@ type AssistantSnapshot = {
 };
 
 type AssistantRuntimeConfig = {
-  apiKey?: string;
   model?: string;
   providers?: {
-    openai: boolean;
-    gemini: boolean;
+    openai?: boolean;
+    gemini?: boolean;
+    groq?: boolean;
   };
 };
 
 const matchesAssistantProvider = (apiKey: string, model: string) => {
   const trimmed = apiKey.trim();
   if (!trimmed) return false;
-  const provider = detectAssistantProvider(model);
+  if (trimmed.startsWith('test-')) return true;
+  const provider = detectAssistantProvider(model, trimmed);
   if (provider === 'openai') {
     return trimmed.startsWith('sk-');
+  }
+  if (provider === 'groq') {
+    return trimmed.startsWith('gsk_');
   }
   return trimmed.startsWith('AIza');
 };
@@ -181,7 +193,9 @@ type AssistantChatMessage = {
   status?: 'loading' | 'ready' | 'error' | 'stopped' | 'applied' | 'dismissed';
   activity?: AssistantActivity[];
   plan?: AssistantPlan | null;
+  draftRun?: AssistantDraftRun | null;
   error?: string;
+  requestPrompt?: string;
 };
 
 type AssistantChatSession = {
@@ -218,6 +232,14 @@ type AssistantRunTrace = {
   network: AssistantNetworkEvent[];
   responses: AssistantResponseTrace[];
   sandboxExecutions: AssistantSandboxExecutionTrace[];
+  draftValidations: Array<{
+    stepId: string;
+    stepTitle: string;
+    operationIndex: number;
+    cellType: AssistantCellKind;
+    request: AssistantSandboxRequest;
+    summary: AssistantValidationSummary;
+  }>;
   result?: {
     summary: string;
     warningCount: number;
@@ -293,40 +315,6 @@ const awaitFutureDoneWithTimeout = async (future: any, kernel: any) => {
   }
 };
 
-const resolveDefaultServerUrl = () => {
-  const envUrl = (import.meta.env.VITE_JUPYTER_URL || '').trim();
-  const host = window.location.hostname.toLowerCase();
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-  if (envUrl) {
-    const envLooksLocal =
-      envUrl.startsWith('http://localhost') || envUrl.startsWith('http://127.0.0.1') || envUrl.startsWith('https://localhost');
-    if (envLooksLocal && !isLocalHost) {
-      return '/jupyter/';
-    }
-    return envUrl;
-  }
-  return isLocalHost ? 'http://localhost:8888' : '/jupyter/';
-};
-
-const resolveServerConfig = (rawServerUrl: string) => {
-  const fallback = resolveDefaultServerUrl();
-  const trimmed = (rawServerUrl || '').trim() || fallback;
-  const resolved = new URL(trimmed, window.location.origin);
-  const protocol = resolved.protocol.toLowerCase();
-  const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
-  const baseUrl = resolved.toString().replace(/\/?$/, '/');
-  const wsUrl = `${wsProtocol}//${resolved.host}${resolved.pathname.replace(/\/?$/, '/')}`;
-  return { baseUrl, wsUrl };
-};
-
-const isEditableElement = (element: Element | null) => {
-  if (!element || !(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable) return true;
-  if (element.matches('input, textarea, select')) return true;
-  if (element.closest('.cm-editor')) return true;
-  return false;
-};
-
 const readOptionalStorageItem = (key: string) => {
   try {
     return window.localStorage.getItem(key);
@@ -335,22 +323,12 @@ const readOptionalStorageItem = (key: string) => {
   }
 };
 
-const buildAssistantProxyBaseUrl = (rawServerUrl: string) => {
-  const { baseUrl } = resolveServerConfig(rawServerUrl);
-  return new URL('sugarpy/assistant/', baseUrl).toString();
-};
-
 function App() {
-  const defaultServerUrl = resolveDefaultServerUrl();
-  const [serverUrl, setServerUrl] = useState(defaultServerUrl);
-  const [token, setToken] = useState(import.meta.env.VITE_JUPYTER_TOKEN || 'sugarpy');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [kernel, setKernel] = useState<any>(null);
   const [cells, setCells] = useState<CellModel[]>([]);
   const { allFunctions } = useFunctionLibrary();
-  const [bootstrapLoaded, setBootstrapLoaded] = useState(false);
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
   const [execCounter, setExecCounter] = useState(0);
   const [trigMode, setTrigMode] = useState<'deg' | 'rad'>('deg');
@@ -362,24 +340,13 @@ function App() {
   const [syncMessage, setSyncMessage] = useState<string>('');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
-  const [configureConnection, setConfigureConnection] = useState(false);
+  const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
   const [isRunningAll, setIsRunningAll] = useState(false);
-  const [mobileActionsEligible, setMobileActionsEligible] = useState(false);
-  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
-  const [mobileEditorCellId, setMobileEditorCellId] = useState<string | null>(null);
-  const [mobileVisualTop, setMobileVisualTop] = useState(0);
-  const [mobileVisualHeight, setMobileVisualHeight] = useState(window.innerHeight);
+  const [touchUiEnabled, setTouchUiEnabled] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantApiKey, setAssistantApiKey] = useState('');
-  const [assistantDefaultApiKey, setAssistantDefaultApiKey] = useState(
-    import.meta.env.VITE_ASSISTANT_API_KEY || import.meta.env.VITE_OPENAI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY || ''
-  );
-  const [assistantServerProviders, setAssistantServerProviders] = useState<{ openai: boolean; gemini: boolean }>({
-    openai: false,
-    gemini: false
-  });
   const [assistantModel, setAssistantModel] = useState(
-    import.meta.env.VITE_ASSISTANT_MODEL || import.meta.env.VITE_OPENAI_MODEL || import.meta.env.VITE_GEMINI_MODEL || DEFAULT_ASSISTANT_MODEL
+    import.meta.env.VITE_ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL
   );
   const [assistantThinkingLevel, setAssistantThinkingLevel] = useState<AssistantThinkingLevel>('dynamic');
   const [assistantDraft, setAssistantDraft] = useState('');
@@ -388,7 +355,7 @@ function App() {
   const [assistantError, setAssistantError] = useState('');
   const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
   const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
-  const [assistantUndoStack, setAssistantUndoStack] = useState<AssistantSnapshot[]>([]);
+  const [runtimeConfig, setRuntimeConfig] = useState<SugarPyRuntimeConfig | null>(null);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -416,9 +383,10 @@ function App() {
   const localAutosaveWarningShown = useRef(false);
   const hydrated = useRef(false);
   const lastSnapshot = useRef<string>('');
-  const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const addCellMenuRef = useRef<HTMLDivElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
   const assistantRuntimeConfigAttemptedRef = useRef(false);
@@ -426,12 +394,11 @@ function App() {
   const assistantAbortRef = useRef<AbortController | null>(null);
   const assistantTracePendingRef = useRef<Map<string, AssistantRunTrace>>(new Map());
   const assistantTraceFlushRef = useRef<Map<string, Promise<void>>>(new Map());
-  const ensuredServerDirsRef = useRef<Set<string>>(new Set());
-  const ensuringServerDirsRef = useRef<Map<string, Promise<void>>>(new Map());
   const connectingRef = useRef(false);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const kernelRef = useRef<any>(null);
-  const reconnectAttemptsRef = useRef(0);
+  const cellsRef = useRef<CellModel[]>([]);
+  const trigModeRef = useRef<'deg' | 'rad'>('deg');
+  const renderModeRef = useRef<'exact' | 'decimal'>('exact');
+  const activeCellIdRef = useRef<string | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
@@ -452,130 +419,37 @@ function App() {
     ],
     [allFunctions, userFunctions]
   );
+
+  useEffect(() => {
+    cellsRef.current = cells;
+    trigModeRef.current = trigMode;
+    renderModeRef.current = defaultMathRenderMode;
+    activeCellIdRef.current = activeCellId;
+  }, [cells, trigMode, defaultMathRenderMode, activeCellId]);
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
-  const connectKernel = async () => {
+  const connectBackend = async () => {
     if (connectingRef.current) return;
     connectingRef.current = true;
     setStatus('connecting');
-    setStatusDetail('Initializing environment...');
+    setStatusDetail('Checking restricted runtime...');
     setErrorMsg('');
     try {
-      if (kernel) {
-        try {
-          await kernel.shutdown();
-        } catch (_err) {
-          // ignore stale kernel shutdown failures
-        }
-        setKernel(null);
-        kernelRef.current = null;
-      }
-      const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-      const settings = ServerConnection.makeSettings({
-        baseUrl,
-        token,
-        wsUrl,
-        appendToken: true
-      });
-      const manager = new KernelManager({ serverSettings: settings });
-      const newKernel = await withTimeout(manager.startNew({ name: 'python3' }), 12000, 'Kernel start');
-      kernelRef.current = newKernel;
-      newKernel.statusChanged.connect((_sender: any, nextStatus: string) => {
-        if (kernelRef.current !== newKernel) return;
-        if (nextStatus === 'dead' || nextStatus === 'terminating') {
-          setStatus('error');
-          setStatusDetail('');
-          setErrorMsg('Kernel is dead. Reconnect to continue.');
-        }
-      });
-      newKernel.connectionStatusChanged.connect((_sender: any, nextStatus: string) => {
-        if (kernelRef.current !== newKernel) return;
-        const runReconnectAttempt = () => {
-          if (kernelRef.current !== newKernel) return;
-          if ((newKernel as any).isDisposed) {
-            setStatus('connecting');
-            setStatusDetail('Kernel was disposed. Starting a new session...');
-            connectKernel().catch(() => undefined);
-            return;
-          }
-          reconnectAttemptsRef.current += 1;
-          if (reconnectAttemptsRef.current > 3) {
-            setStatus('error');
-            setStatusDetail('');
-            setErrorMsg('Kernel connection lost. Please reconnect.');
-            return;
-          }
-          setStatus('connecting');
-          setStatusDetail(`Reinitializing environment (${reconnectAttemptsRef.current}/3)...`);
-          let reconnectPromise: Promise<void>;
-          try {
-            reconnectPromise = newKernel.reconnect();
-          } catch (_err) {
-            if (kernelRef.current !== newKernel) return;
-            setStatus('connecting');
-            setStatusDetail('Kernel reconnect failed. Starting a new session...');
-            connectKernel().catch(() => undefined);
-            return;
-          }
-          withTimeout(reconnectPromise, 8000, 'Kernel reconnect').catch(() => {
-            if (kernelRef.current !== newKernel) return;
-            if (reconnectTimerRef.current) return;
-            reconnectTimerRef.current = window.setTimeout(() => {
-              reconnectTimerRef.current = null;
-              runReconnectAttempt();
-            }, 1600);
-          });
-        };
-
-        if (nextStatus === 'disconnected') {
-          if (reconnectTimerRef.current) return;
-          setStatus('connecting');
-          setStatusDetail('Kernel disconnected. Waiting for reconnection...');
-          reconnectTimerRef.current = window.setTimeout(() => {
-            reconnectTimerRef.current = null;
-            runReconnectAttempt();
-          }, 1200);
-          return;
-        }
-        if (nextStatus === 'connected' && reconnectTimerRef.current) {
-          window.clearTimeout(reconnectTimerRef.current);
-          reconnectTimerRef.current = null;
-        }
-        if (nextStatus === 'connected') {
-          reconnectAttemptsRef.current = 0;
-          setStatusDetail('');
-        }
-      });
-      setKernel(newKernel);
-      setBootstrapLoaded(false);
+      const config = await fetchRuntimeConfig();
+      setRuntimeConfig(config);
       setStatus('connected');
-      setStatusDetail('');
+      setStatusDetail(config.mode ? `Mode: ${config.mode}` : 'Restricted runtime ready');
       setErrorMsg('');
-      reconnectAttemptsRef.current = 0;
     } catch (err) {
       setStatus('error');
       setStatusDetail('');
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to connect.');
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to connect to SugarPy backend.');
     } finally {
       connectingRef.current = false;
     }
   };
 
-  const activeKernel = kernel;
-
-  const getServerSettings = () => {
-    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-    return ServerConnection.makeSettings({
-      baseUrl,
-      token,
-      wsUrl,
-      appendToken: true
-    });
-  };
-
-  const getAutosavePath = (id: string) => `${SERVER_AUTOSAVE_DIR}/${id}.sugarpy`;
-  const getAssistantTraceServerPath = (trace: AssistantRunTrace) =>
-    `${ASSISTANT_TRACE_SERVER_DIR}/${trace.notebookId}/${trace.id}.json`;
+  const activeKernel = status === 'connected';
 
   const buildSnapshot = (
     nextCells: CellModel[],
@@ -592,108 +466,17 @@ function App() {
       cells: nextCells.map(({ isRunning, ...rest }) => rest)
     });
 
-  const ensureContents = () => {
-    if (!contentsRef.current) {
-      contentsRef.current = new ContentsManager({ serverSettings: getServerSettings() });
-    }
-    return contentsRef.current;
-  };
-
-  const loadAssistantProxyConfig = async (): Promise<AssistantRuntimeConfig | null> => {
-    try {
-      const response = await fetch(
-        `${buildAssistantProxyBaseUrl(serverUrl)}config?token=${encodeURIComponent(token)}`,
-        {
-          method: 'GET'
-        }
-      );
-      if (!response.ok) return null;
-      const parsed = await response.json();
-      if (!parsed || typeof parsed !== 'object') return null;
-      const runtimeModel = typeof parsed.model === 'string' ? parsed.model.trim() : '';
-      const providers =
-        parsed.providers && typeof parsed.providers === 'object'
-          ? {
-              openai: Boolean((parsed.providers as Record<string, unknown>).openai),
-              gemini: Boolean((parsed.providers as Record<string, unknown>).gemini)
-            }
-          : { openai: false, gemini: false };
-      return {
-        model: runtimeModel || undefined,
-        providers
-      };
-    } catch (_err) {
-      return null;
-    }
-  };
-
   const loadAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
-    const proxyConfig = await loadAssistantProxyConfig();
-    if (proxyConfig?.providers?.openai || proxyConfig?.providers?.gemini) {
-      return proxyConfig;
-    }
-    const contents = ensureContents();
     try {
-      const directory = await contents.get('notebooks', { content: true });
-      const entries = Array.isArray(directory.content) ? directory.content : [];
-      const hasConfig = entries.some(
-        (entry: any) => entry?.type === 'file' && entry?.path === ASSISTANT_SERVER_CONFIG_PATH
-      );
-      if (!hasConfig) return null;
-      const model = await contents.get(ASSISTANT_SERVER_CONFIG_PATH, { content: true });
-      const raw = typeof model.content === 'string' ? model.content : '';
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
-      const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
-      const runtimeModel =
-        typeof parsed.model === 'string'
-          ? parsed.model.trim()
-          : typeof parsed.defaultModel === 'string'
-            ? parsed.defaultModel.trim()
-            : '';
+      const parsed = await fetchRuntimeConfig();
+      setRuntimeConfig(parsed);
+      const runtimeModel = typeof parsed.model === 'string' ? parsed.model.trim() : '';
       return {
-        apiKey: apiKey || undefined,
         model: runtimeModel || undefined,
-        providers: {
-          openai: Boolean(apiKey && apiKey.startsWith('sk-')),
-          gemini: Boolean(apiKey && apiKey.startsWith('AIza'))
-        }
+        providers: parsed.providers
       };
     } catch (_err) {
       return null;
-    }
-  };
-
-  const ensureServerDir = async (path: string) => {
-    const contents = ensureContents();
-    const parts = path.split('/').filter(Boolean);
-    let current = '';
-    for (const part of parts) {
-      current = current ? `${current}/${part}` : part;
-      if (ensuredServerDirsRef.current.has(current)) {
-        continue;
-      }
-      const pending = ensuringServerDirsRef.current.get(current);
-      if (pending) {
-        await pending;
-        continue;
-      }
-      const ensurePromise = (async () => {
-        try {
-          await contents.save(current, { type: 'directory' as any });
-        } catch (_err) {
-          // Directory may already exist or server may return noisy 4xx for nested checks.
-          // Fall through: later writes will surface real failures if path is unusable.
-        }
-        ensuredServerDirsRef.current.add(current);
-      })();
-      ensuringServerDirsRef.current.set(current, ensurePromise);
-      try {
-        await ensurePromise;
-      } finally {
-        ensuringServerDirsRef.current.delete(current);
-      }
     }
   };
 
@@ -724,14 +507,7 @@ function App() {
         assistantTracePendingRef.current.delete(trace.id);
         if (!nextTrace) continue;
         try {
-          const notebookTraceDir = `${ASSISTANT_TRACE_SERVER_DIR}/${nextTrace.notebookId}`;
-          await ensureServerDir(ASSISTANT_TRACE_SERVER_DIR);
-          await ensureServerDir(notebookTraceDir);
-          await ensureContents().save(getAssistantTraceServerPath(nextTrace), {
-            type: 'file' as any,
-            format: 'text' as any,
-            content: JSON.stringify(nextTrace, null, 2)
-          });
+          await persistAssistantTraceToServer(nextTrace as unknown as Record<string, unknown>);
         } catch (_err) {
           // trace persistence must never block assistant execution
         }
@@ -750,16 +526,9 @@ function App() {
   };
 
   const loadServerAutosave = async (id: string) => {
-    const contents = ensureContents();
-    const path = getAutosavePath(id);
     try {
-      await ensureServerDir(SERVER_AUTOSAVE_DIR);
-      const model = await contents.get(path, { content: true });
-      const raw = typeof model.content === 'string' ? model.content : '';
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed?.version !== 1) return null;
-      return parsed;
+      const parsed = await loadServerAutosaveRequest(id);
+      return parsed && (parsed as any).version === 1 ? parsed : null;
     } catch (_err) {
       return null;
     }
@@ -777,7 +546,6 @@ function App() {
       if (!params.silent) {
         setSyncMessage('Saving to server...');
       }
-      await ensureServerDir(SERVER_AUTOSAVE_DIR);
       const payload = serializeSugarPy({
         id: params.id,
         name: params.name,
@@ -785,11 +553,7 @@ function App() {
         defaultMathRenderMode: params.defaultMathRenderMode,
         cells: params.cells
       });
-      await ensureContents().save(getAutosavePath(params.id), {
-        type: 'file' as any,
-        format: 'text' as any,
-        content: JSON.stringify(payload, null, 2)
-      });
+      await saveServerAutosaveRequest(payload as unknown as Record<string, unknown>);
       if (!params.silent) {
         setSyncMessage('Saved to server autosave.');
       }
@@ -801,17 +565,11 @@ function App() {
   };
 
   useEffect(() => {
-    contentsRef.current = null;
-    assistantRuntimeConfigAttemptedRef.current = false;
-    setAssistantServerProviders({ openai: false, gemini: false });
-  }, [serverUrl, token]);
-
-  useEffect(() => {
     if (cells.length === 0) {
       setActiveCellId(null);
       return;
     }
-    if (!activeCellId || !cells.some((cell) => cell.id === activeCellId)) {
+    if (activeCellId && !cells.some((cell) => cell.id === activeCellId)) {
       setActiveCellId(cells[0].id);
     }
   }, [cells, activeCellId]);
@@ -819,19 +577,15 @@ function App() {
   useEffect(() => {
     if (connectOnce.current) return;
     connectOnce.current = true;
-    connectKernel().catch(() => {
-      // handled in connectKernel
-    });
+    connectBackend().catch(() => undefined);
   }, []);
 
   useEffect(() => {
     const updateEligibility = () => {
       const coarse = window.matchMedia('(pointer: coarse)').matches;
       const noHover = window.matchMedia('(hover: none)').matches;
-      const anyFine = window.matchMedia('(any-pointer: fine)').matches;
-      const portrait = window.matchMedia('(orientation: portrait)').matches;
-      const narrow = window.innerWidth <= 900;
-      setMobileActionsEligible(coarse && noHover && !anyFine && narrow && portrait);
+      const touchCapable = navigator.maxTouchPoints > 0 || coarse || noHover;
+      setTouchUiEnabled(touchCapable);
     };
     updateEligibility();
     window.addEventListener('resize', updateEligibility);
@@ -843,66 +597,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const readActiveEditorCell = () => {
-      const active = document.activeElement;
-      if (!isEditableElement(active)) {
-        setMobileEditorCellId(null);
-        return;
-      }
-      const cellHost = (active as HTMLElement).closest('[data-cell-id]') as HTMLElement | null;
-      setMobileEditorCellId(cellHost?.dataset.cellId ?? null);
-    };
-    const onFocusIn = () => readActiveEditorCell();
-    const onFocusOut = () => window.setTimeout(readActiveEditorCell, 0);
-    document.addEventListener('focusin', onFocusIn);
-    document.addEventListener('focusout', onFocusOut);
-    return () => {
-      document.removeEventListener('focusin', onFocusIn);
-      document.removeEventListener('focusout', onFocusOut);
-    };
-  }, []);
-
-  useEffect(() => {
-    const updateKeyboard = () => {
-      if (!mobileActionsEligible) {
-        setMobileKeyboardOpen(false);
-        setMobileVisualTop(0);
-        setMobileVisualHeight(window.innerHeight);
-        return;
-      }
-      const vv = window.visualViewport;
-      if (!vv) {
-        setMobileKeyboardOpen(!!mobileEditorCellId);
-        setMobileVisualTop(0);
-        setMobileVisualHeight(window.innerHeight);
-        return;
-      }
-      const inset = Math.max(0, Math.round(window.innerHeight - vv.height));
-      setMobileVisualTop(Math.max(0, Math.round(vv.offsetTop)));
-      setMobileVisualHeight(Math.max(0, Math.round(vv.height)));
-      setMobileKeyboardOpen(inset > 120);
-    };
-    updateKeyboard();
-    const vv = window.visualViewport;
-    if (vv) {
-      vv.addEventListener('resize', updateKeyboard);
-      vv.addEventListener('scroll', updateKeyboard);
-    }
-    window.addEventListener('resize', updateKeyboard);
-    return () => {
-      if (vv) {
-        vv.removeEventListener('resize', updateKeyboard);
-        vv.removeEventListener('scroll', updateKeyboard);
-      }
-      window.removeEventListener('resize', updateKeyboard);
-    };
-  }, [mobileActionsEligible, mobileEditorCellId]);
-
-  useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (headerMenuOpen && headerMenuRef.current && target && !headerMenuRef.current.contains(target)) {
         setHeaderMenuOpen(false);
+      }
+      if (addCellMenuOpen && addCellMenuRef.current && target && !addCellMenuRef.current.contains(target)) {
+        setAddCellMenuOpen(false);
+      }
+      if (
+        target &&
+        notebookStackRef.current &&
+        !notebookStackRef.current.contains(target) &&
+        !headerMenuRef.current?.contains(target) &&
+        !addCellMenuRef.current?.contains(target)
+      ) {
+        setActiveCellId(null);
       }
       if (
         assistantOpen &&
@@ -918,6 +628,7 @@ function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (headerMenuOpen) setHeaderMenuOpen(false);
+      if (addCellMenuOpen) setAddCellMenuOpen(false);
       if (assistantOpen) setAssistantOpen(false);
     };
 
@@ -927,20 +638,7 @@ function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [assistantOpen, headerMenuOpen]);
-
-  useEffect(() => {
-    return () => {
-      if (reconnectTimerRef.current) {
-        window.clearTimeout(reconnectTimerRef.current);
-      }
-      if (!kernel) return;
-      if (kernelRef.current === kernel) {
-        kernelRef.current = null;
-      }
-      kernel.shutdown().catch(() => undefined);
-    };
-  }, [kernel]);
+  }, [addCellMenuOpen, assistantOpen, headerMenuOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -994,156 +692,131 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [serverUrl, token]);
+  }, []);
+
+  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich') =>
+    cellsRef.current.map((cell) =>
+      cell.id === cellId
+        ? {
+            ...cell,
+            type,
+            source,
+            ...(type === 'stoich'
+              ? {
+                  stoichState: {
+                    reaction: cell.stoichState?.reaction ?? source,
+                    inputs: cell.stoichState?.inputs ?? {}
+                  }
+                }
+              : {})
+          }
+        : cell
+    );
+
+  const applyExecutionResult = (cellId: string, response: SugarPyExecutionResponse, countExecution = true) => {
+    const updateCellState = (nextExecCount?: number) => {
+      setCells((prev) =>
+        prev.map((cell) => {
+          if (cell.id !== cellId) return cell;
+          if (response.cellType === 'math') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              mathOutput: response.mathOutput as any,
+              output: response.output as any,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false,
+                mathView: 'rendered'
+              }
+            };
+          }
+          if (response.cellType === 'stoich') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              stoichOutput: response.stoichOutput as any,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            };
+          }
+          return {
+            ...cell,
+            isRunning: false,
+            execCount: nextExecCount ?? cell.execCount,
+            output: response.output as any,
+            ui: {
+              ...cell.ui,
+              outputCollapsed: false
+            }
+          };
+        })
+      );
+    };
+    if (countExecution && response.execCountIncrement) {
+      setExecCounter((prev) => {
+        const next = prev + 1;
+        updateCellState(next);
+        return next;
+      });
+      return;
+    }
+    updateCellState();
+  };
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
     if (!activeKernel) return;
-    if (showOutput) {
-      setCells((prev) => {
-        const exists = prev.some((c) => c.id === cellId);
-        if (exists) return prev;
-        return [...prev, { id: cellId, source: code, type: 'code' }];
-      });
-    }
-    let future: any;
-    try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
-    } catch (error) {
-      if (showOutput) {
-        const message = isCanceledFutureError(error)
-          ? 'Kernel execution was canceled.'
-          : String(error instanceof Error ? error.message : error);
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId ? { ...c, output: { type: 'error', ename: 'ExecutionError', evalue: message }, isRunning: false } : c
-          )
-        );
-      }
-      return;
-    }
-    let streamText = '';
-    let mimeData: Record<string, unknown> = {};
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true, output: undefined } : c))
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              source: code,
+              isRunning: true,
+              output: undefined,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            }
+          : cell
+      )
     );
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'stream') {
-        // @ts-ignore
-        streamText += msg.content.text ?? '';
-        mimeData = { ...mimeData, 'text/plain': streamText };
-      }
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const merged: Record<string, unknown> = { ...mimeData };
-        Object.entries(data).forEach(([mime, value]) => {
-          if (mime === 'text/plain') {
-            const existing = asText(merged['text/plain']);
-            merged['text/plain'] = `${existing}${asText(value)}`;
-          } else {
-            merged[mime] = value as unknown;
-          }
-        });
-        mimeData = merged;
-      }
-      if (msg.header.msg_type === 'error') {
-        const ename = (msg.content as any).ename ?? 'Error';
-        const evalue = (msg.content as any).evalue ?? '';
-        if (showOutput) {
-          setCells((prev) =>
-            prev.map((c) =>
-              c.id === cellId
-                ? {
-                    ...c,
-                    output: { type: 'error', ename, evalue }
-                  }
-                : c
-            )
-          );
-        }
-        return;
-      }
-      if (showOutput) {
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: { type: 'mime', data: mimeData }
-                }
-              : c
-          )
-        );
-      }
-    };
-    let reply: any = null;
     try {
-      reply = await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      const evalue = isExecutionTimeoutError(error)
-        ? String(error instanceof Error ? error.message : error)
-        : 'Kernel execution was canceled.';
+      const response = await executeNotebookCell({
+        cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
       if (showOutput) {
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: {
-                    type: 'error',
-                    ename: isExecutionTimeoutError(error) ? 'ExecutionTimeout' : 'ExecutionCanceled',
-                    evalue
-                  },
-                  isRunning: false
-                }
-              : c
-          )
-        );
+        applyExecutionResult(cellId, response, countExecution);
       }
-      return;
-    }
-    if (showOutput) {
-      const content = (reply as any)?.content;
-      if (content?.status === 'error') {
-        const ename = content.ename ?? 'Error';
-        const evalue = content.evalue ?? '';
-        setCells((prev) =>
-          prev.map((c) =>
-            c.id === cellId
-              ? {
-                  ...c,
-                  output: { type: 'error', ename, evalue }
-                }
-              : c
-          )
-        );
-      }
-    }
-    if (showOutput) {
       const defs = extractFunctionNames(code);
       if (defs.length > 0) {
         setUserFunctions((prev) => Array.from(new Set([...prev, ...defs])));
       }
-    }
-    if (countExecution) {
-      setExecCounter((prev) => {
-        const next = prev + 1;
-        setCells((cellsPrev) =>
-          cellsPrev.map((c) =>
-            c.id === cellId ? { ...c, isRunning: false, execCount: next } : c
-          )
-        );
-        return next;
-      });
-    } else {
-      setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, isRunning: false } : c)));
+    } catch (error) {
+      setCells((prev) =>
+        prev.map((cell) =>
+          cell.id === cellId
+            ? {
+                ...cell,
+                isRunning: false,
+                output: {
+                  type: 'error',
+                  ename: 'ExecutionError',
+                  evalue: error instanceof Error ? error.message : String(error)
+                }
+              }
+            : cell
+        )
+      );
     }
   };
 
@@ -1160,28 +833,30 @@ function App() {
       renderModeOverride ??
       (cell?.mathRenderMode === 'decimal' ? 'decimal' : defaultMathRenderMode);
     const mode = trigModeOverride ?? cell?.mathTrigMode ?? trigMode;
-    const payload = JSON.stringify({ source, mode });
-    const code = [
-      'import json',
-      'from sugarpy.math_cell import display_math_cell',
-      `_payload = json.loads(${JSON.stringify(payload)})`,
-      `_ = display_math_cell(_payload['source'], _payload['mode'], ${JSON.stringify(renderMode)})`
-    ].join('\n');
-
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
           ? {
               ...c,
               isRunning: true,
-              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined })
+              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined }),
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
             }
           : c
       )
     );
-    let future: any;
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      const response = await executeNotebookCell({
+        cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      applyExecutionResult(cellId, response, true);
     } catch (error) {
       setCells((prev) =>
         prev.map((c) =>
@@ -1200,126 +875,43 @@ function App() {
             : c
         )
       );
-      return;
     }
-    let streamText = '';
-    let mimeData: Record<string, unknown> = {};
-    let parsed: (CellModel['mathOutput'] & { plotly_figure?: unknown }) | null = null;
-
-    const setMimeOutput = (nextData: Record<string, unknown>) => {
-      if (Object.keys(nextData).length === 0) return;
-      setCells((prev) =>
-        prev.map((c) => (c.id === cellId ? { ...c, output: { type: 'mime', data: nextData } } : c))
-      );
-    };
-
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'stream') {
-        // @ts-ignore
-        const text = msg.content.text ?? '';
-        streamText += text;
-        const nextData = { ...mimeData, 'text/plain': streamText };
-        mimeData = nextData;
-        setMimeOutput(nextData);
-      }
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const merged: Record<string, unknown> = { ...mimeData };
-        Object.entries(data).forEach(([mime, value]) => {
-          if (mime === SUGARPY_MIME_MATH && value && typeof value === 'object') {
-            parsed = value as CellModel['mathOutput'] & { plotly_figure?: unknown };
-            return;
-          }
-          if (mime === 'text/plain') {
-            const existing = asText(merged['text/plain']);
-            merged['text/plain'] = `${existing}${asText(value)}`;
-          } else {
-            merged[mime] = value as unknown;
-          }
-        });
-        mimeData = merged;
-        setMimeOutput(merged);
-      }
-      if (msg.header.msg_type === 'error') {
-        // @ts-ignore
-        const err = (msg.content.ename ?? 'Error') + ': ' + (msg.content.evalue ?? '');
-        parsed = { kind: 'expression', steps: [], error: err, mode, warnings: [] };
-      }
-      if (parsed) {
-        setCells((prev) =>
-          prev.map((c) => {
-            if (c.id !== cellId) return c;
-            const next: any = { ...c, mathOutput: parsed };
-            const fig = (parsed as any)?.plotly_figure;
-            if (fig && typeof fig === 'object') {
-              next.output = { type: 'mime', data: { 'application/vnd.plotly.v1+json': fig } };
-            }
-            return next;
-          })
-        );
-      }
-    };
-    try {
-      await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      setCells((prev) =>
-        prev.map((c) =>
-          c.id === cellId
-            ? {
-                ...c,
-                isRunning: false,
-                mathOutput: {
-                  kind: 'expression',
-                  steps: [],
-                  error: isExecutionTimeoutError(error)
-                    ? String(error instanceof Error ? error.message : error)
-                    : 'Kernel execution was canceled.',
-                  mode,
-                  warnings: []
-                }
-              }
-            : c
-        )
-      );
-      return;
-    }
-    setMimeOutput(mimeData);
-    setExecCounter((prev) => {
-      const next = prev + 1;
-      setCells((cellsPrev) =>
-        cellsPrev.map((c) =>
-          c.id === cellId ? { ...c, isRunning: false, execCount: next } : c
-        )
-      );
-      return next;
-    });
   };
 
   const runStoichCell = async (cellId: string, state: StoichState) => {
     if (!activeKernel) return;
-    const payload = JSON.stringify({ reaction: state.reaction, inputs: state.inputs });
-    const code = [
-      'import json',
-      'from sugarpy.stoichiometry import display_stoichiometry',
-      `_payload = json.loads(${JSON.stringify(payload)})`,
-      "_ = display_stoichiometry(_payload.get('reaction', ''), _payload.get('inputs'))"
-    ].join('\n');
-
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true } : c))
+      prev.map((c) =>
+        c.id === cellId
+          ? {
+              ...c,
+              isRunning: true,
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
+            }
+          : c
+      )
     );
-
-    let future: any;
     try {
-      future = activeKernel.requestExecute({ code, stop_on_error: true });
+      const nextCells = cellsRef.current.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              type: 'stoich',
+              stoichState: state
+            }
+          : cell
+      );
+      const response = await executeNotebookCell({
+        cells: nextCells as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      applyExecutionResult(cellId, response, true);
     } catch (error) {
       setCells((prev) =>
         prev.map((c) =>
@@ -1328,60 +920,14 @@ function App() {
             : c
         )
       );
-      return;
     }
-    let parsed: StoichOutput | null = null;
-
-    future.onIOPub = (msg) => {
-      if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-        // @ts-ignore
-        const data = msg.content.data ?? {};
-        const payload = data[SUGARPY_MIME_STOICH];
-        if (payload && typeof payload === 'object') {
-          parsed = payload as StoichOutput;
-        }
-      }
-      if (msg.header.msg_type === 'error') {
-        const ename = (msg.content as any).ename ?? 'Error';
-        const evalue = (msg.content as any).evalue ?? '';
-        parsed = { ok: false, error: `${ename}: ${evalue}`, species: [] };
-      }
-    };
-
-    try {
-      await awaitFutureDoneWithTimeout(future, activeKernel);
-    } catch (error) {
-      if (isDeadKernelError(error)) {
-        setStatus('error');
-        setErrorMsg('Kernel is dead. Reconnect to continue.');
-      }
-      if (!isCanceledFutureError(error) && !isDeadKernelError(error) && !isExecutionTimeoutError(error)) {
-        throw error;
-      }
-      parsed = {
-        ok: false,
-        error: isExecutionTimeoutError(error)
-          ? String(error instanceof Error ? error.message : error)
-          : 'Kernel execution was canceled.',
-        species: []
-      };
-    }
-    if (!parsed) {
-      parsed = { ok: false, error: 'No structured output received.', species: [] };
-    }
-
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId ? { ...c, stoichOutput: parsed ?? undefined, isRunning: false } : c
-      )
-    );
   };
 
   const runAllCells = async () => {
     if (isRunningAll) return;
     if (!activeKernel) {
-      await connectKernel();
-      if (!kernelRef.current) return;
+      await connectBackend();
+      if (status !== 'connected') return;
     }
     setIsRunningAll(true);
     try {
@@ -1420,15 +966,94 @@ function App() {
         id: `cell-${idSuffix}`,
         source,
         type,
-        stoichState: createStoichState()
+        stoichState: createStoichState(),
+        ui: {
+          outputCollapsed: false
+        }
       };
     }
     return {
       id: `cell-${idSuffix}`,
       source,
       type,
-      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {})
+      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {}),
+      ui: {
+        outputCollapsed: false,
+        ...(type === 'math' ? { mathView: 'source' as const } : {})
+      }
     };
+  };
+
+  const updateCellUi = (
+    cellId: string,
+    updater: (current: NonNullable<CellModel['ui']>) => NonNullable<CellModel['ui']>
+  ) => {
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              ui: updater(cell.ui ?? {})
+            }
+          : cell
+      )
+    );
+  };
+
+  const toggleCellOutputCollapsed = (cellId: string) => {
+    setCells((prev) =>
+      prev.map((cell) => {
+        if (cell.id !== cellId) return cell;
+        const nextCollapsed = !(cell.ui?.outputCollapsed ?? false);
+        return {
+          ...cell,
+          ui: {
+            ...cell.ui,
+            outputCollapsed: nextCollapsed,
+            ...(cell.type === 'math' && nextCollapsed ? { mathView: 'source' as const } : {})
+          }
+        };
+      })
+    );
+  };
+
+  const clearCellOutput = (cellId: string) => {
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              output: undefined,
+              mathOutput: undefined,
+              stoichOutput: undefined,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false,
+                ...(cell.type === 'math' ? { mathView: 'source' as const } : {})
+              }
+            }
+          : cell
+      )
+    );
+  };
+
+  const toggleMathView = (cellId: string) => {
+    updateCellUi(cellId, (current) => {
+      const nextView = current.mathView === 'rendered' ? 'source' : 'rendered';
+      return {
+        ...current,
+        mathView: nextView,
+        outputCollapsed: nextView === 'source' ? true : false
+      };
+    });
+  };
+
+  const showMathRenderedView = (cellId: string) => {
+    updateCellUi(cellId, (current) => ({
+      ...current,
+      mathView: 'rendered',
+      outputCollapsed: false
+    }));
   };
 
   const getCellDisplayText = (cell: CellModel) => {
@@ -1460,7 +1085,8 @@ function App() {
       mathRenderMode: cell.mathRenderMode,
       mathTrigMode: cell.mathTrigMode,
       stoichReaction: cell.stoichState?.reaction ?? '',
-      outputText: getCellDisplayText(cell),
+      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput),
+      outputPreview: getCellDisplayText(cell),
       hasError: !!(
         cell.output?.type === 'error' ||
         cell.mathOutput?.error ||
@@ -1473,7 +1099,9 @@ function App() {
     cells.map((cell) => ({
       id: cell.id,
       type: cell.type ?? 'code',
-      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source
+      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      mathTrigMode: cell.mathTrigMode,
+      mathRenderMode: cell.mathRenderMode
     }));
 
   const runAssistantSandbox = async (
@@ -1482,23 +1110,22 @@ function App() {
   ) =>
     runIsolatedAssistantSandbox({
       request,
-      serverSettings: getServerSettings(),
       notebookCells: buildAssistantSandboxCells(),
       bootstrapCode: assistantBootstrapCode,
       onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
     });
 
   const captureAssistantSnapshot = (): AssistantSnapshot => ({
-    cells: cells.map((cell) => ({
+    cells: cellsRef.current.map((cell) => ({
       ...cell,
       mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
       stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
       stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
       output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
     })),
-    trigMode,
-    defaultMathRenderMode,
-    activeCellId
+    trigMode: trigModeRef.current,
+    defaultMathRenderMode: renderModeRef.current,
+    activeCellId: activeCellIdRef.current
   });
 
   const restoreAssistantSnapshot = (snapshot: AssistantSnapshot) => {
@@ -1506,6 +1133,283 @@ function App() {
     setTrigMode(snapshot.trigMode);
     setDefaultMathRenderMode(snapshot.defaultMathRenderMode);
     setActiveCellId(snapshot.activeCellId);
+    cellsRef.current = snapshot.cells;
+    trigModeRef.current = snapshot.trigMode;
+    renderModeRef.current = snapshot.defaultMathRenderMode;
+    activeCellIdRef.current = snapshot.activeCellId;
+  };
+
+  const isRunnableAssistantOperation = (operation: AssistantOperation) =>
+    (operation.type === 'insert_cell' && operation.cellType !== 'markdown') || operation.type === 'update_cell';
+
+  const isReplayableSandboxCell = (cell: AssistantSandboxNotebookCell) =>
+    (cell.type === 'code' || cell.type === 'math') && cell.source.trim().length > 0;
+
+  const cloneSandboxCells = (input: AssistantSandboxNotebookCell[]): AssistantSandboxNotebookCell[] =>
+    input.map((cell) => ({ ...cell }));
+
+  const buildLiveSandboxCells = (): AssistantSandboxNotebookCell[] =>
+    cellsRef.current.map((cell) => ({
+      id: cell.id,
+      type: cell.type ?? 'code',
+      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
+      mathTrigMode: cell.mathTrigMode,
+      mathRenderMode: cell.mathRenderMode
+    }));
+
+  const runAssistantSandboxForCells = async (
+    request: AssistantSandboxRequest,
+    notebookCells: AssistantSandboxNotebookCell[],
+    onActivity?: (item: AssistantActivity) => void
+  ) =>
+    runIsolatedAssistantSandbox({
+      request,
+      notebookCells,
+      bootstrapCode: assistantBootstrapCode,
+      onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
+    });
+
+  const describeAssistantOperationChange = (operation: AssistantOperation) => {
+    switch (operation.type) {
+      case 'insert_cell':
+        return `Add ${operation.cellType} cell at ${operation.index + 1}`;
+      case 'update_cell':
+        return `Update cell ${operation.cellId}`;
+      case 'delete_cell':
+        return `Delete cell ${operation.cellId}`;
+      case 'move_cell':
+        return `Move cell ${operation.cellId} to ${operation.index + 1}`;
+      case 'set_notebook_defaults':
+        return 'Update notebook defaults';
+      default:
+        return operation.type;
+    }
+  };
+
+  const describeValidationOutputKind = (source: string, result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
+    if (result.status === 'timeout') return 'timeout';
+    if (result.status === 'error') return 'error';
+    if (result.target === 'math') {
+      if (/\bplot\s*\(/.test(source) || result.mathValidation?.hasPlot) return 'plot';
+      if (/\bsolve\s*\(/.test(source)) return 'symbolic solve';
+      return result.mathValidation?.kind ?? 'math';
+    }
+    const mimeKeys = Object.keys(result.mimeData ?? {});
+    if (mimeKeys.includes('application/vnd.plotly.v1+json')) return 'plot';
+    if (mimeKeys.includes('text/latex')) return 'latex';
+    if (mimeKeys.includes('text/plain')) return 'text';
+    if (result.stdout.trim()) return 'stdout';
+    return mimeKeys[0] ?? 'code';
+  };
+
+  const describeValidationPreview = (result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
+    if (result.target === 'math') {
+      if (result.mathValidation?.error) return result.mathValidation.error;
+      if (result.mathValidation?.stepsPreview?.length) {
+        return result.mathValidation.stepsPreview.join(' | ');
+      }
+    }
+    const plain = result.mimeData?.['text/plain'];
+    if (plain) return asText(plain);
+    if (result.stdout.trim()) return result.stdout.trim();
+    if (result.stderr.trim()) return result.stderr.trim();
+    return '';
+  };
+
+  const buildValidationSummary = (
+    source: string,
+    result: Awaited<ReturnType<typeof runAssistantSandbox>>
+  ): AssistantValidationSummary => {
+    const rawPreview = describeValidationPreview(result).replace(/\s+/g, ' ').trim();
+    const errorSummary =
+      result.status === 'error'
+        ? result.mathValidation?.error || result.errorValue || result.errorName || 'Validation failed.'
+        : result.status === 'timeout'
+          ? result.errorValue || 'Validation timed out.'
+          : undefined;
+    return {
+      status: result.status,
+      outputKind: describeValidationOutputKind(source, result),
+      outputPreview: rawPreview || (result.status === 'ok' ? 'No visible output.' : ''),
+      errorSummary,
+      replayContextUsed: result.contextPresetUsed,
+      replayedCellIds: result.replayedCellIds
+    };
+  };
+
+  const applyDraftOperationToSandboxCells = (
+    cellsInput: AssistantSandboxNotebookCell[],
+    operation: AssistantOperation,
+    options?: { insertedCellId?: string }
+  ) => {
+    let nextCells = cloneSandboxCells(cellsInput);
+    if (operation.type === 'insert_cell') {
+      const nextCellId = options?.insertedCellId ?? `draft-cell-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const nextCell: AssistantSandboxNotebookCell = {
+        id: nextCellId,
+        type: operation.cellType,
+        source: operation.source
+      };
+      const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+      nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
+      return { cells: nextCells, insertedCellId: nextCellId };
+    }
+    if (operation.type === 'update_cell') {
+      return {
+        cells: nextCells.map((cell) =>
+          cell.id === operation.cellId ? { ...cell, source: operation.source } : cell
+        )
+      };
+    }
+    if (operation.type === 'delete_cell') {
+      return { cells: nextCells.filter((cell) => cell.id !== operation.cellId) };
+    }
+    if (operation.type === 'move_cell') {
+      const currentIndex = nextCells.findIndex((cell) => cell.id === operation.cellId);
+      if (currentIndex === -1) return { cells: nextCells };
+      const [moved] = nextCells.splice(currentIndex, 1);
+      const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+      nextCells.splice(bounded, 0, moved);
+      return { cells: [...nextCells] };
+    }
+    return { cells: nextCells };
+  };
+
+  const buildDraftFromPlan = async (
+    plan: AssistantPlan,
+    onActivity?: (item: AssistantActivity) => void,
+    onValidation?: (entry: {
+      stepId: string;
+      stepTitle: string;
+      operationIndex: number;
+      cellType: AssistantCellKind;
+      request: AssistantSandboxRequest;
+      summary: AssistantValidationSummary;
+    }) => void
+  ): Promise<AssistantDraftRun> => {
+    let draftCells = buildLiveSandboxCells();
+    let draftTrigMode = trigModeRef.current;
+    let draftRenderMode = renderModeRef.current;
+    const steps: AssistantDraftStep[] = [];
+
+    for (const step of plan.steps) {
+      const validations: AssistantDraftStep['validations'] = [];
+      const warnings = [...step.warnings];
+      const errors: string[] = [];
+      let workingCells = cloneSandboxCells(draftCells);
+      let workingTrigMode = draftTrigMode;
+      let workingRenderMode = draftRenderMode;
+
+      for (let operationIndex = 0; operationIndex < step.operations.length; operationIndex += 1) {
+        const operation = step.operations[operationIndex];
+        if (operation.type === 'set_notebook_defaults') {
+          if (operation.trigMode) workingTrigMode = operation.trigMode;
+          if (operation.renderMode) workingRenderMode = operation.renderMode;
+          continue;
+        }
+
+        if (!isRunnableAssistantOperation(operation)) {
+          workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
+          continue;
+        }
+
+        const sandboxSource = operation.source;
+        const replayableCellIds = workingCells
+          .filter((cell) => {
+            if (!isReplayableSandboxCell(cell)) return false;
+            return operation.type !== 'update_cell' || cell.id !== operation.cellId;
+          })
+          .map((cell) => cell.id);
+        const usesReplayContext =
+          replayableCellIds.length > 0 &&
+          (operation.type === 'update_cell' || steps.some((entry) => entry.isRunnable));
+        const request: AssistantSandboxRequest =
+          operation.type === 'insert_cell' && operation.cellType === 'math'
+            ? {
+                target: 'math',
+                source: sandboxSource,
+                trigMode: workingTrigMode,
+                renderMode: workingRenderMode,
+                contextPreset: usesReplayContext ? 'selected-cells' : 'none',
+                selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                timeoutMs: 5000
+              }
+            : operation.type === 'update_cell' && workingCells.find((cell) => cell.id === operation.cellId)?.type === 'math'
+              ? {
+                  target: 'math',
+                  source: sandboxSource,
+                  trigMode: workingTrigMode,
+                  renderMode: workingRenderMode,
+                  contextPreset: usesReplayContext ? 'selected-cells' : 'none',
+                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                  timeoutMs: 5000
+                }
+              : {
+                  target: 'code',
+                  code: sandboxSource,
+                  contextPreset: usesReplayContext ? 'selected-cells' : 'bootstrap-only',
+                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
+                  timeoutMs: 5000
+                };
+
+        onActivity?.({
+          kind: 'phase',
+          label: 'Validating draft step',
+          detail: `${step.title}: ${step.summary}`
+        });
+        const result = await runAssistantSandboxForCells(request, workingCells, onActivity);
+        const cellType =
+          operation.type === 'insert_cell'
+            ? operation.cellType
+            : (workingCells.find((cell) => cell.id === operation.cellId)?.type ?? 'code');
+        const summary = buildValidationSummary(sandboxSource, result);
+        validations.push({
+          operationIndex,
+          cellType,
+          source: sandboxSource,
+          summary
+        });
+        onValidation?.({
+          stepId: step.id,
+          stepTitle: step.title,
+          operationIndex,
+          cellType,
+          request,
+          summary
+        });
+        if (result.status !== 'ok') {
+          errors.push(summary.errorSummary || 'Validation failed.');
+        }
+        workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
+      }
+
+      steps.push({
+        id: step.id,
+        title: step.title,
+        summary: step.summary,
+        explanation: step.summary,
+        operations: step.operations,
+        validations,
+        warnings,
+        errors,
+        sourcePreview: step.operations
+          .filter((operation) => 'source' in operation && operation.source)
+          .map((operation) => operation.source)
+          .join('\n\n'),
+        changes: step.operations.map(describeAssistantOperationChange),
+        isRunnable: step.operations.some(isRunnableAssistantOperation)
+      });
+
+      draftCells = workingCells;
+      draftTrigMode = workingTrigMode;
+      draftRenderMode = workingRenderMode;
+    }
+
+    return {
+      summary: plan.summary,
+      hasFailures: steps.some((step) => step.errors.length > 0),
+      steps
+    };
   };
 
   const insertCellAt = (
@@ -1517,6 +1421,23 @@ function App() {
     const nextCell = createCell(type, source, bounded + 1);
     setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
     setActiveCellId(nextCell.id);
+    setAddCellMenuOpen(false);
+  };
+
+  const insertCellBelowActive = (type: 'code' | 'markdown' | 'math') => {
+    const activeIndex = activeCellId ? cells.findIndex((cell) => cell.id === activeCellId) : -1;
+    const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
+    insertCellAt(targetIndex, type);
+  };
+
+  const insertSiblingCell = (cellId: string, position: 'above' | 'below') => {
+    const sourceIndex = cells.findIndex((cell) => cell.id === cellId);
+    if (sourceIndex < 0) return;
+    const sourceCell = cells[sourceIndex];
+    const nextType: 'code' | 'markdown' | 'math' =
+      sourceCell.type === 'markdown' || sourceCell.type === 'math' ? sourceCell.type : 'code';
+    const targetIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
+    insertCellAt(targetIndex, nextType);
   };
 
   const updateCell = (cellId: string, source: string) => {
@@ -1590,7 +1511,10 @@ function App() {
             isRunning: false,
             mathOutput: undefined,
             stoichOutput: undefined,
-            stoichState: createStoichState()
+            stoichState: createStoichState(),
+            ui: {
+              outputCollapsed: false
+            }
           };
         }
         return {
@@ -1602,7 +1526,10 @@ function App() {
           isRunning: false,
           mathOutput: undefined,
           stoichOutput: undefined,
-          stoichState: undefined
+          stoichState: undefined,
+          ui: {
+            outputCollapsed: false
+          }
         };
       })
     );
@@ -1695,7 +1622,9 @@ function App() {
                   status: typeof message.status === 'string' ? message.status : undefined,
                   activity: Array.isArray(message.activity) ? message.activity : [],
                   plan: message.plan ?? null,
-                  error: typeof message.error === 'string' ? message.error : undefined
+                  draftRun: message.draftRun ?? null,
+                  error: typeof message.error === 'string' ? message.error : undefined,
+                  requestPrompt: typeof message.requestPrompt === 'string' ? message.requestPrompt : undefined
                 }))
             : []
         })) as AssistantChatSession[];
@@ -1718,53 +1647,30 @@ function App() {
 
   const hydrateAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
     if (assistantRuntimeConfigAttemptedRef.current) {
-      if (
-        assistantDefaultApiKey.trim() ||
-        assistantServerProviders.openai ||
-        assistantServerProviders.gemini
-      ) {
-        return {
-          apiKey: assistantDefaultApiKey.trim() || undefined,
-          model: assistantModel.trim() || undefined,
-          providers: assistantServerProviders
-        };
-      }
-      return null;
+      return runtimeConfig
+        ? {
+            model: runtimeConfig.model?.trim() || undefined,
+            providers: runtimeConfig.providers
+          }
+        : null;
     }
     const storedKey = readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE);
     const storedModel =
       readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ?? readOptionalStorageItem('sugarpy:assistant:gemini:model');
-    const envApiKey = (
-      import.meta.env.VITE_ASSISTANT_API_KEY ||
-      import.meta.env.VITE_OPENAI_API_KEY ||
-      import.meta.env.VITE_GEMINI_API_KEY ||
-      ''
-    ).trim();
-    const envModel = (
-      import.meta.env.VITE_ASSISTANT_MODEL ||
-      import.meta.env.VITE_OPENAI_MODEL ||
-      import.meta.env.VITE_GEMINI_MODEL ||
-      ''
-    ).trim();
-    if (storedKey || envApiKey) return null;
+    const envModel = (import.meta.env.VITE_ASSISTANT_MODEL || '').trim();
+    if (storedKey) return null;
     assistantRuntimeConfigAttemptedRef.current = true;
-    const runtimeConfig = await loadAssistantRuntimeConfig();
-    if (!runtimeConfig) return null;
-    if (runtimeConfig.apiKey) {
-      setAssistantDefaultApiKey(runtimeConfig.apiKey);
+    const nextRuntimeConfig = await loadAssistantRuntimeConfig();
+    if (!nextRuntimeConfig) return null;
+    if (!storedModel && !envModel && nextRuntimeConfig.model) {
+      setAssistantModel(nextRuntimeConfig.model);
     }
-    if (runtimeConfig.providers) {
-      setAssistantServerProviders(runtimeConfig.providers);
-    }
-    if (!storedModel && !envModel && runtimeConfig.model) {
-      setAssistantModel(runtimeConfig.model);
-    }
-    return runtimeConfig;
+    return nextRuntimeConfig;
   };
 
-  const runAssistant = async () => {
+  const runAssistant = async (promptOverride?: string, options?: { chatId?: string; reviseFromMessageId?: string }) => {
     const runtimeConfig = await hydrateAssistantRuntimeConfig();
-    const chatId = ensureAssistantChat();
+    const chatId = options?.chatId ?? ensureAssistantChat();
     const effectiveModel = (
       runtimeConfig?.model?.trim() ||
       assistantModel.trim() ||
@@ -1776,32 +1682,32 @@ function App() {
       setAssistantModel(effectiveModel);
     }
     const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
-    const defaultApiKey = (runtimeConfig?.apiKey?.trim() || assistantDefaultApiKey.trim()).trim();
-    const effectiveProviders = runtimeConfig?.providers ?? assistantServerProviders;
+    const provider = detectAssistantProvider(effectiveModel, overrideApiKey);
+    const serverProviderAvailable =
+      (provider === 'openai' && !!runtimeConfig?.providers?.openai) ||
+      (provider === 'gemini' && !!runtimeConfig?.providers?.gemini) ||
+      (provider === 'groq' && !!runtimeConfig?.providers?.groq);
     const effectiveApiKey = matchesAssistantProvider(overrideApiKey, effectiveModel)
       ? overrideApiKey
-      : matchesAssistantProvider(defaultApiKey, effectiveModel)
-        ? defaultApiKey
+      : serverProviderAvailable
+        ? `server-proxy:${provider}`
         : '';
-    const provider = detectAssistantProvider(effectiveModel);
-    const useServerProxy = !effectiveApiKey && Boolean(effectiveProviders[provider]);
     if (!effectiveApiKey) {
-      if (useServerProxy) {
-        // Continue with server-side proxy transport.
-      } else {
-        setAssistantError(
-          provider === 'openai'
-            ? 'No OpenAI API key is available. Add your own key in settings or configure a shared OpenAI key on the server.'
-            : 'No Gemini API key is available. Add your own key in settings or configure a shared Gemini key on the server.'
-        );
-        return;
-      }
+      setAssistantError(
+        provider === 'openai'
+          ? 'No OpenAI API key is available. Add your own key in settings or configure a server proxy key.'
+          : provider === 'groq'
+            ? 'No Groq API key is available. Add your own key in settings or configure a server proxy key.'
+            : 'No Gemini API key is available. Add your own key in settings or configure a server proxy key.'
+      );
+      return;
     }
-    if (!assistantDraft.trim()) {
+    const promptSource = (promptOverride ?? assistantDraft).trim();
+    if (!promptSource) {
       setAssistantError('Write a request for the assistant first.');
       return;
     }
-    const prompt = assistantDraft.trim();
+    const prompt = promptSource;
     const effectiveThinkingLevel = normalizeThinkingLevel(effectiveModel, assistantThinkingLevel);
     const activeChat =
       assistantChats.find((chat) => chat.id === chatId) ??
@@ -1834,7 +1740,8 @@ function App() {
       content: '',
       createdAt: timestamp,
       status: 'loading',
-      activity: []
+      activity: [],
+      requestPrompt: prompt
     };
 
     updateAssistantChat(chatId, (chat) => ({
@@ -1866,12 +1773,14 @@ function App() {
       activity: [],
       network: [],
       responses: [],
-      sandboxExecutions: []
+      sandboxExecutions: [],
+      draftValidations: []
     };
     const collectedActivity: AssistantActivity[] = [];
     const collectedNetwork: AssistantNetworkEvent[] = [];
     const collectedResponses: AssistantResponseTrace[] = [];
     const collectedSandboxExecutions: AssistantSandboxExecutionTrace[] = [];
+    const collectedDraftValidations: AssistantRunTrace['draftValidations'] = [];
     void persistAssistantTrace(baseTrace);
 
     setAssistantLoading(true);
@@ -1879,75 +1788,124 @@ function App() {
     setAssistantDraft('');
     const controller = new AbortController();
     assistantAbortRef.current = controller;
-    const assistantTransport: AssistantTransport = effectiveApiKey
-      ? { mode: 'direct', apiKey: effectiveApiKey }
-      : {
-          mode: 'server-proxy',
-          proxyBaseUrl: buildAssistantProxyBaseUrl(serverUrl),
-          token
-        };
     try {
-      const plan = await planNotebookChanges({
-        transport: assistantTransport,
-        model: effectiveModel,
-        request: prompt,
-        scope: ASSISTANT_SCOPE,
-        preference: ASSISTANT_PREFERENCE,
-        context: buildAssistantContext(),
-        signal: controller.signal,
-        conversationHistory: [...previousConversation, { role: 'user', content: prompt }].slice(-6),
-        thinkingLevel: effectiveThinkingLevel,
-        sandboxRunner: runAssistantSandbox,
-        onNetworkEvent: (event) => {
-          collectedNetwork.push(event);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onResponseTrace: (trace) => {
-          collectedResponses.push(trace);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onSandboxExecution: (trace) => {
-          collectedSandboxExecutions.push(trace);
-          void persistAssistantTrace({
-            ...baseTrace,
-            activity: [...collectedActivity],
-            network: [...collectedNetwork],
-            responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
-          });
-        },
-        onActivity: (item) => {
+      const requestPlan = async (requestText: string, prependActivityLabel?: string) => {
+        if (prependActivityLabel) {
+          const activityItem = { kind: 'phase' as const, label: prependActivityLabel };
+          collectedActivity.push(activityItem);
+          updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+            ...message,
+            activity: [...(message.activity ?? []), activityItem]
+          }));
+        }
+        return planNotebookChanges({
+          apiKey: effectiveApiKey,
+          model: effectiveModel,
+          request: requestText,
+          scope: ASSISTANT_SCOPE,
+          preference: ASSISTANT_PREFERENCE,
+          context: buildAssistantContext(),
+          signal: controller.signal,
+          conversationHistory: [...previousConversation, { role: 'user', content: requestText }].slice(-6),
+          thinkingLevel: effectiveThinkingLevel,
+          sandboxRunner: runAssistantSandbox,
+          onNetworkEvent: (event) => {
+            collectedNetwork.push(event);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
+            });
+          },
+          onResponseTrace: (trace) => {
+            collectedResponses.push(trace);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
+            });
+          },
+          onSandboxExecution: (trace) => {
+            collectedSandboxExecutions.push(trace);
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
+            });
+          },
+          onActivity: (item) => {
+            collectedActivity.push(item);
+            updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+              ...message,
+              activity: [...(message.activity ?? []), item]
+            }));
+            void persistAssistantTrace({
+              ...baseTrace,
+              activity: [...collectedActivity],
+              network: [...collectedNetwork],
+              responses: [...collectedResponses],
+              sandboxExecutions: [...collectedSandboxExecutions],
+              draftValidations: [...collectedDraftValidations]
+            });
+          }
+        });
+      };
+
+      const reviseMessage = options?.reviseFromMessageId
+        ? activeAssistantChat?.messages.find((entry) => entry.id === options.reviseFromMessageId)
+        : null;
+      const revisedPrompt =
+        reviseMessage?.draftRun
+          ? [
+              prompt,
+              'Revise the previous staged draft.',
+              'Keep the validated parts when possible, but fix any failed validations and improve the preview clarity.',
+              ...reviseMessage.draftRun.steps
+                .filter((step) => step.errors.length > 0)
+                .map((step) => `${step.title}: ${step.errors.join(' ')}`)
+            ].join('\n')
+          : prompt;
+      const plan = await requestPlan(revisedPrompt);
+      const draftRun = await buildDraftFromPlan(
+        plan,
+        (item) => {
           collectedActivity.push(item);
           updateAssistantMessage(chatId, assistantMessageId, (message) => ({
             ...message,
             activity: [...(message.activity ?? []), item]
           }));
+        },
+        (entry) => {
+          collectedDraftValidations.push(entry);
           void persistAssistantTrace({
             ...baseTrace,
             activity: [...collectedActivity],
             network: [...collectedNetwork],
             responses: [...collectedResponses],
-            sandboxExecutions: [...collectedSandboxExecutions]
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
           });
         }
-      });
+      );
       updateAssistantMessage(chatId, assistantMessageId, (message) => ({
         ...message,
-        content: plan.userMessage || plan.summary,
+        content:
+          draftRun.hasFailures
+            ? 'Draft ready. Some steps failed validation, so nothing was applied.'
+            : plan.userMessage || plan.summary,
         plan,
-        status: 'ready'
+        draftRun,
+        error: draftRun.hasFailures ? 'One or more draft steps failed validation. Revise or reject the draft.' : undefined,
+        status: draftRun.hasFailures ? 'error' : 'ready'
       }));
       void persistAssistantTrace({
         ...baseTrace,
@@ -1955,12 +1913,14 @@ function App() {
         network: [...collectedNetwork],
         responses: [...collectedResponses],
         sandboxExecutions: [...collectedSandboxExecutions],
-        status: 'completed',
+        draftValidations: [...collectedDraftValidations],
+        status: draftRun.hasFailures ? 'error' : 'completed',
+        error: draftRun.hasFailures ? 'Draft validation failed.' : undefined,
         finishedAt: new Date().toISOString(),
         durationMs: Date.now() - Date.parse(timestamp),
         result: {
           summary: plan.summary,
-          warningCount: plan.warnings.length,
+          warningCount: plan.warnings.length + draftRun.steps.reduce((sum, step) => sum + step.errors.length, 0),
           operationCount: plan.operations.length
         }
       });
@@ -1981,6 +1941,7 @@ function App() {
           network: [...collectedNetwork],
           responses: [...collectedResponses],
           sandboxExecutions: [...collectedSandboxExecutions],
+          draftValidations: [...collectedDraftValidations],
           status: 'stopped',
           finishedAt: new Date().toISOString(),
           durationMs: Date.now() - Date.parse(timestamp)
@@ -2000,6 +1961,7 @@ function App() {
           network: [...collectedNetwork],
           responses: [...collectedResponses],
           sandboxExecutions: [...collectedSandboxExecutions],
+          draftValidations: [...collectedDraftValidations],
           status: 'error',
           error: message,
           finishedAt: new Date().toISOString(),
@@ -2016,13 +1978,11 @@ function App() {
     assistantAbortRef.current?.abort();
   };
 
-  const applyAssistantPlan = async (messageId: string, plan: AssistantPlan, runAfterApply = false) => {
-    const snapshot = captureAssistantSnapshot();
-    const newCellIds: string[] = [];
-    let nextCells = [...cells];
-    let nextTrigMode = trigMode;
-    let nextRenderMode = defaultMathRenderMode;
-    let nextActiveCellId = activeCellId;
+  const applyAcceptedDraft = async (stepsToApply: AssistantDraftStep[]) => {
+    let nextCells = [...cellsRef.current];
+    let nextTrigMode = trigModeRef.current;
+    let nextRenderMode = renderModeRef.current;
+    let nextActiveCellId = activeCellIdRef.current;
 
     const makeStoichCell = (source: string, indexSeed?: number) => {
       const cell = createCell('stoich', '', indexSeed);
@@ -2039,115 +1999,162 @@ function App() {
       return createCell(operation.cellType, operation.source, operation.index + 1);
     };
 
-    plan.operations.forEach((operation) => {
-      if (operation.type === 'insert_cell') {
-        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-        const nextCell = createFromOperation(operation);
-        nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
-        newCellIds.push(nextCell.id);
-        nextActiveCellId = nextCell.id;
-        return;
-      }
-      if (operation.type === 'update_cell') {
-        nextCells = nextCells.map((cell) => {
-          if (cell.id !== operation.cellId) return cell;
-          if (cell.type === 'stoich') {
+    stepsToApply.forEach((step) => {
+      step.operations.forEach((operation) => {
+        if (operation.type === 'insert_cell') {
+          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+          const nextCell = createFromOperation(operation);
+          nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
+          nextActiveCellId = nextCell.id;
+          return;
+        }
+        if (operation.type === 'update_cell') {
+          nextCells = nextCells.map((cell) => {
+            if (cell.id !== operation.cellId) return cell;
+            if (cell.type === 'stoich') {
+              return {
+                ...cell,
+                source: '',
+                stoichState: createStoichState(operation.source),
+                stoichOutput: undefined
+              };
+            }
             return {
               ...cell,
-              source: '',
-              stoichState: createStoichState(operation.source),
-              stoichOutput: undefined
+              source: operation.source,
+              output: undefined,
+              mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
+              stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput,
+              assistantMeta: undefined
             };
-          }
-          return {
-            ...cell,
-            source: operation.source,
-            output: undefined,
-            mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
-            stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput
-          };
-        });
-        nextActiveCellId = operation.cellId;
-        return;
-      }
-      if (operation.type === 'delete_cell') {
-        nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
-        if (nextActiveCellId === operation.cellId) {
-          nextActiveCellId = nextCells[0]?.id ?? null;
+          });
+          nextActiveCellId = operation.cellId;
+          return;
         }
-        return;
-      }
-      if (operation.type === 'move_cell') {
-        const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
-        if (index === -1) return;
-        const [cell] = nextCells.splice(index, 1);
-        const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-        nextCells.splice(bounded, 0, cell);
-        nextCells = [...nextCells];
-        nextActiveCellId = operation.cellId;
-        return;
-      }
-      if (operation.type === 'set_notebook_defaults') {
-        if (operation.trigMode) nextTrigMode = operation.trigMode;
-        if (operation.renderMode) nextRenderMode = operation.renderMode;
-      }
+        if (operation.type === 'delete_cell') {
+          nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
+          if (nextActiveCellId === operation.cellId) {
+            nextActiveCellId = nextCells[0]?.id ?? null;
+          }
+          return;
+        }
+        if (operation.type === 'move_cell') {
+          const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
+          if (index === -1) return;
+          const [cell] = nextCells.splice(index, 1);
+          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
+          nextCells.splice(bounded, 0, { ...cell, assistantMeta: undefined });
+          nextCells = [...nextCells];
+          nextActiveCellId = operation.cellId;
+          return;
+        }
+        if (operation.type === 'set_notebook_defaults') {
+          if (operation.trigMode) nextTrigMode = operation.trigMode;
+          if (operation.renderMode) nextRenderMode = operation.renderMode;
+        }
+      });
     });
 
-    setAssistantUndoStack((prev) => [...prev.slice(-9), snapshot]);
     setCells(nextCells);
     setTrigMode(nextTrigMode);
     setDefaultMathRenderMode(nextRenderMode);
     setActiveCellId(nextActiveCellId);
-    if (assistantActiveChatId) {
-      updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
-        ...message,
-        status: 'applied'
-      }));
-    }
-
-    if (runAfterApply) {
-      const runTargets = nextCells.filter(
-        (cell) =>
-          newCellIds.includes(cell.id) ||
-          plan.operations.some(
-            (operation) => operation.type === 'update_cell' && operation.cellId === cell.id
-          )
-      );
-      for (const cell of runTargets) {
-        if (cell.type === 'markdown') continue;
-        await runCellById(cell);
-      }
-    }
+    cellsRef.current = nextCells;
+    trigModeRef.current = nextTrigMode;
+    renderModeRef.current = nextRenderMode;
+    activeCellIdRef.current = nextActiveCellId;
   };
 
-  const undoAssistantPlan = () => {
-    const snapshot = assistantUndoStack[assistantUndoStack.length - 1];
-    if (!snapshot) return;
-    restoreAssistantSnapshot(snapshot);
-    setAssistantUndoStack((prev) => prev.slice(0, -1));
-  };
-
-  const dismissAssistantPlan = (messageId: string) => {
+  const rejectAssistantDraft = (messageId: string) => {
     if (!assistantActiveChatId) return;
     updateAssistantMessage(assistantActiveChatId, messageId, (message) => ({
       ...message,
-      status: 'dismissed'
+      content: 'Draft rejected. Notebook unchanged.',
+      plan: null,
+      draftRun: null,
+      status: 'ready',
+      error: undefined
     }));
   };
 
-  useEffect(() => {
-    const bootstrap = async () => {
-      if (!activeKernel || bootstrapLoaded) return;
-      if (!assistantBootstrapCode) return;
-      try {
-        await runCell(`bootstrap-${Date.now()}`, assistantBootstrapCode, false, false);
-      } catch (_error) {
-        return;
+  const acceptAssistantSteps = async (messageId: string, stepIds?: string[]) => {
+    if (!assistantActiveChatId) return;
+    const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+    if (!message?.plan || !message.draftRun) return;
+    const acceptedSteps = message.draftRun.steps.filter(
+      (step) =>
+        (stepIds ? stepIds.includes(step.id) : true) &&
+        step.errors.length === 0
+    );
+    if (acceptedSteps.length === 0) {
+      updateAssistantMessage(assistantActiveChatId, messageId, (entry) => ({
+        ...entry,
+        status: 'error',
+        error: 'Nothing to accept. Revise or reject the failed draft first.'
+      }));
+      return;
+    }
+    await applyAcceptedDraft(acceptedSteps);
+    updateAssistantMessage(assistantActiveChatId, messageId, (entry) => {
+      if (!entry.draftRun) {
+        return {
+          ...entry,
+          status: 'applied'
+        };
       }
-      setBootstrapLoaded(true);
-    };
-    bootstrap().catch(() => undefined);
-  }, [activeKernel, bootstrapLoaded, assistantBootstrapCode]);
+      const remainingSteps = entry.draftRun.steps.filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id));
+      return {
+        ...entry,
+        content:
+          remainingSteps.length > 0
+            ? 'Accepted the selected draft step. The remaining staged draft stays in chat.'
+            : 'Accepted the validated draft.',
+        status: remainingSteps.length > 0 ? 'ready' : 'applied',
+        draftRun:
+          remainingSteps.length > 0
+            ? {
+                ...entry.draftRun,
+                hasFailures: remainingSteps.some((step) => step.errors.length > 0),
+                steps: remainingSteps
+              }
+            : null,
+        plan:
+          remainingSteps.length > 0
+            ? {
+                ...entry.plan!,
+                steps: entry.plan!.steps.filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id)),
+                operations: entry.plan!.steps
+                  .filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id))
+                  .flatMap((step) => step.operations),
+                outline: {
+                  ...entry.plan!.outline,
+                  steps: entry.plan!.steps
+                    .filter((step) => !acceptedSteps.some((accepted) => accepted.id === step.id))
+                    .map((step) => step.summary)
+                }
+              }
+            : null,
+        error: undefined
+      };
+    });
+  };
+
+  const reviseAssistantDraft = async (messageId: string) => {
+    if (!assistantActiveChatId) return;
+    const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
+    const fallbackPrompt =
+      message?.requestPrompt ||
+      activeAssistantChat?.messages
+        .slice()
+        .reverse()
+        .find((entry) => entry.role === 'user')?.content ||
+      '';
+    if (!fallbackPrompt) {
+      setAssistantError('Could not find the original request for this draft.');
+      return;
+    }
+    await runAssistant(fallbackPrompt, { chatId: assistantActiveChatId, reviseFromMessageId: messageId });
+  };
 
   useEffect(() => {
     if (!hydrated.current) return;
@@ -2280,18 +2287,7 @@ function App() {
   };
 
   const handleSaveToServer = async () => {
-    const name = notebookName.trim() || 'Untitled';
-    const filename = name.endsWith('.ipynb') ? name : `${name}.ipynb`;
-    const path = filename.includes('/') ? filename : `notebooks/${filename}`;
-    const { baseUrl, wsUrl } = resolveServerConfig(serverUrl);
-    const settings = ServerConnection.makeSettings({
-      baseUrl,
-      token,
-      wsUrl,
-      appendToken: true
-    });
-    const contents = new ContentsManager({ serverSettings: settings });
-    const payload = serializeIpynb({
+    const payload = serializeSugarPy({
       id: notebookId,
       name: notebookName,
       trigMode,
@@ -2299,11 +2295,7 @@ function App() {
       cells
     });
     try {
-      await contents.save(path, {
-        type: 'notebook',
-        format: 'json',
-        content: payload
-      });
+      await saveNotebookDocument(payload as unknown as Record<string, unknown>);
       await saveServerAutosave({
         id: notebookId,
         name: notebookName,
@@ -2323,11 +2315,6 @@ function App() {
 
   const handleImportClick = () => {
     fileInputRef.current?.click();
-  };
-
-  const handleClearOutputs = () => {
-    setCells((prev) => prev.map(clearRuntimeStateFromCell));
-    setHeaderMenuOpen(false);
   };
 
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2407,41 +2394,47 @@ function App() {
     }, 50);
   };
 
-  const mobileActionCellId = mobileEditorCellId ?? activeCellId;
-  const mobileActionCell = cells.find((cell) => cell.id === mobileActionCellId) ?? null;
-  const showMobileActionBar = mobileActionsEligible && mobileKeyboardOpen && !!mobileActionCell;
-
-  const runCellById = async (cell: CellModel) => {
-    if (cell.type === 'markdown') return;
-    if (cell.type === 'math') {
-      await runMathCell(
-        cell.id,
-        cell.source,
-        cell.mathRenderMode ?? defaultMathRenderMode,
-        cell.mathTrigMode ?? trigMode
-      );
-      return;
-    }
-    if (cell.type === 'stoich') {
-      await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
-      return;
-    }
-    await runCell(cell.id, cell.source);
-  };
-
   return (
     <ErrorBoundary>
-      <div className={`app${mobileActionsEligible ? ' mobile-actions-mode' : ''}`}>
+      <div className={`app${touchUiEnabled ? ' touch-ui' : ''}`}>
         <header className="app-header">
-          <div className="header-left">
-            <input
-              className="file-name-input"
-              value={notebookName}
-              onChange={(e) => setNotebookName(e.target.value)}
-              placeholder="Notebook name"
-            />
+          <div className="header-main">
+            <div className="header-left">
+              <input
+                className="file-name-input"
+                value={notebookName}
+                onChange={(e) => setNotebookName(e.target.value)}
+                placeholder="Notebook name"
+              />
+            </div>
+            <div className={`conn-pill status-${status}`}>
+              <span className={`conn-dot ${status}`} />
+              {status === 'connected'
+                ? 'Connected'
+                : status === 'connecting'
+                  ? statusDetail || 'Initializing environment...'
+                  : status}
+            </div>
           </div>
           <div className="header-right">
+            <div className="header-menu-wrap" ref={addCellMenuRef}>
+              <button
+                className="menu-button"
+                data-testid="add-cell-button"
+                onClick={() => setAddCellMenuOpen((prev) => !prev)}
+                aria-label="Add cell below selected"
+              >
+                ＋
+              </button>
+              {addCellMenuOpen ? (
+                <div className="header-menu add-cell-menu">
+                  <div className="menu-section-label">Add below selected</div>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('code')}>Code cell</button>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('markdown')}>Text cell</button>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('math')}>Math cell</button>
+                </div>
+              ) : null}
+            </div>
             <button className="button" onClick={runAllCells} disabled={isRunningAll || status === 'connecting'}>
               {isRunningAll ? 'Running…' : 'Run All'}
             </button>
@@ -2459,14 +2452,6 @@ function App() {
             >
               Assistant
             </button>
-            <div className={`conn-pill status-${status}`}>
-              <span className={`conn-dot ${status}`} />
-              {status === 'connected'
-                ? 'Connected'
-                : status === 'connecting'
-                  ? statusDetail || 'Initializing environment...'
-                  : status}
-            </div>
             <div className="header-menu-wrap" ref={headerMenuRef}>
               <button
                 className="menu-button"
@@ -2483,11 +2468,8 @@ function App() {
                     {dirty ? ' · editing…' : ''}
                     {syncMessage ? ` · ${syncMessage}` : ''}
                   </div>
-                  <button className="menu-item" onClick={connectKernel}>
-                    {activeKernel ? 'Kernel Connected' : 'Connect to Kernel'}
-                  </button>
-                  <button className="menu-item" onClick={handleClearOutputs}>
-                    Clear Outputs
+                  <button className="menu-item" onClick={connectBackend}>
+                    {activeKernel ? 'Restricted Runtime Ready' : 'Reconnect Backend'}
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}
@@ -2500,28 +2482,6 @@ function App() {
                   >
                     Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
-                  <button
-                    className="menu-item"
-                    onClick={() => setConfigureConnection((prev) => !prev)}
-                  >
-                    {configureConnection ? 'Hide Connection Settings' : 'Configure Connection'}
-                  </button>
-                  {configureConnection ? (
-                    <div className="menu-connection-form">
-                      <input
-                        className="input"
-                        value={serverUrl}
-                        onChange={(e) => setServerUrl(e.target.value)}
-                        placeholder="Server URL"
-                      />
-                      <input
-                        className="input"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        placeholder="Token"
-                      />
-                    </div>
-                  ) : null}
                   <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
@@ -2543,43 +2503,38 @@ function App() {
           {status === 'error' ? (
             <div className="output">
               {errorMsg}
-              {'\n'}
-              Check that Jupyter Server is running on {serverUrl} and the token is correct.
             </div>
           ) : null}
 
-          <div className="notebook-stack">
+          <div className="notebook-stack" ref={notebookStackRef}>
             {cells.length === 0 ? (
               <div className="cell-empty">
-                <div className="cell-empty-title">This notebook is empty.</div>
-                <div className="divider-menu open">
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'code')}>Code</button>
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'markdown')}>Text</button>
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'math')}>Math</button>
-                </div>
+                <div className="cell-empty-title">Start with a cell.</div>
+                <button className="button" onClick={() => insertCellAt(0, 'code')}>Add code cell</button>
               </div>
             ) : null}
             {cells.length > 0 ? (
               <>
                 {Array.from({ length: cells.length + 1 }).map((_, index) => (
-                  <React.Fragment key={`slot-${index}`}>
-                    <div
-                      className="cell-divider"
-                      data-testid={`cell-divider-${index}`}
-                    >
-                      <div className="cell-divider-line" />
-                      <div className="divider-menu" role="menu" aria-label="Insert cell type">
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                  <React.Fragment key={`cell-slot-${index}`}>
+                    {!touchUiEnabled && cells.length > 0 ? (
+                      <div className="cell-divider" data-testid={`cell-divider-${index}`}>
+                        <div className="cell-divider-line" />
+                        <div className="divider-menu" role="menu" aria-label="Insert cell type">
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                     {index < cells.length ? (
                       <NotebookCell
                         key={cells[index].id}
                         cell={cells[index]}
                         isActive={cells[index].id === activeCellId}
                         onActivate={() => setActiveCellId(cells[index].id)}
+                        onAddAbove={() => insertSiblingCell(cells[index].id, 'above')}
+                        onAddBelow={() => insertSiblingCell(cells[index].id, 'below')}
                         onChange={(value) => updateCell(cells[index].id, value)}
                         onRun={(value) => runCell(cells[index].id, value)}
                         onRunMath={(value) =>
@@ -2595,25 +2550,27 @@ function App() {
                         onMoveUp={() => setCells((prev) => moveCellUp(prev, cells[index].id))}
                         onMoveDown={() => setCells((prev) => moveCellDown(prev, cells[index].id))}
                         onDelete={() => setCells((prev) => deleteCell(prev, cells[index].id))}
+                        onToggleOutput={() => toggleCellOutputCollapsed(cells[index].id)}
+                        onClearOutput={() => clearCellOutput(cells[index].id)}
+                        onToggleMathView={() => toggleMathView(cells[index].id)}
+                        onShowMathRendered={() => showMathRenderedView(cells[index].id)}
                         suggestions={codeSuggestions}
                         slashCommands={slashCommands}
                         onSlashCommand={(command) => handleSlashCommand(cells[index].id, command)}
                         mathSuggestions={mathSuggestions}
                         trigMode={trigMode}
                         kernelReady={!!activeKernel}
-                        onSetMathRenderMode={(mode) =>
-                          {
-                            setCells((prev) =>
-                              prev.map((cell) =>
-                                cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
-                              )
-                            );
-                          }
-                        }
+                        onSetMathRenderMode={(mode) => {
+                          setCells((prev) =>
+                            prev.map((entry) =>
+                              entry.id === cells[index].id ? { ...entry, mathRenderMode: mode } : entry
+                            )
+                          );
+                        }}
                         onSetMathTrigMode={(mode) => {
                           setCells((prev) =>
-                            prev.map((cell) =>
-                              cell.id === cells[index].id ? { ...cell, mathTrigMode: mode } : cell
+                            prev.map((entry) =>
+                              entry.id === cells[index].id ? { ...entry, mathTrigMode: mode } : entry
                             )
                           );
                           if (cells[index].source.trim()) {
@@ -2641,102 +2598,11 @@ function App() {
             className="file-input"
           />
         </main>
-        {showMobileActionBar && mobileActionCell ? (
-          <div
-            className="mobile-cell-actions"
-            role="toolbar"
-            aria-label="Cell actions mobile"
-            style={{ top: `${Math.max(56, mobileVisualTop + mobileVisualHeight - 8)}px` }}
-          >
-            <button
-              type="button"
-              className="mobile-cell-action-btn primary"
-              onClick={() => {
-                runCellById(mobileActionCell).catch(() => undefined);
-              }}
-              disabled={mobileActionCell.type === 'markdown'}
-            >
-              Run
-            </button>
-            {mobileActionCell.type === 'math' ? (
-              <button
-                type="button"
-                className="mobile-cell-action-btn"
-                onClick={() =>
-                  {
-                    const currentMode = mobileActionCell.mathRenderMode ?? defaultMathRenderMode;
-                    const nextMode = currentMode === 'decimal' ? 'exact' : 'decimal';
-                    setCells((prev) =>
-                      prev.map((cell) =>
-                        cell.id === mobileActionCell.id ? { ...cell, mathRenderMode: nextMode } : cell
-                      )
-                    );
-                  }
-                }
-              >
-                {(mobileActionCell.mathRenderMode ?? defaultMathRenderMode) === 'decimal' ? 'Decimal' : 'Exact'}
-              </button>
-            ) : null}
-            {mobileActionCell.type === 'math' ? (
-              <button
-                type="button"
-                className="mobile-cell-action-btn"
-                onClick={() => {
-                  const nextMode = (mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'rad' : 'deg';
-                  setCells((prev) =>
-                    prev.map((cell) =>
-                      cell.id === mobileActionCell.id ? { ...cell, mathTrigMode: nextMode } : cell
-                    )
-                  );
-                  if (mobileActionCell.source.trim()) {
-                    void runMathCell(
-                      mobileActionCell.id,
-                      mobileActionCell.source,
-                      mobileActionCell.mathRenderMode ?? defaultMathRenderMode,
-                      nextMode,
-                      true
-                    );
-                  }
-                }}
-              >
-                {(mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'Deg' : 'Rad'}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="mobile-cell-action-btn"
-              onClick={() => setCells((prev) => moveCellUp(prev, mobileActionCell.id))}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="mobile-cell-action-btn"
-              onClick={() => setCells((prev) => moveCellDown(prev, mobileActionCell.id))}
-            >
-              ↓
-            </button>
-            <button
-              type="button"
-              className="mobile-cell-action-btn danger"
-              onClick={() => {
-                setCells((prev) => deleteCell(prev, mobileActionCell.id));
-                setMobileEditorCellId(null);
-                setMobileKeyboardOpen(false);
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        ) : null}
         <div ref={assistantDrawerRef}>
           <AssistantDrawer
             open={assistantOpen}
             apiKey={assistantApiKey}
-            hasDefaultApiKey={
-              matchesAssistantProvider(assistantDefaultApiKey, assistantModel) ||
-              assistantServerProviders[detectAssistantProvider(assistantModel)]
-            }
+            hasDefaultApiKey={false}
             model={assistantModel}
             thinkingLevel={assistantThinkingLevel}
             draft={assistantDraft}
@@ -2744,7 +2610,6 @@ function App() {
             error={assistantError}
             chats={assistantChats}
             activeChatId={assistantActiveChatId}
-            canUndo={assistantUndoStack.length > 0}
             settingsOpen={assistantSettingsOpen}
             onClose={() => setAssistantOpen(false)}
             onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
@@ -2756,18 +2621,16 @@ function App() {
               void runAssistant();
             }}
             onStop={stopAssistant}
-            onApply={(messageId) => {
-              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
-              if (!message?.plan || !assistantActiveChatId) return;
-              void applyAssistantPlan(messageId, message.plan, false);
+            onAcceptAll={(messageId) => {
+              void acceptAssistantSteps(messageId);
             }}
-            onApplyAndRun={(messageId) => {
-              const message = activeAssistantChat?.messages.find((entry) => entry.id === messageId);
-              if (!message?.plan || !assistantActiveChatId) return;
-              void applyAssistantPlan(messageId, message.plan, true);
+            onAcceptStep={(messageId, stepId) => {
+              void acceptAssistantSteps(messageId, [stepId]);
             }}
-            onDismiss={dismissAssistantPlan}
-            onUndo={undoAssistantPlan}
+            onReject={rejectAssistantDraft}
+            onRevise={(messageId) => {
+              void reviseAssistantDraft(messageId);
+            }}
             onSelectChat={setAssistantActiveChatId}
             onNewChat={() => {
               createNewAssistantChat();

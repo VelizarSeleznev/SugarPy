@@ -12,21 +12,29 @@
 What it does:
 - Syncs Python deps with `uv` into `.venv`.
 - Syncs user functions.
-- Starts Jupyter Server on `http://localhost:8888`.
-- Starts Vite dev server for the UI (`http://localhost:5173`).
+- Starts the restricted SugarPy backend on `http://localhost:8888`.
+- Starts Vite dev server for the UI (`http://localhost:5173`) with a `/api` proxy to the backend.
 
 Optional assistant env vars:
 ```bash
 VITE_ASSISTANT_API_KEY=... \
-VITE_ASSISTANT_MODEL=gpt-5.1-codex-mini \
+VITE_ASSISTANT_MODEL=gpt-5-mini \
 ./scripts/run-all.sh
 ```
+
+Do not commit `web/.env.local`. It is intended only for local untracked overrides.
 
 If those env vars are not set, the assistant can still be configured from the in-app
 assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
 - The assistant uses a chat-style drawer with a bottom composer.
+- The default assistant flow is now staged and teaching-first.
+  - The assistant first inspects the notebook and builds a structured plan.
+  - It then generates a draft preview with per-step validation results in the drawer.
+  - The live notebook, autosave state, and export payload stay unchanged until `Accept all` or `Accept step`.
+  - `Reject draft` discards the staged draft without resetting the chat.
+  - The main preview is human-readable: `Plan`, `Draft`, `Validation`, and `Changes`.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The available `Thinking level` values are filtered by model family:
@@ -38,25 +46,26 @@ Assistant UX notes:
 - The default visible workflow is whole-notebook + auto mode; advanced scope/preference selectors are no longer shown in the main UI.
 - Up to 5 recent chats are stored locally per notebook.
 - A new notebook starts with a fresh assistant chat history.
-- Assistant runs are persisted as JSON traces on the Jupyter contents side at:
-  `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`
-- Those traces are intended for debugging stuck or failed assistant requests and include per-attempt HTTP telemetry, compact summaries of successful model responses, and compact summaries of any isolated sandbox executions.
+- Assistant traces are now backend-owned and disabled by default in restricted deployments.
+- When enabled, traces are persisted outside the public web root and are redacted before writing.
 - On the OpenAI path, the assistant consumes streaming Responses API events, refreshes the request timeout when new stream activity arrives, and stores stream-stage hints in trace/network telemetry so timeouts report the last observed stream event or activity instead of only a generic timeout.
 - On the OpenAI path, final plan submission now prefers a `submit_plan` function call instead of depending only on a strict JSON text response.
 - For direct geometry tasks such as finding circles from concrete points and a radius, the assistant is biased toward short Math-cell CAS workflows: write the point equations directly, call `solve(...)`, and derive the final circle equations from the returned centers instead of generating Python-heavy scaffolding.
 - In `auto` mode, math requests are treated as Math-cell/CAS tasks by default. The assistant should stay out of Code cells unless the user explicitly asks for Python or SugarPy CAS clearly cannot express the task.
 - For math/geometry/plotting requests, the assistant now inspects SugarPy references first, especially `math_cells` and `plotting`, before planning edits. Code is treated as a last-resort fallback after documented Math-cell workflows are considered.
+- For teaching/demo Math requests, the assistant is constrained to a documented Math-cell subset from `docs/MATH_CELL_SPEC.md` instead of free-form SymPy-like helper invention.
 - If a math request still produces a draft plan with Code cells, the assistant now retries planning with a stricter Math-cell-only constraint before showing the preview.
 - For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
-  - Validation uses a fresh temporary Jupyter kernel, not the live notebook kernel.
-  - The default validation mode is `bootstrap-only` with a hard 5-second timeout.
-  - Available context presets are `none`, `bootstrap-only`, `imports-only`, `selected-cells`, and `full-notebook-replay`.
-  - Validation is Python/code-cell only in v1. Math and Stoich edits still rely on preview plus normal notebook execution.
-  - A sandbox timeout or runtime error is returned to the model as structured output so it can revise the draft or warn explicitly.
+- Runnable assistant draft steps are validated before acceptance.
+  - Validation uses a fresh backend-owned temporary kernel, not a browser-managed live kernel.
+  - Python code uses the existing sandbox presets.
+  - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are accepted.
+  - If a new Math step depends on earlier runnable cells, the validator replays those earlier Code/Math cells inside the temporary kernel first.
+  - A sandbox timeout or runtime error is surfaced in the preview and blocks acceptance for that step.
 
-Runtime server config without exposing secrets to the browser:
-- SugarPy now supports a Jupyter-side assistant proxy for shared server keys.
+Runtime server config for restricted deployments:
+- SugarPy now supports a backend-side assistant proxy for shared server keys.
 - Preferred server env vars:
   ```bash
   SUGARPY_ASSISTANT_OPENAI_API_KEY=...
@@ -64,44 +73,66 @@ Runtime server config without exposing secrets to the browser:
   SUGARPY_ASSISTANT_MODEL=gpt-5.1-codex-mini
   ```
 - Non-root fallback: the Jupyter extension also reads `~/.config/sugarpy/assistant.env` for the same keys.
-- When one of those keys is present, the frontend auto-detects the shared provider and sends assistant model calls through the Jupyter proxy instead of sending the key to the browser.
-- The settings API-key field remains a user override. If a user pastes their own key, direct browser-to-provider calls are used for that session.
-- Legacy fallback: `notebooks/sugarpy-assistant-config.json` is still supported for local/dev setups, but it is not appropriate for a public deployment because anyone with Jupyter contents access can read it.
+- Store shared assistant keys only in server-owned env files such as `/etc/sugarpy/assistant.env`.
+- When one of those keys is present, the frontend auto-detects the shared provider and sends assistant model calls through the backend proxy instead of sending the key to the browser.
+- The browser must never read keys from `notebooks/` or any public contents path.
+- The settings API-key input is treated as a user override for local/dev use only.
 
 Recommended assistant models:
-- `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.
-- `gpt-5-mini`: smaller GPT-5 option.
+- `gpt-5-mini`: default OpenAI path for notebook editing.
+- `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
 - `gpt-5-nano`: cheapest GPT-5 option.
 - `gemini-3.1-flash-lite-preview`: Gemini fallback when you want the Google path.
+- `moonshotai/kimi-k2-instruct-0905`: experimental Groq OpenAI-compatible path for live comparison, not the default flow.
 
 Assistant regression checks:
 - Browser regression coverage lives in `web/e2e/notebook.spec.ts`.
+- Live assistant regression scenarios live in `web/e2e/assistant.live.spec.ts`.
 - The targeted assistant suite can be run with:
   ```bash
   cd web && npx playwright test e2e/notebook.spec.ts --grep "Assistant"
   ```
-- This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the preview/apply assistant flow.
-- It also covers isolated assistant sandbox validation, timeout/error reporting, and replay presets such as `imports-only` and `selected-cells`.
+- The live-model assistant suite can be run with:
+  ```bash
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- Optional live assistant env vars:
+  ```bash
+  ASSISTANT_LIVE_API_KEY=... \
+  ASSISTANT_LIVE_MODELS=gpt-5-mini,gpt-5.1-codex-mini,gemini-3.1-flash-lite-preview,moonshotai/kimi-k2-instruct-0905 \
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- Provider-specific live keys are also supported:
+  ```bash
+  ASSISTANT_LIVE_OPENAI_API_KEY=... \
+  ASSISTANT_LIVE_GEMINI_API_KEY=... \
+  ASSISTANT_LIVE_GROQ_API_KEY=... \
+  ASSISTANT_LIVE_MODELS=gpt-5-mini,gpt-5.1-codex-mini,gemini-3.1-flash-lite-preview,moonshotai/kimi-k2-instruct-0905 \
+  ASSISTANT_LIVE=1 ./scripts/assistant-live-check.sh
+  ```
+- If `ASSISTANT_LIVE_API_KEY` is omitted, the suite uses the shared runtime key/config already available to the app.
+- If `ASSISTANT_LIVE_API_KEY` is set, it overrides the provider-specific live-key env vars.
+- This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the staged preview plus accept/reject flow.
+- It also covers isolated assistant sandbox validation, timeout/error reporting, replay presets such as `imports-only` and `selected-cells`, reject-without-mutation checks, and partial `Accept step` behavior when a draft contains multiple validated steps.
 
 ## Notebook persistence (autosave + recovery)
 - The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.
 - Local autosave stores notebook structure and cell source/state, but skips heavy runtime outputs so large plots do not exhaust browser storage.
 - SugarPy keeps only the current local notebook snapshot; older local notebook autosaves are pruned automatically.
-- The UI also writes a server autosave (`.sugarpy`) to:
-  `notebooks/sugarpy-autosave/<notebook-id>.sugarpy`
+- The UI also writes a backend-owned server autosave (`.sugarpy`) outside the public web root.
 - On startup, SugarPy restores the newest version between local autosave and server autosave.
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
-- Manual **Save to Server** still writes an `.ipynb` file under `notebooks/` and also refreshes server autosave.
+- Manual **Save to Server** now writes the normalized SugarPy notebook document through the backend API and refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
 - The `⋮` menu also includes `Clear Outputs`, which removes current code/math/stoich runtime results without deleting cells or notebook content.
 - The optional AI assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
-- New cells are created from the single bottom `+ Add Cell` control.
+- New cells are created from the header `+` control and are inserted below the currently selected cell.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).
-- On phone portrait touch devices, cell actions move to a fixed action bar above the virtual keyboard while editing.
+- The same compact selected-cell action bar is used across desktop and touch layouts.
 
 ## Open the standalone wiki page
 - Open `http://localhost:5173/wiki`
@@ -172,7 +203,7 @@ After deploy:
 - Confirm the frontend is reachable from `http://127.0.0.1:18081/` on the server.
 - Confirm Jupyter health from `http://127.0.0.1:18081/jupyter/api/status?token=sugarpy`.
 - Confirm the public Cloudflare URL is reachable and report `https://sugarpy.tech/`.
-- Keep in mind that `/jupyter/` is currently public behind the same origin and uses a shared demo token.
+- The public edge serves only `/` and `/api/*`; `/jupyter/` remains internal-only behind the backend runtime.
 - Deploys now build into `/opt/sugarpy/releases/<sha>` and then atomically switch `/opt/sugarpy/current`.
 
 ## Start backend only
@@ -188,7 +219,8 @@ After deploy:
 What it covers:
 - Frontend install/build/audit.
 - Backend pytest suite (`tests/backend/`).
-- Playwright E2E suite (`web/e2e/`) including smoke checks.
+- Playwright E2E suite (`web/e2e/`) excluding assistant-heavy scenarios by default.
+- Set `SUGARPY_INCLUDE_ASSISTANT_E2E=1` to include assistant browser scenarios in the same run.
 - Testing standards and maintenance rules are defined in `docs/TESTING_PRINCIPLES.md`.
 
 ## Manual visual QA (Pinchtab)

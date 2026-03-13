@@ -71,6 +71,7 @@ Required completion rules:
 - The real run must exercise the changed assistant path with a live model response, not mocked network fixtures.
 - Do not treat build success, mocked Playwright success, or trace-shape checks as proof that live assistant behavior works.
 - Report the result of the live run separately from mocked test results.
+- Prefer the dedicated live-regression scenarios in `web/e2e/assistant.live.spec.ts` for repeatable assistant checks across models and prompts.
 
 If the live run fails:
 - Inspect the latest assistant trace and identify the actual failure stage.

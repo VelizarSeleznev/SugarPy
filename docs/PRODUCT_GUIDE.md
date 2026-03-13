@@ -176,7 +176,8 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - The assistant is optional and opened from the header `Assistant` button.
 - It uses a chat-style drawer with a composer at the bottom.
 - It drafts notebook edits from a plain-language request.
-- It shows a preview before anything is applied.
+- It shows a short outline first and then builds a staged draft preview instead of mutating the live notebook immediately.
+- For Math-heavy requests, it is constrained to a documented teaching-oriented Math-cell subset instead of free-form SymPy-like guessing.
 - The main chat UI keeps only the core controls visible.
 - Assistant settings are collapsed under `Settings`.
 - The main assistant flow now defaults to whole-notebook context and `Auto` output mode.
@@ -184,17 +185,18 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Creating a new notebook starts with a fresh assistant history.
 - Assistant runs are also traced for debugging.
 - It supports:
-  - `Apply`
-  - `Apply and Run`
-  - `Undo Last AI Change`
+  - `Accept all`
+  - `Accept step`
+  - `Reject draft`
+  - `Revise`
   - `Stop`
   - `New chat`
 
 ### Model integration
-- Assistant models run directly from the frontend via either the OpenAI Responses API or the Google Generative Language API.
+- Assistant models run directly from the frontend via OpenAI Responses, the Google Generative Language API, or an experimental Groq OpenAI-compatible path.
 - The UI stores assistant settings in browser `localStorage`.
 - The assistant drawer provides preset model choices and also allows a custom model id.
-- The model defaults to `gpt-5.1-codex-mini`.
+- The model defaults to `gpt-5-mini`.
 - Assistant settings also expose a `Thinking level` selector.
 - SugarPy now normalizes the available `thinkingLevel` options per model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
@@ -205,6 +207,9 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - The API key can be pasted into the assistant drawer.
 - If the connected Jupyter server has shared assistant env vars configured, the app auto-detects provider availability through the SugarPy assistant proxy and can use the shared key without exposing it in the drawer.
 - `SUGARPY_ASSISTANT_MODEL` can provide the default shared model from the server.
+- The drawer accepts OpenAI, Groq, or Gemini API-key overrides depending on the selected model/provider.
+- If `notebooks/sugarpy-assistant-config.json` exists on the connected Jupyter server, the app auto-loads `apiKey` and optional `model` from that runtime file.
+- A server-provided shared key is used implicitly and is not copied into the visible settings field.
 - The settings input acts as a user override key, not as a mirror of the shared server key.
 - Legacy local/dev fallback still supports `notebooks/sugarpy-assistant-config.json`, but that file should not be treated as secret storage on a public deployment.
 - Each assistant run is persisted as a JSON trace under `notebooks/sugarpy-assistant-traces/<notebook-id>/<trace-id>.json`.
@@ -212,10 +217,11 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - On the OpenAI Responses path, trace telemetry now also records stream progress hints so a timeout can say which stream event was last observed before the request stalled.
 - On the OpenAI path, final notebook planning now prefers a native function-call submission (`submit_plan`) instead of relying only on a strict JSON text response.
 - Recommended models:
-  - `gpt-5.1-codex-mini`: default OpenAI path for notebook editing.
-  - `gpt-5-mini`: smaller GPT-5 option.
+  - `gpt-5-mini`: default OpenAI path for notebook editing.
+  - `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
   - `gpt-5-nano`: cheapest GPT-5 option.
   - `gemini-3.1-flash-lite-preview`: Gemini fallback.
+  - `moonshotai/kimi-k2-instruct-0905`: experimental Groq comparison path, not a default replacement for the OpenAI-first flow.
 - Manual evaluation prompts live in `docs/LLM_EVAL.md`.
 - Browser-side assistant regression coverage lives in `web/e2e/notebook.spec.ts`.
 - The current regression suite covers:
@@ -223,11 +229,13 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
   - seeded whole-notebook manifest capture
   - `deg` notebook defaults flowing into planning
   - recent-error tool-output flow
-  - preview/apply-run assistant flow
+  - staged draft preview plus accept/reject flow
 
 ### Safety model
 - The assistant reads notebook context through a constrained inspection tool loop.
-- For Python code-cell drafts, the assistant may also run an isolated self-check in a temporary kernel before the preview is shown.
+- For runnable drafts, the assistant runs an isolated self-check in a temporary kernel before the step can be accepted.
+- Math-cell drafts use the same isolated path, but validation is performed with SugarPy `render_math_cell(...)` semantics.
+- When a staged Math step depends on earlier runnable cells, the isolated validator replays those earlier Code/Math cells inside the temporary kernel first.
 - The isolated self-check never mutates the live notebook and defaults to a 5-second `bootstrap-only` sandbox run.
 - Sandbox context is explicit rather than implicit. The supported presets are:
   - `none`
@@ -235,8 +243,8 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
   - `imports-only`
   - `selected-cells`
   - `full-notebook-replay`
-- It returns a structured change set instead of mutating notebook state directly.
-- The app applies the proposed operations locally and keeps an undo snapshot for rollback.
+- It returns a structured change set and validated draft artifacts before mutating notebook state.
+- The app applies accepted operations only after an explicit user action.
 - The assistant is instructed to prefer SugarPy-native, directly executable representations over mathematically equivalent but less compatible forms.
   Example: for geometry plotting, prefer implicit equations plus `plot(...)` over parametric helper functions unless the user explicitly asks for parametric form.
 - In the default `Auto` mode, the assistant now behaves CAS-first by default.
@@ -247,6 +255,7 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - The assistant is instructed to distinguish plain assignments like `f := x^2 + 1` from callable function definitions like `f(x) := x^2 + 1`.
 - Follow-up messages in the same chat reuse a compact conversation history so the assistant can refine the previous proposal instead of starting from zero each time.
 - While the assistant is working, the drawer shows live progress with inspection/tool activity plus a running `Thinking ... Ns` indicator even before the first tool result comes back.
+- Assistant-created cells are visibly marked while they are in draft, validating, applied, or failed state.
 - Validation activity also reports sandbox steps such as `Running isolated check`, `Replaying imports`, and `Timed out after 5s`.
 
 ## Persistence and recovery
@@ -274,13 +283,20 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 ## Mobile and touch behavior
 - Touch editing is supported.
 - On touch devices, cell actions can be exposed via swipe interactions.
-- On phone portrait with the keyboard open, a fixed mobile action bar appears for the active cell.
-- The mobile bar can include:
-  - Run
-  - Math mode toggles
-  - Move up
-  - Move down
-  - Delete
+- On touch tablets such as iPad, the inline cell toolbar and insert controls stay visible so move/delete/add actions do not depend on hover.
+- Notebook cells now share one compact document-style chrome with a left execution gutter and a single active-cell action bar.
+- New cells are inserted from the header-level add control below the currently selected cell instead of from large divider rows between cells.
+- Math cells keep their rendered presentation, but the rendered block can be collapsed back to compact source view to reduce vertical clutter.
+- The same selected-cell action bar is used on desktop and touch layouts so cell controls do not switch design language across devices.
+- On iPhone layouts, editable form fields must keep a minimum 16px input font and an iPhone-safe viewport policy so Safari focus does not auto-zoom the page.
+- When the selected-cell action bar floats on scroll, it must anchor below the visible header chrome so it never slides under the notebook title/actions rows.
+
+## Notebook UI design guidelines
+- Prefer a document-like notebook flow over separate card-like widgets.
+- Keep common cell actions icon-first and compact; avoid repeated text labels for the same action.
+- Avoid spending permanent vertical space on controls that can live in hover, selection, or compact overlay chrome.
+- Use one shared interaction language across code, text, and math cells; special cell types may change content rendering, not the surrounding chrome vocabulary.
+- When a cell loses focus, prefer a readable presentation state (formatted text, rendered math, collapsed output) over leaving raw editors open by default.
 
 ## Wiki page
 - `/wiki` is a static reference page with no kernel dependency.
@@ -385,23 +401,21 @@ Each change set should contain:
 1. User writes a plain-language request.
 2. Model reads notebook summary and relevant cells.
 3. Model produces structured operations.
-4. UI renders a preview:
-   - cells to add
-   - cells to edit
-   - cells to delete or move
+4. UI renders a staged preview with:
+   - `Plan`
+   - `Draft`
+   - `Validation`
+   - `Changes`
 5. User chooses:
-   - `Apply`
-   - `Apply and Run`
-   - `Discard`
-6. The applied change set is pushed onto an undo stack.
+   - `Accept all`
+   - `Accept step`
+   - `Reject draft`
+   - `Revise`
+6. Only accepted steps are applied to the live notebook.
 
 #### Undo / rollback
-- Keep a full notebook snapshot before apply.
-- Also keep the structured change set.
-- Support:
-  - one-click `Undo AI change`
-  - session-level `History`
-  - diff-like preview between pre-change and post-change notebook states
+- The primary safety mechanism is staged acceptance before notebook mutation.
+- Secondary rollback can still exist for already accepted edits, but it is not the main protection model.
 
 This is the minimum needed so users do not feel that AI can quietly ruin a worksheet.
 
@@ -425,15 +439,12 @@ If validation fails:
 #### Minimal first version
 - Right-side assistant drawer.
 - Input box for natural-language requests.
-- Context chips:
-  - `Whole notebook`
-  - `Selected cell`
-  - `Selection + neighbors`
-- Preview panel listing proposed changes.
+- Preview panel with `Plan`, `Draft`, `Validation`, and `Changes`.
 - Buttons:
-  - `Apply`
-  - `Apply and Run`
-  - `Undo`
+  - `Accept all`
+  - `Accept step`
+  - `Reject draft`
+  - `Revise`
 
 #### Important anti-annoyance details
 - No auto-popup on first load.

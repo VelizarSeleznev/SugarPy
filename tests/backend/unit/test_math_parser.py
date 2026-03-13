@@ -1,64 +1,59 @@
 import pytest
+import sympy as sp
 
 from sugarpy.math_parser import MathParseError, parse_math_input, parse_sympy_expression
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 def test_power_is_normalized_to_python_operator():
     parsed = parse_math_input("x^2")
     assert parsed.normalized_source == "x**2"
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 def test_implicit_multiplication_normalized_for_symbol_term():
     parsed = parse_math_input("2x")
     assert parsed.normalized_source == "2*x"
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 def test_implicit_multiplication_normalized_for_parentheses():
     parsed = parse_math_input("(x+1)(x-1)")
     assert parsed.normalized_source == "(x+1)*(x-1)"
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
-def test_equation_becomes_explicit_eq_expression():
+def test_equation_keeps_natural_normalized_source():
     parsed = parse_math_input("x = 2")
     assert parsed.kind == "equation"
-    assert parsed.normalized_source == "Eq(x, 2)"
+    assert parsed.lhs_source == "x"
+    assert parsed.rhs_source == "2"
+    assert parsed.normalized_source == "x = 2"
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 def test_assignment_detected_for_colon_equals():
     parsed = parse_math_input("a := 5")
     assert parsed.kind == "assignment"
     assert parsed.assigned_name == "a"
-    assert parsed.normalized_source == "let a = 5"
+    assert parsed.normalized_source == "a := 5"
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 @pytest.mark.parametrize("source", ["x == 2", "x <= 2", "x >= 2", "x != 2"])
 def test_comparison_operators_are_rejected(source: str):
-    with pytest.raises(MathParseError, match="comparison operators are unsupported"):
+    with pytest.raises(MathParseError, match="Comparison operators are unsupported"):
         parse_math_input(source)
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 @pytest.mark.parametrize("source", ["(x+1", "x+1)", "x =", "= 2"])
 def test_parser_reports_shape_errors(source: str):
-    with pytest.raises(MathParseError, match="structured parser diagnostic"):
+    with pytest.raises(MathParseError, match="Structured parser diagnostic"):
         parse_math_input(source)
 
 
 @pytest.mark.unit
-@pytest.mark.xfail(strict=True, reason="spec not implemented yet")
 def test_equation_expression_has_eq_symbolics():
     expr = parse_sympy_expression("x = 2", mode="deg", user_ns={})
     assert str(expr) == "Eq(x, 2)"
@@ -68,7 +63,7 @@ def test_assignment_can_store_equation_rhs():
     parsed = parse_math_input("eq1 := (3-a)^2 + (38-b)^2 = R^2")
     assert parsed.kind == "assignment"
     assert parsed.assigned_name == "eq1"
-    assert parsed.rhs_source == "(3-a)^2 + (38-b)^2 = R^2"
+    assert parsed.rhs_source == "(3-a)**2+(38-b)**2=R**2"
 
 
 def test_assignment_unpack_targets_are_parsed():
@@ -173,5 +168,46 @@ def test_plot_flat_positional_range_args_are_rewritten_to_plot_kwargs():
         "xmax": 1.5,
         "ymin": -1.5,
         "ymax": 1.5,
+        "equal_axes": True,
+    }
+
+
+def test_assigned_eq_values_can_be_used_in_solve_calls():
+    x, y = sp.symbols("x y")
+
+    expr = parse_sympy_expression(
+        "solve((eq1, eq2), (x, y))",
+        mode="deg",
+        user_ns={
+            "eq1": x + y - 4,
+            "eq2": -x**2 + 3*x + y - 2,
+        },
+    )
+
+    assert isinstance(expr, list)
+    assert len(expr) == 2
+
+
+def test_plot_eq_calls_are_normalized_before_dispatch():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(Eq(y, 4 - x), Eq(y, x^2 - 3*x + 2), x = -1..4, y = -2..6, equal_axes=True)",
+        mode="deg",
+        user_ns={"plot": plot},
+    )
+
+    x, y = sp.symbols("x y")
+    assert captured["args"] == (x + y - 4, -x**2 + 3*x + y - 2)
+    assert captured["kwargs"] == {
+        "xmin": -1,
+        "xmax": 4,
+        "ymin": -2,
+        "ymax": 6,
         "equal_axes": True,
     }

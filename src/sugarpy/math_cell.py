@@ -10,7 +10,14 @@ import sympy as sp
 from IPython import get_ipython
 from collections.abc import Mapping
 
-from .math_parser import MathParseError, RenderDirective, parse_math_input, parse_sympy_expression
+from .math_parser import (
+    MathParseError,
+    RenderDirective,
+    canonicalize_equation,
+    is_equation_like,
+    parse_math_input,
+    parse_sympy_expression,
+)
 from .utils import display_sugarpy
 
 
@@ -465,7 +472,7 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                 rhs_expr = parse_sympy_expression(rhs_parsed.rhs_source or "", mode=mode, user_ns=user_ns)
                 equation = sp.Eq(lhs_expr, rhs_expr, evaluate=False)
                 value_expr = sp.simplify(lhs_expr - rhs_expr)
-                warnings.append("Equation assignments are stored in '=0' expression form for solve compatibility.")
+                warnings.append("Equation assignments are stored in '=0' expression form for solve/plot compatibility.")
                 steps = [
                     f"{assign_label} = {_as_latex(equation)}",
                     f"{assign_label} = {_as_latex(value_expr)}",
@@ -477,6 +484,14 @@ def _render_single_math(source: str, mode: str, user_ns: Dict[str, Any], render_
                     steps = [f"{assign_label} = {value_latex}"]
                     value_expr = stored_value
                     rendered_assignment = True
+                elif is_equation_like(value_expr):
+                    equation = value_expr
+                    value_expr = canonicalize_equation(value_expr)
+                    warnings.append("Equation assignments are stored in '=0' expression form for solve/plot compatibility.")
+                    steps = [
+                        f"{assign_label} = {_as_latex(equation)}",
+                        f"{assign_label} = {_as_latex(value_expr)}",
+                    ]
                 else:
                     steps = [f"{assign_label} = {_as_latex(value_expr)}"]
             value_expr = _finalize_value(value_expr)

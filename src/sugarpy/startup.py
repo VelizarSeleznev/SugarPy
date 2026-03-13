@@ -9,6 +9,7 @@ from contourpy import contour_generator
 from sympy import *  # noqa: F401,F403
 from sympy import Symbol, init_printing, lambdify, symbols
 
+from sugarpy.math_parser import canonicalize_equation
 from sugarpy.user_library import load_user_functions
 
 x, y, z, t = symbols("x y z t")
@@ -201,6 +202,7 @@ def plot(*args, **kwargs):
     expressions, positional_options = _extract_positional_plot_options(expressions)
     for key, value in positional_options.items():
         kwargs.setdefault(key, value)
+    expressions = [canonicalize_equation(expr) for expr in expressions]
 
     if variable is None:
         variable = _pick_plot_symbol(expressions)

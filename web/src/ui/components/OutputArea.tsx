@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import createPlotlyComponent from 'react-plotly.js/factory';
 import Plotly from 'plotly.js-dist-min';
 import katex from 'katex';
@@ -26,6 +26,55 @@ type Props = {
 export function OutputArea({ output }: Props) {
   if (!output) return null;
 
+  const data = output.data ?? {};
+  const plotlyValue = data['application/vnd.plotly.v1+json'];
+  const plotFigure = plotlyValue && typeof plotlyValue === 'object' ? (plotlyValue as any) : null;
+  const plotProps = useMemo(() => {
+    if (!plotFigure) return null;
+    const layout = plotFigure.layout ?? {};
+    const hasLegend = layout.showlegend !== false;
+    const aspectLocked = Boolean(layout.yaxis?.scaleanchor || layout.xaxis?.scaleanchor);
+    const plotHeight = typeof layout.height === 'number' ? layout.height : undefined;
+    return {
+      data: Array.isArray(plotFigure.data) ? plotFigure.data : [],
+      layout: {
+        dragmode: 'pan',
+        autosize: true,
+        hovermode: 'closest',
+        margin: {
+          l: 56,
+          r: hasLegend ? 32 : 20,
+          t: 56,
+          b: 48,
+          ...(layout.margin ?? {})
+        },
+        ...(layout ?? {}),
+        xaxis: {
+          fixedrange: false,
+          constrain: 'none',
+          automargin: true,
+          ...(layout.xaxis ?? {})
+        },
+        yaxis: {
+          fixedrange: false,
+          automargin: true,
+          ...(layout.yaxis ?? {})
+        }
+      },
+      config: {
+        responsive: false,
+        scrollZoom: true,
+        doubleClick: 'reset',
+        displaylogo: false,
+        modeBarButtonsToRemove: ['autoScale2d', 'lasso2d', 'select2d']
+      },
+      style: {
+        width: '100%',
+        height: plotHeight ?? (aspectLocked ? 'clamp(420px, 72vh, 760px)' : 'clamp(320px, 48vh, 460px)')
+      }
+    };
+  }, [plotFigure]);
+
   if (output.type === 'error') {
     return (
       <div className="output output-plain cell-error" data-testid="cell-error" data-block-cell-swipe="true">
@@ -34,54 +83,14 @@ export function OutputArea({ output }: Props) {
     );
   }
 
-  const data = output.data ?? {};
-  const plotlyValue = data['application/vnd.plotly.v1+json'];
-  if (plotlyValue && typeof plotlyValue === 'object') {
-    const figure = plotlyValue as any;
-    const layout = figure.layout ?? {};
-    const hasLegend = layout.showlegend !== false;
-    const aspectLocked = Boolean(layout.yaxis?.scaleanchor || layout.xaxis?.scaleanchor);
-    const plotHeight = typeof layout.height === 'number' ? layout.height : undefined;
+  if (plotProps) {
     return (
       <div className="output output-rich" data-testid="plotly-graph" data-block-cell-swipe="true">
         <Plot
-          data={Array.isArray(figure.data) ? figure.data : []}
-          layout={{
-            dragmode: 'pan',
-            autosize: true,
-            hovermode: 'closest',
-            margin: {
-              l: 56,
-              r: hasLegend ? 32 : 20,
-              t: 56,
-              b: 48,
-              ...(layout.margin ?? {})
-            },
-            ...(layout ?? {}),
-            xaxis: {
-              fixedrange: false,
-              constrain: 'none',
-              automargin: true,
-              ...(layout.xaxis ?? {})
-            },
-            yaxis: {
-              fixedrange: false,
-              automargin: true,
-              ...(layout.yaxis ?? {})
-            }
-          }}
-          config={{
-            responsive: true,
-            scrollZoom: true,
-            doubleClick: 'reset',
-            displaylogo: false,
-            modeBarButtonsToRemove: ['autoScale2d', 'lasso2d', 'select2d']
-          }}
-          style={{
-            width: '100%',
-            height: plotHeight ?? (aspectLocked ? 'clamp(420px, 72vh, 760px)' : 'clamp(320px, 48vh, 460px)')
-          }}
-          useResizeHandler
+          data={plotProps.data}
+          layout={plotProps.layout}
+          config={plotProps.config}
+          style={plotProps.style}
         />
       </div>
     );

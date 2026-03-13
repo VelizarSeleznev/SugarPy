@@ -12,6 +12,7 @@ type Props = {
   onChange: (state: StoichState) => void;
   onCompute: (state: StoichState) => void;
   kernelReady: boolean;
+  showOutput?: boolean;
 };
 
 const COEFF_RE = /^\s*\d+(?:\.\d+)?\s*/;
@@ -46,7 +47,15 @@ const formatCoeffLabel = (value: number | null | undefined) => {
   return formatSig(value);
 };
 
-export function StoichiometryCell({ state, output, isRunning, onChange, onCompute, kernelReady }: Props) {
+export function StoichiometryCell({
+  state,
+  output,
+  isRunning,
+  onChange,
+  onCompute,
+  kernelReady,
+  showOutput = true
+}: Props) {
   const reaction = state.reaction ?? '';
   const computeTimer = useRef<number | null>(null);
   const pendingState = useRef<StoichState | null>(null);
@@ -194,11 +203,11 @@ export function StoichiometryCell({ state, output, isRunning, onChange, onComput
 
       {!kernelReady ? (
         <div className="output">Kernel not connected. Connect kernel to compute.</div>
-      ) : hasError ? (
+      ) : hasError && showOutput ? (
         <div className="stoich-error">{output?.error || 'Failed to compute.'}</div>
       ) : null}
 
-      {species.length > 0 ? (
+      {showOutput && species.length > 0 ? (
         <div className="stoich-table-wrap">
           <table className="stoich-table">
             <thead>

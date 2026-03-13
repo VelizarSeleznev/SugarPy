@@ -19,7 +19,7 @@ export default defineConfig({
     command: 'cd .. && ./scripts/run-all.sh',
     url: 'http://localhost:5173',
     timeout: 180_000,
-    reuseExistingServer: false
+    reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING === '1'
   },
   projects: [
     {

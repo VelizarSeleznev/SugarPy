@@ -3,11 +3,11 @@
 ## Purpose
 SugarPy is a local notebook toolkit:
 - Python package for math and chemistry helpers.
-- React/Vite web UI for notebook-style interaction with a local Jupyter kernel.
+- React/Vite web UI for notebook-style interaction with a restricted SugarPy backend API.
 - CAS-style Math cell parser/evaluator for teacher-friendly math input.
 
 ## Top-level layout
-- `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading).
+- `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading, restricted server API).
 - `web/src/`: frontend app code.
   Assistant orchestration lives under `web/src/ui/utils/assistant.ts`.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
@@ -45,4 +45,4 @@ SugarPy is a local notebook toolkit:
 
 ## External state
 - User functions are loaded from `~/.sugarpy/user_functions.py`.
-- Local Jupyter endpoint is `http://localhost:8888` with token `sugarpy` in dev scripts.
+- Local dev runs a Jupyter-backed SugarPy API on `http://localhost:8888/sugarpy/api/` behind the Vite `/api` proxy.

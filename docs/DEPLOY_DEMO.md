@@ -4,8 +4,8 @@ This document describes a demo setup for multiple concurrent users on one server
 
 ## Overview
 - Frontend (`web/dist`) is served by Nginx.
-- Jupyter Server runs locally on `127.0.0.1:8888` under `/jupyter/`.
-- Browsers connect to one URL, and each user gets their own kernel session.
+- Jupyter Server runs locally on `127.0.0.1:8888` under `/jupyter/` as an internal runtime only.
+- Browsers connect only to the frontend and SugarPy-owned `/api/` routes.
 - Public HTTPS can be exposed either by Cloudflare Tunnel (custom domain) or Tailscale Funnel (`*.ts.net`).
 
 ## Why this setup
@@ -33,6 +33,7 @@ Deploys build a fresh release under `releases/`, sync tracked notebooks into
 
 ## Install Nginx config
 Use `deploy/nginx-sugarpy.conf` as a base.
+It should publish only the static frontend and `/api/`, not `/jupyter/`.
 
 Typical flow:
 ```bash
@@ -178,7 +179,6 @@ while the actual OpenAI/Gemini key stays on the server and model calls are proxi
 through Jupyter under `/jupyter/sugarpy/assistant/*`.
 
 ## Notes and limitations
-- This is a demo configuration (shared token, no per-user account isolation).
-- `/jupyter/` is publicly reachable through the same origin and currently relies on
-  a shared token. Treat this as a demo-only exposure until access controls are tightened.
-- For production multi-user separation, migrate to JupyterHub/TLJH.
+- This is still a demo configuration (no full per-user account isolation).
+- Shared/demo access is acceptable only through the restricted SugarPy API; do not publish raw Jupyter contents or kernel endpoints.
+- For production multi-user separation, migrate to JupyterHub/TLJH or a stronger execution boundary.
