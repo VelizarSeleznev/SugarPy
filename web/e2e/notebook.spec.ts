@@ -91,9 +91,8 @@ const setCodeInFirstCell = async (page: any, code: string) => {
 
 const addMathCellAfterFirstCode = async (page: any) => {
   await addCodeCellToEmptyNotebook(page);
-  const divider = page.getByTestId('cell-divider-1');
-  await divider.hover();
-  await divider.getByRole('button', { name: 'Math' }).click();
+  await page.getByTestId('add-cell-button').click();
+  await page.getByRole('button', { name: 'Math cell' }).click();
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
@@ -152,6 +151,141 @@ const expectNoPageCrashes = async (
 };
 
 test.describe('Notebook CAS outputs', () => {
+  test('Notebook chrome: empty code, text, and math cells stay compact and add below the active cell', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Text cell' }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Math cell' }).click();
+
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="cell-row-markdown"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(1);
+    await expect(page.locator('.cell-divider')).toHaveCount(4);
+
+    for (const selector of ['[data-testid="cell-row-code"]', '[data-testid="cell-row-markdown"]', '[data-testid="cell-row-math"]']) {
+      const box = await page.locator(selector).first().boundingBox();
+      expect(box?.height ?? 0).toBeLessThan(140);
+    }
+  });
+
+  test('Notebook chrome: active toolbar is consistent and math has a single run affordance', async ({ page }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Text cell' }).click();
+    await addMathCellAfterFirstCode(page);
+
+    for (const selector of ['[data-testid="cell-row-code"]', '[data-testid="cell-row-markdown"]', '[data-testid="cell-row-math"]']) {
+      const cell = page.locator(selector).last();
+      await cell.click();
+      await expect(cell.locator('.cell-action-bar')).toBeVisible();
+      await expect(cell.locator('[data-testid="run-cell"]')).toHaveCount(selector.includes('markdown') ? 0 : 1);
+    }
+
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await expect(mathCell.locator('[data-testid="run-cell"]')).toHaveCount(1);
+    await expect(mathCell.getByRole('button', { name: 'Delete cell' })).toBeVisible();
+    await mathCell.getByRole('button', { name: 'More cell actions' }).click();
+    await expect(mathCell.getByRole('button', { name: 'Delete cell' }).last()).toBeVisible();
+  });
+
+  test('Notebook chrome: clicking outside the notebook clears the active cell chrome', async ({ page }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    await codeCell.click();
+    await expect(codeCell.locator('.cell-action-bar')).toBeVisible();
+    await page.locator('.app-header').click();
+    await expect(codeCell.locator('.cell-action-bar')).toHaveCount(0);
+  });
+
+  test('Notebook chrome: code and math outputs can collapse and reopen', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setCodeInFirstCell(page, '2 + 2');
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    await codeCell.click();
+    await codeCell.getByRole('button', { name: 'Hide output' }).click();
+    await expect(codeCell.getByTestId('cell-output')).toHaveCount(0);
+    await codeCell.getByRole('button', { name: 'Show output' }).click();
+    await expect(codeCell.getByTestId('cell-output')).toBeVisible();
+
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(page, 'x^2 = 2');
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await expect(mathCell.getByTestId('math-output')).toBeVisible();
+    await mathCell.getByRole('button', { name: 'Show math source' }).click();
+    await expect(mathCell.getByTestId('math-output')).toHaveCount(0);
+    await page.locator('[data-testid="cell-row-code"]').first().click();
+    await expect(mathCell.getByTestId('math-output')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Notebook chrome: markdown exits into formatted preview with a compact done action', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Text cell' }).click();
+
+    const markdownCell = page.locator('[data-testid="cell-row-markdown"]').last();
+    await markdownCell.locator('.cm-content').click();
+    await page.keyboard.type('**Bold text**');
+    await markdownCell.getByRole('button', { name: 'Done' }).click();
+
+    await expect(markdownCell.locator('strong')).toContainText('Bold text');
+  });
+
+  test('Notebook chrome: iPad-sized viewport uses the same compact add flow', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 1366 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Math cell' }).click();
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(1);
+  });
+
+  test('Notebook chrome: iPhone header stacks cleanly and add menu stays onscreen', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.goto('/');
+    await page.getByTestId('add-cell-button').click();
+    const metrics = await page.evaluate(() => {
+      const header = document.querySelector('.app-header');
+      const input = document.querySelector('.file-name-input');
+      const menu = document.querySelector('.add-cell-menu');
+      const viewport = document.querySelector('meta[name="viewport"]');
+      const rect = menu?.getBoundingClientRect();
+      return {
+        flexDirection: header ? getComputedStyle(header).flexDirection : '',
+        hasIosGuard: document.documentElement.classList.contains('ios-compact-inputs'),
+        inputWidth: parseFloat(input ? getComputedStyle(input).width : '0'),
+        inputFontSize: parseFloat(input ? getComputedStyle(input).fontSize : '0'),
+        menuLeft: rect?.left ?? -1,
+        menuRight: rect?.right ?? -1,
+        viewportContent: viewport?.getAttribute('content') ?? '',
+        viewportWidth: window.innerWidth,
+        overflowX: document.documentElement.scrollWidth > window.innerWidth
+      };
+    });
+    expect(metrics.flexDirection).toBe('column');
+    expect(metrics.hasIosGuard).toBe(true);
+    expect(metrics.inputWidth).toBeGreaterThan(220);
+    expect(metrics.inputFontSize).toBeGreaterThanOrEqual(16);
+    expect(metrics.menuLeft).toBeGreaterThanOrEqual(0);
+    expect(metrics.menuRight).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.viewportContent).toContain('maximum-scale=1');
+    expect(metrics.overflowX).toBe(false);
+  });
+
   test('@smoke Math Test: renders SymPy formula via KaTeX', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');

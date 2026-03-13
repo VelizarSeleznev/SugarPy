@@ -9,6 +9,22 @@ const rootEl = document.getElementById('root') as HTMLElement;
 const errorBucket: string[] = (window as any).__sugarpy_errors || [];
 (window as any).__sugarpy_errors = errorBucket;
 
+const applyIPhoneViewportGuard = () => {
+  const userAgent = navigator.userAgent || '';
+  const isIPhone = /iPhone|iPod/i.test(userAgent);
+  if (!isIPhone) {
+    return;
+  }
+  const viewport = document.querySelector('meta[name="viewport"]');
+  if (!viewport) {
+    return;
+  }
+  viewport.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover');
+  document.documentElement.classList.add('ios-compact-inputs');
+};
+
+applyIPhoneViewportGuard();
+
 const origConsoleError = console.error;
 console.error = (...args: unknown[]) => {
   const msg = args.map(String).join(' ');

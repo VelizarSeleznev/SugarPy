@@ -139,10 +139,10 @@ Assistant regression checks:
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
-- New cells are created from the single bottom `+ Add Cell` control.
+- New cells are created from the header `+` control and are inserted below the currently selected cell.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).
-- On phone portrait touch devices, cell actions move to a fixed action bar above the virtual keyboard while editing.
+- The same compact selected-cell action bar is used across desktop and touch layouts.
 
 ## Open the standalone wiki page
 - Open `http://localhost:5173/wiki`

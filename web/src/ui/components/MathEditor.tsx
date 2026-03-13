@@ -37,13 +37,16 @@ type Props = {
   isRunning?: boolean;
   trigMode: 'deg' | 'rad';
   renderMode: 'exact' | 'decimal';
-  onToggleRenderMode: () => void;
-  onToggleTrigMode: () => void;
+  viewMode: 'source' | 'rendered';
+  outputCollapsed: boolean;
+  onSwitchToSource: () => void;
+  onCommitSource: () => void;
+  active?: boolean;
 };
 
 const shortcutItems = [
-  { label: 'x²', snippet: '^2' },
-  { label: '√', snippet: 'sqrt(__CURSOR__)' },
+  { label: 'x^2', snippet: '^2' },
+  { label: 'sqrt', snippet: 'sqrt(__CURSOR__)' },
   { label: '( )', snippet: '(__CURSOR__)' },
   { label: '=', snippet: ' = ' },
   { label: ':=', snippet: ' := ' },
@@ -60,8 +63,8 @@ const withSourceBreakHints = (latex: string) =>
     .replace(/=/g, "=\\allowbreak ")
     .replace(/\\coloneqq/g, "\\coloneqq\\allowbreak ");
 
-const sourceToLatex = (source: string) => {
-  return source
+const sourceToLatex = (source: string) =>
+  source
     .replace(/\btheta_([A-Za-z0-9]+)/g, '\\theta_{$1}')
     .replace(/\b([A-Za-z]+)\[(\d+)\]/g, '$1_{$2}')
     .replace(/:=/g, '\\coloneqq ')
@@ -69,7 +72,6 @@ const sourceToLatex = (source: string) => {
     .replace(/!=/g, '\\ne ')
     .replace(/>=/g, '\\ge ')
     .replace(/<=/g, '\\le ');
-};
 
 const renderSourceMath = (source: string) => {
   try {
@@ -112,36 +114,34 @@ export function MathEditor({
   isRunning,
   trigMode,
   renderMode,
-  onToggleRenderMode,
-  onToggleTrigMode
+  viewMode,
+  outputCollapsed,
+  onSwitchToSource,
+  onCommitSource,
+  active = false
 }: Props) {
-  const [editing, setEditing] = useState(true);
   const [draft, setDraft] = useState(value);
   const [dirty, setDirty] = useState(false);
   const [lastRendered, setLastRendered] = useState(value);
+
   useEffect(() => {
     setDraft(value);
     setLastRendered(value);
     setDirty(false);
   }, [value]);
 
-  const withBreakHints = (latex: string) => {
-    // Help KaTeX break very long lines at readable separators.
-    return latex
-      .replace(/,/g, ",\\allowbreak ")
-      .replace(/=/g, "=\\allowbreak ");
-  };
-
-  const renderLatexSteps = (steps: string[]) => {
-    return steps.map((step) => {
+  const renderLatexSteps = (steps: string[]) =>
+    steps.map((step) => {
       const safeStep = String(step ?? '');
       try {
-        return katex.renderToString(withBreakHints(safeStep), { throwOnError: false, displayMode: true });
+        return katex.renderToString(
+          safeStep.replace(/,/g, ",\\allowbreak ").replace(/=/g, "=\\allowbreak "),
+          { throwOnError: false, displayMode: true }
+        );
       } catch (_err) {
         return `<span class="math-error">${safeStep}</span>`;
       }
     });
-  };
 
   const renderedSteps = useMemo(() => {
     const steps = output?.render_cache?.[renderMode]?.steps ?? output?.steps ?? [];
@@ -181,33 +181,17 @@ export function MathEditor({
     );
   }, [output?.kind, output?.render_cache, output?.steps, renderMode, renderedTrace, sourceText]);
 
-  if (!editing) {
+  const runNow = (nextValue: string) => {
+    if (isRunning) return;
+    onRun(nextValue);
+    setLastRendered(nextValue);
+    setDirty(false);
+  };
+
+  if (viewMode === 'rendered' && !outputCollapsed && (output || value.trim())) {
     return (
-      <div className="math-card" onClick={() => setEditing(true)} data-testid="math-output">
-        <div className="math-card-topline">
-          <div className="math-card-controls" onClick={(event) => event.stopPropagation()}>
-            <button
-              type="button"
-              className="math-card-pill-btn primary mobile-only"
-              onClick={() => onRun(value)}
-              disabled={isRunning}
-              aria-label="Run math cell"
-              title="Run math cell"
-            >
-              ▶
-            </button>
-            <button type="button" className="math-card-pill-btn" onClick={() => setEditing(true)}>
-              Edit
-            </button>
-            <button type="button" className="math-card-pill-btn" onClick={onToggleRenderMode}>
-              {renderMode === 'decimal' ? 'Decimal' : 'Exact'}
-            </button>
-            <button type="button" className="math-card-pill-btn" onClick={onToggleTrigMode}>
-              {trigMode === 'deg' ? 'Deg' : 'Rad'}
-            </button>
-          </div>
-        </div>
-        {!renderedTrace && showCardSource && renderedSource ? (
+      <div className="math-card" onClick={onSwitchToSource} data-testid="math-output">
+        {showCardSource && renderedSource ? (
           <div
             className="math-card-source"
             data-block-cell-swipe="true"
@@ -264,57 +248,22 @@ export function MathEditor({
             ))}
           </div>
         ) : (
-          <div className="math-empty">Click to edit.</div>
+          <div className="math-empty">No rendered output yet.</div>
         )}
       </div>
     );
   }
 
-  const runNow = () => {
-    if (isRunning) return;
-    if (!dirty && lastRendered === draft) {
-      setEditing(false);
-      return;
-    }
-    onRun(draft);
-    setLastRendered(draft);
-    setDirty(false);
-    setEditing(false);
-  };
-
   return (
-    <div className="math-editor">
-      <div className="math-editor-toolbar">
-        <div className="math-card-controls">
-          <button
-            type="button"
-            className="math-card-pill-btn primary mobile-only"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              runNow();
-            }}
-            disabled={isRunning}
-            aria-label="Run math cell"
-            title="Run math cell"
-          >
-            ▶
-          </button>
-          <button type="button" className="math-card-pill-btn" onClick={onToggleRenderMode}>
-            {renderMode === 'decimal' ? 'Decimal' : 'Exact'}
-          </button>
-          <button type="button" className="math-card-pill-btn" onClick={onToggleTrigMode}>
-            {trigMode === 'deg' ? 'Deg' : 'Rad'}
-          </button>
-        </div>
-      </div>
+    <div className={`math-editor${active ? ' active' : ''}`}>
       <div
         onBlur={() => {
           if (dirty) {
-            runNow();
-            return;
+            runNow(draft);
           }
-          setEditing(false);
+          if (draft.trim()) {
+            onCommitSource();
+          }
         }}
       >
         <CodeEditor
@@ -325,16 +274,17 @@ export function MathEditor({
             onChange(val);
           }}
           onRun={(val) => {
-            onRun(val);
-            setLastRendered(val);
-            setDirty(false);
-            setEditing(false);
+            runNow(val);
           }}
           completions={completions ?? []}
           placeholderText="Type math..."
-          autoFocus
+          autoFocus={active}
           shortcutItems={shortcutItems}
         />
+      </div>
+      <div className="math-inline-meta" aria-label="Math settings">
+        <span>{renderMode === 'decimal' ? '≈' : '='}</span>
+        <span>{trigMode === 'deg' ? '°' : 'rad'}</span>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import katex from 'katex';
 import { markdown } from '@codemirror/lang-markdown';
@@ -143,21 +143,25 @@ const renderMarkdownWithMath = (source: string) => {
 type Props = {
   value: string;
   onChange: (value: string) => void;
+  active?: boolean;
 };
 
-export function MarkdownEditor({ value, onChange }: Props) {
-  const [editing, setEditing] = useState(true);
+export function MarkdownEditor({ value, onChange, active = false }: Props) {
+  const [editing, setEditing] = useState(active || !value.trim());
   const rendered = useMemo(() => renderMarkdownWithMath(value || ''), [value]);
   const isEmpty = !value.trim();
 
-  if (!editing) {
-    if (isEmpty) {
-      return (
-        <div className="markdown markdown-empty" onClick={() => setEditing(true)}>
-          Click to edit.
-        </div>
-      );
+  useEffect(() => {
+    if (!active && !isEmpty) {
+      setEditing(false);
+      return;
     }
+    if (isEmpty) {
+      setEditing(true);
+    }
+  }, [active, isEmpty]);
+
+  if (!editing) {
     return (
       <div
         className="markdown"
@@ -169,14 +173,19 @@ export function MarkdownEditor({ value, onChange }: Props) {
 
   return (
     <div className="markdown-editor">
-      <div onBlur={() => setEditing(false)}>
+      <div className="editor-inline-actions">
+        <button type="button" className="editor-inline-btn" onClick={() => setEditing(false)} disabled={isEmpty}>
+          Done
+        </button>
+      </div>
+      <div onBlur={() => setEditing(!isEmpty)}>
         <CodeEditor
           value={value}
           onChange={onChange}
           onRun={(_value) => setEditing(false)}
           completions={[]}
           language={markdown()}
-          placeholderText="Type text..."
+          placeholderText="Write text..."
           autoFocus
         />
       </div>

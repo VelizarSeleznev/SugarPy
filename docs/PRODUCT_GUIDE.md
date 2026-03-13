@@ -278,13 +278,20 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 ## Mobile and touch behavior
 - Touch editing is supported.
 - On touch devices, cell actions can be exposed via swipe interactions.
-- On phone portrait with the keyboard open, a fixed mobile action bar appears for the active cell.
-- The mobile bar can include:
-  - Run
-  - Math mode toggles
-  - Move up
-  - Move down
-  - Delete
+- On touch tablets such as iPad, the inline cell toolbar and insert controls stay visible so move/delete/add actions do not depend on hover.
+- Notebook cells now share one compact document-style chrome with a left execution gutter and a single active-cell action bar.
+- New cells are inserted from the header-level add control below the currently selected cell instead of from large divider rows between cells.
+- Math cells keep their rendered presentation, but the rendered block can be collapsed back to compact source view to reduce vertical clutter.
+- The same selected-cell action bar is used on desktop and touch layouts so cell controls do not switch design language across devices.
+- On iPhone layouts, editable form fields must keep a minimum 16px input font and an iPhone-safe viewport policy so Safari focus does not auto-zoom the page.
+- When the selected-cell action bar floats on scroll, it must anchor below the visible header chrome so it never slides under the notebook title/actions rows.
+
+## Notebook UI design guidelines
+- Prefer a document-like notebook flow over separate card-like widgets.
+- Keep common cell actions icon-first and compact; avoid repeated text labels for the same action.
+- Avoid spending permanent vertical space on controls that can live in hover, selection, or compact overlay chrome.
+- Use one shared interaction language across code, text, and math cells; special cell types may change content rendering, not the surrounding chrome vocabulary.
+- When a cell loses focus, prefer a readable presentation state (formatted text, rendered math, collapsed output) over leaving raw editors open by default.
 
 ## Wiki page
 - `/wiki` is a static reference page with no kernel dependency.

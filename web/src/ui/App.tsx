@@ -93,6 +93,10 @@ export type CellModel = {
     status: 'draft' | 'validating' | 'applied' | 'failed';
     isRunnable: boolean;
   };
+  ui?: {
+    outputCollapsed?: boolean;
+    mathView?: 'source' | 'rendered';
+  };
 };
 
 export type CellOutput =
@@ -328,14 +332,6 @@ const resolveServerConfig = (rawServerUrl: string) => {
   return { baseUrl, wsUrl };
 };
 
-const isEditableElement = (element: Element | null) => {
-  if (!element || !(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable) return true;
-  if (element.matches('input, textarea, select')) return true;
-  if (element.closest('.cm-editor')) return true;
-  return false;
-};
-
 const readOptionalStorageItem = (key: string) => {
   try {
     return window.localStorage.getItem(key);
@@ -366,13 +362,10 @@ function App() {
   const [syncMessage, setSyncMessage] = useState<string>('');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
   const [configureConnection, setConfigureConnection] = useState(false);
   const [isRunningAll, setIsRunningAll] = useState(false);
-  const [mobileActionsEligible, setMobileActionsEligible] = useState(false);
-  const [mobileKeyboardOpen, setMobileKeyboardOpen] = useState(false);
-  const [mobileEditorCellId, setMobileEditorCellId] = useState<string | null>(null);
-  const [mobileVisualTop, setMobileVisualTop] = useState(0);
-  const [mobileVisualHeight, setMobileVisualHeight] = useState(window.innerHeight);
+  const [touchUiEnabled, setTouchUiEnabled] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantApiKey, setAssistantApiKey] = useState('');
   const [assistantDefaultApiKey, setAssistantDefaultApiKey] = useState(
@@ -417,7 +410,9 @@ function App() {
   const lastSnapshot = useRef<string>('');
   const contentsRef = useRef<ContentsManager | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const addCellMenuRef = useRef<HTMLDivElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
   const assistantRuntimeConfigAttemptedRef = useRef(false);
@@ -783,7 +778,7 @@ function App() {
       setActiveCellId(null);
       return;
     }
-    if (!activeCellId || !cells.some((cell) => cell.id === activeCellId)) {
+    if (activeCellId && !cells.some((cell) => cell.id === activeCellId)) {
       setActiveCellId(cells[0].id);
     }
   }, [cells, activeCellId]);
@@ -800,10 +795,8 @@ function App() {
     const updateEligibility = () => {
       const coarse = window.matchMedia('(pointer: coarse)').matches;
       const noHover = window.matchMedia('(hover: none)').matches;
-      const anyFine = window.matchMedia('(any-pointer: fine)').matches;
-      const portrait = window.matchMedia('(orientation: portrait)').matches;
-      const narrow = window.innerWidth <= 900;
-      setMobileActionsEligible(coarse && noHover && !anyFine && narrow && portrait);
+      const touchCapable = navigator.maxTouchPoints > 0 || coarse || noHover;
+      setTouchUiEnabled(touchCapable);
     };
     updateEligibility();
     window.addEventListener('resize', updateEligibility);
@@ -815,66 +808,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const readActiveEditorCell = () => {
-      const active = document.activeElement;
-      if (!isEditableElement(active)) {
-        setMobileEditorCellId(null);
-        return;
-      }
-      const cellHost = (active as HTMLElement).closest('[data-cell-id]') as HTMLElement | null;
-      setMobileEditorCellId(cellHost?.dataset.cellId ?? null);
-    };
-    const onFocusIn = () => readActiveEditorCell();
-    const onFocusOut = () => window.setTimeout(readActiveEditorCell, 0);
-    document.addEventListener('focusin', onFocusIn);
-    document.addEventListener('focusout', onFocusOut);
-    return () => {
-      document.removeEventListener('focusin', onFocusIn);
-      document.removeEventListener('focusout', onFocusOut);
-    };
-  }, []);
-
-  useEffect(() => {
-    const updateKeyboard = () => {
-      if (!mobileActionsEligible) {
-        setMobileKeyboardOpen(false);
-        setMobileVisualTop(0);
-        setMobileVisualHeight(window.innerHeight);
-        return;
-      }
-      const vv = window.visualViewport;
-      if (!vv) {
-        setMobileKeyboardOpen(!!mobileEditorCellId);
-        setMobileVisualTop(0);
-        setMobileVisualHeight(window.innerHeight);
-        return;
-      }
-      const inset = Math.max(0, Math.round(window.innerHeight - vv.height));
-      setMobileVisualTop(Math.max(0, Math.round(vv.offsetTop)));
-      setMobileVisualHeight(Math.max(0, Math.round(vv.height)));
-      setMobileKeyboardOpen(inset > 120);
-    };
-    updateKeyboard();
-    const vv = window.visualViewport;
-    if (vv) {
-      vv.addEventListener('resize', updateKeyboard);
-      vv.addEventListener('scroll', updateKeyboard);
-    }
-    window.addEventListener('resize', updateKeyboard);
-    return () => {
-      if (vv) {
-        vv.removeEventListener('resize', updateKeyboard);
-        vv.removeEventListener('scroll', updateKeyboard);
-      }
-      window.removeEventListener('resize', updateKeyboard);
-    };
-  }, [mobileActionsEligible, mobileEditorCellId]);
-
-  useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (headerMenuOpen && headerMenuRef.current && target && !headerMenuRef.current.contains(target)) {
         setHeaderMenuOpen(false);
+      }
+      if (addCellMenuOpen && addCellMenuRef.current && target && !addCellMenuRef.current.contains(target)) {
+        setAddCellMenuOpen(false);
+      }
+      if (
+        target &&
+        notebookStackRef.current &&
+        !notebookStackRef.current.contains(target) &&
+        !headerMenuRef.current?.contains(target) &&
+        !addCellMenuRef.current?.contains(target)
+      ) {
+        setActiveCellId(null);
       }
       if (
         assistantOpen &&
@@ -890,6 +839,7 @@ function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (headerMenuOpen) setHeaderMenuOpen(false);
+      if (addCellMenuOpen) setAddCellMenuOpen(false);
       if (assistantOpen) setAssistantOpen(false);
     };
 
@@ -899,7 +849,7 @@ function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [assistantOpen, headerMenuOpen]);
+  }, [addCellMenuOpen, assistantOpen, headerMenuOpen]);
 
   useEffect(() => {
     return () => {
@@ -974,7 +924,17 @@ function App() {
       setCells((prev) => {
         const exists = prev.some((c) => c.id === cellId);
         if (exists) return prev;
-        return [...prev, { id: cellId, source: code, type: 'code' }];
+        return [
+          ...prev,
+          {
+            id: cellId,
+            source: code,
+            type: 'code',
+            ui: {
+              outputCollapsed: false
+            }
+          }
+        ];
       });
     }
     let future: any;
@@ -996,7 +956,20 @@ function App() {
     let streamText = '';
     let mimeData: Record<string, unknown> = {};
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true, output: undefined } : c))
+      prev.map((c) =>
+        c.id === cellId
+          ? {
+              ...c,
+              isRunning: true,
+              output: undefined,
+              ui: {
+                ...c.ui,
+                outputCollapsed: false,
+                mathView: 'rendered'
+              }
+            }
+          : c
+      )
     );
     future.onIOPub = (msg) => {
       if (msg.header.msg_type === 'stream') {
@@ -1146,7 +1119,11 @@ function App() {
           ? {
               ...c,
               isRunning: true,
-              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined })
+              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined }),
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
             }
           : c
       )
@@ -1227,6 +1204,11 @@ function App() {
             if (fig && typeof fig === 'object') {
               next.output = { type: 'mime', data: { 'application/vnd.plotly.v1+json': fig } };
             }
+            next.ui = {
+              ...c.ui,
+              outputCollapsed: false,
+              mathView: 'rendered'
+            };
             return next;
           })
         );
@@ -1268,7 +1250,18 @@ function App() {
       const next = prev + 1;
       setCells((cellsPrev) =>
         cellsPrev.map((c) =>
-          c.id === cellId ? { ...c, isRunning: false, execCount: next } : c
+          c.id === cellId
+            ? {
+                ...c,
+                isRunning: false,
+                execCount: next,
+                ui: {
+                  ...c.ui,
+                  outputCollapsed: false,
+                  mathView: 'rendered'
+                }
+              }
+            : c
         )
       );
       return next;
@@ -1286,7 +1279,18 @@ function App() {
     ].join('\n');
 
     setCells((prev) =>
-      prev.map((c) => (c.id === cellId ? { ...c, isRunning: true } : c))
+      prev.map((c) =>
+        c.id === cellId
+          ? {
+              ...c,
+              isRunning: true,
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
+            }
+          : c
+      )
     );
 
     let future: any;
@@ -1344,7 +1348,17 @@ function App() {
 
     setCells((prev) =>
       prev.map((c) =>
-        c.id === cellId ? { ...c, stoichOutput: parsed ?? undefined, isRunning: false } : c
+        c.id === cellId
+          ? {
+              ...c,
+              stoichOutput: parsed ?? undefined,
+              isRunning: false,
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
+            }
+          : c
       )
     );
   };
@@ -1392,15 +1406,94 @@ function App() {
         id: `cell-${idSuffix}`,
         source,
         type,
-        stoichState: createStoichState()
+        stoichState: createStoichState(),
+        ui: {
+          outputCollapsed: false
+        }
       };
     }
     return {
       id: `cell-${idSuffix}`,
       source,
       type,
-      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {})
+      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {}),
+      ui: {
+        outputCollapsed: false,
+        ...(type === 'math' ? { mathView: 'source' as const } : {})
+      }
     };
+  };
+
+  const updateCellUi = (
+    cellId: string,
+    updater: (current: NonNullable<CellModel['ui']>) => NonNullable<CellModel['ui']>
+  ) => {
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              ui: updater(cell.ui ?? {})
+            }
+          : cell
+      )
+    );
+  };
+
+  const toggleCellOutputCollapsed = (cellId: string) => {
+    setCells((prev) =>
+      prev.map((cell) => {
+        if (cell.id !== cellId) return cell;
+        const nextCollapsed = !(cell.ui?.outputCollapsed ?? false);
+        return {
+          ...cell,
+          ui: {
+            ...cell.ui,
+            outputCollapsed: nextCollapsed,
+            ...(cell.type === 'math' && nextCollapsed ? { mathView: 'source' as const } : {})
+          }
+        };
+      })
+    );
+  };
+
+  const clearCellOutput = (cellId: string) => {
+    setCells((prev) =>
+      prev.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              output: undefined,
+              mathOutput: undefined,
+              stoichOutput: undefined,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false,
+                ...(cell.type === 'math' ? { mathView: 'source' as const } : {})
+              }
+            }
+          : cell
+      )
+    );
+  };
+
+  const toggleMathView = (cellId: string) => {
+    updateCellUi(cellId, (current) => {
+      const nextView = current.mathView === 'rendered' ? 'source' : 'rendered';
+      return {
+        ...current,
+        mathView: nextView,
+        outputCollapsed: nextView === 'source' ? true : false
+      };
+    });
+  };
+
+  const showMathRenderedView = (cellId: string) => {
+    updateCellUi(cellId, (current) => ({
+      ...current,
+      mathView: 'rendered',
+      outputCollapsed: false
+    }));
   };
 
   const getCellDisplayText = (cell: CellModel) => {
@@ -1770,6 +1863,23 @@ function App() {
     const nextCell = createCell(type, source, bounded + 1);
     setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
     setActiveCellId(nextCell.id);
+    setAddCellMenuOpen(false);
+  };
+
+  const insertCellBelowActive = (type: 'code' | 'markdown' | 'math') => {
+    const activeIndex = activeCellId ? cells.findIndex((cell) => cell.id === activeCellId) : -1;
+    const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
+    insertCellAt(targetIndex, type);
+  };
+
+  const insertSiblingCell = (cellId: string, position: 'above' | 'below') => {
+    const sourceIndex = cells.findIndex((cell) => cell.id === cellId);
+    if (sourceIndex < 0) return;
+    const sourceCell = cells[sourceIndex];
+    const nextType: 'code' | 'markdown' | 'math' =
+      sourceCell.type === 'markdown' || sourceCell.type === 'math' ? sourceCell.type : 'code';
+    const targetIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
+    insertCellAt(targetIndex, nextType);
   };
 
   const updateCell = (cellId: string, source: string) => {
@@ -1843,7 +1953,10 @@ function App() {
             isRunning: false,
             mathOutput: undefined,
             stoichOutput: undefined,
-            stoichState: createStoichState()
+            stoichState: createStoichState(),
+            ui: {
+              outputCollapsed: false
+            }
           };
         }
         return {
@@ -1855,7 +1968,10 @@ function App() {
           isRunning: false,
           mathOutput: undefined,
           stoichOutput: undefined,
-          stoichState: undefined
+          stoichState: undefined,
+          ui: {
+            outputCollapsed: false
+          }
         };
       })
     );
@@ -2758,41 +2874,47 @@ function App() {
     }, 50);
   };
 
-  const mobileActionCellId = mobileEditorCellId ?? activeCellId;
-  const mobileActionCell = cells.find((cell) => cell.id === mobileActionCellId) ?? null;
-  const showMobileActionBar = mobileActionsEligible && mobileKeyboardOpen && !!mobileActionCell;
-
-  const runCellById = async (cell: CellModel) => {
-    if (cell.type === 'markdown') return;
-    if (cell.type === 'math') {
-      await runMathCell(
-        cell.id,
-        cell.source,
-        cell.mathRenderMode ?? defaultMathRenderMode,
-        cell.mathTrigMode ?? trigMode
-      );
-      return;
-    }
-    if (cell.type === 'stoich') {
-      await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
-      return;
-    }
-    await runCell(cell.id, cell.source);
-  };
-
   return (
     <ErrorBoundary>
-      <div className={`app${mobileActionsEligible ? ' mobile-actions-mode' : ''}`}>
+      <div className={`app${touchUiEnabled ? ' touch-ui' : ''}`}>
         <header className="app-header">
-          <div className="header-left">
-            <input
-              className="file-name-input"
-              value={notebookName}
-              onChange={(e) => setNotebookName(e.target.value)}
-              placeholder="Notebook name"
-            />
+          <div className="header-main">
+            <div className="header-left">
+              <input
+                className="file-name-input"
+                value={notebookName}
+                onChange={(e) => setNotebookName(e.target.value)}
+                placeholder="Notebook name"
+              />
+            </div>
+            <div className={`conn-pill status-${status}`}>
+              <span className={`conn-dot ${status}`} />
+              {status === 'connected'
+                ? 'Connected'
+                : status === 'connecting'
+                  ? statusDetail || 'Initializing environment...'
+                  : status}
+            </div>
           </div>
           <div className="header-right">
+            <div className="header-menu-wrap" ref={addCellMenuRef}>
+              <button
+                className="menu-button"
+                data-testid="add-cell-button"
+                onClick={() => setAddCellMenuOpen((prev) => !prev)}
+                aria-label="Add cell below selected"
+              >
+                ＋
+              </button>
+              {addCellMenuOpen ? (
+                <div className="header-menu add-cell-menu">
+                  <div className="menu-section-label">Add below selected</div>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('code')}>Code cell</button>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('markdown')}>Text cell</button>
+                  <button className="menu-item" onClick={() => insertCellBelowActive('math')}>Math cell</button>
+                </div>
+              ) : null}
+            </div>
             <button className="button" onClick={runAllCells} disabled={isRunningAll || status === 'connecting'}>
               {isRunningAll ? 'Running…' : 'Run All'}
             </button>
@@ -2810,14 +2932,6 @@ function App() {
             >
               Assistant
             </button>
-            <div className={`conn-pill status-${status}`}>
-              <span className={`conn-dot ${status}`} />
-              {status === 'connected'
-                ? 'Connected'
-                : status === 'connecting'
-                  ? statusDetail || 'Initializing environment...'
-                  : status}
-            </div>
             <div className="header-menu-wrap" ref={headerMenuRef}>
               <button
                 className="menu-button"
@@ -2896,38 +3010,35 @@ function App() {
             </div>
           ) : null}
 
-          <div className="notebook-stack">
+          <div className="notebook-stack" ref={notebookStackRef}>
             {cells.length === 0 ? (
               <div className="cell-empty">
-                <div className="cell-empty-title">This notebook is empty.</div>
-                <div className="divider-menu open">
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'code')}>Code</button>
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'markdown')}>Text</button>
-                  <button className="divider-btn" onClick={() => insertCellAt(0, 'math')}>Math</button>
-                </div>
+                <div className="cell-empty-title">Start with a cell.</div>
+                <button className="button" onClick={() => insertCellAt(0, 'code')}>Add code cell</button>
               </div>
             ) : null}
             {cells.length > 0 ? (
               <>
                 {Array.from({ length: cells.length + 1 }).map((_, index) => (
-                  <React.Fragment key={`slot-${index}`}>
-                    <div
-                      className="cell-divider"
-                      data-testid={`cell-divider-${index}`}
-                    >
-                      <div className="cell-divider-line" />
-                      <div className="divider-menu" role="menu" aria-label="Insert cell type">
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
-                        <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                  <React.Fragment key={`cell-slot-${index}`}>
+                    {!touchUiEnabled && cells.length > 0 ? (
+                      <div className="cell-divider" data-testid={`cell-divider-${index}`}>
+                        <div className="cell-divider-line" />
+                        <div className="divider-menu" role="menu" aria-label="Insert cell type">
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
+                          <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                     {index < cells.length ? (
                       <NotebookCell
                         key={cells[index].id}
                         cell={cells[index]}
                         isActive={cells[index].id === activeCellId}
                         onActivate={() => setActiveCellId(cells[index].id)}
+                        onAddAbove={() => insertSiblingCell(cells[index].id, 'above')}
+                        onAddBelow={() => insertSiblingCell(cells[index].id, 'below')}
                         onChange={(value) => updateCell(cells[index].id, value)}
                         onRun={(value) => runCell(cells[index].id, value)}
                         onRunMath={(value) =>
@@ -2943,25 +3054,27 @@ function App() {
                         onMoveUp={() => setCells((prev) => moveCellUp(prev, cells[index].id))}
                         onMoveDown={() => setCells((prev) => moveCellDown(prev, cells[index].id))}
                         onDelete={() => setCells((prev) => deleteCell(prev, cells[index].id))}
+                        onToggleOutput={() => toggleCellOutputCollapsed(cells[index].id)}
+                        onClearOutput={() => clearCellOutput(cells[index].id)}
+                        onToggleMathView={() => toggleMathView(cells[index].id)}
+                        onShowMathRendered={() => showMathRenderedView(cells[index].id)}
                         suggestions={codeSuggestions}
                         slashCommands={slashCommands}
                         onSlashCommand={(command) => handleSlashCommand(cells[index].id, command)}
                         mathSuggestions={mathSuggestions}
                         trigMode={trigMode}
                         kernelReady={!!activeKernel}
-                        onSetMathRenderMode={(mode) =>
-                          {
-                            setCells((prev) =>
-                              prev.map((cell) =>
-                                cell.id === cells[index].id ? { ...cell, mathRenderMode: mode } : cell
-                              )
-                            );
-                          }
-                        }
+                        onSetMathRenderMode={(mode) => {
+                          setCells((prev) =>
+                            prev.map((entry) =>
+                              entry.id === cells[index].id ? { ...entry, mathRenderMode: mode } : entry
+                            )
+                          );
+                        }}
                         onSetMathTrigMode={(mode) => {
                           setCells((prev) =>
-                            prev.map((cell) =>
-                              cell.id === cells[index].id ? { ...cell, mathTrigMode: mode } : cell
+                            prev.map((entry) =>
+                              entry.id === cells[index].id ? { ...entry, mathTrigMode: mode } : entry
                             )
                           );
                           if (cells[index].source.trim()) {
@@ -2989,94 +3102,6 @@ function App() {
             className="file-input"
           />
         </main>
-        {showMobileActionBar && mobileActionCell ? (
-          <div
-            className="mobile-cell-actions"
-            role="toolbar"
-            aria-label="Cell actions mobile"
-            style={{ top: `${Math.max(56, mobileVisualTop + mobileVisualHeight - 8)}px` }}
-          >
-            <button
-              type="button"
-              className="mobile-cell-action-btn primary"
-              onClick={() => {
-                runCellById(mobileActionCell).catch(() => undefined);
-              }}
-              disabled={mobileActionCell.type === 'markdown'}
-            >
-              Run
-            </button>
-            {mobileActionCell.type === 'math' ? (
-              <button
-                type="button"
-                className="mobile-cell-action-btn"
-                onClick={() =>
-                  {
-                    const currentMode = mobileActionCell.mathRenderMode ?? defaultMathRenderMode;
-                    const nextMode = currentMode === 'decimal' ? 'exact' : 'decimal';
-                    setCells((prev) =>
-                      prev.map((cell) =>
-                        cell.id === mobileActionCell.id ? { ...cell, mathRenderMode: nextMode } : cell
-                      )
-                    );
-                  }
-                }
-              >
-                {(mobileActionCell.mathRenderMode ?? defaultMathRenderMode) === 'decimal' ? 'Decimal' : 'Exact'}
-              </button>
-            ) : null}
-            {mobileActionCell.type === 'math' ? (
-              <button
-                type="button"
-                className="mobile-cell-action-btn"
-                onClick={() => {
-                  const nextMode = (mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'rad' : 'deg';
-                  setCells((prev) =>
-                    prev.map((cell) =>
-                      cell.id === mobileActionCell.id ? { ...cell, mathTrigMode: nextMode } : cell
-                    )
-                  );
-                  if (mobileActionCell.source.trim()) {
-                    void runMathCell(
-                      mobileActionCell.id,
-                      mobileActionCell.source,
-                      mobileActionCell.mathRenderMode ?? defaultMathRenderMode,
-                      nextMode,
-                      true
-                    );
-                  }
-                }}
-              >
-                {(mobileActionCell.mathTrigMode ?? trigMode) === 'deg' ? 'Deg' : 'Rad'}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="mobile-cell-action-btn"
-              onClick={() => setCells((prev) => moveCellUp(prev, mobileActionCell.id))}
-            >
-              ↑
-            </button>
-            <button
-              type="button"
-              className="mobile-cell-action-btn"
-              onClick={() => setCells((prev) => moveCellDown(prev, mobileActionCell.id))}
-            >
-              ↓
-            </button>
-            <button
-              type="button"
-              className="mobile-cell-action-btn danger"
-              onClick={() => {
-                setCells((prev) => deleteCell(prev, mobileActionCell.id));
-                setMobileEditorCellId(null);
-                setMobileKeyboardOpen(false);
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        ) : null}
         <div ref={assistantDrawerRef}>
           <AssistantDrawer
             open={assistantOpen}

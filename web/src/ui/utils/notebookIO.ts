@@ -153,6 +153,17 @@ export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
   cells: data.cells.map((cell) => ({
     ...cell,
     output: normalizeOutput((cell as any).output),
+    ui: {
+      outputCollapsed: cell.ui?.outputCollapsed ?? false,
+      ...(cell.type === 'math'
+        ? {
+            mathView:
+              cell.ui?.mathView === 'rendered' || cell.mathOutput
+                ? 'rendered'
+                : 'source'
+          }
+        : {})
+    },
     isRunning: false
   }))
 });
@@ -349,6 +360,9 @@ export const deserializeIpynb = (data: any) => {
         type: 'stoich',
         stoichState: sugarpy.stoichState ?? { reaction: '', inputs: {} },
         stoichOutput: sugarpy.stoichOutput ?? undefined,
+        ui: {
+          outputCollapsed: false
+        },
         isRunning: false
       };
     }
@@ -365,6 +379,10 @@ export const deserializeIpynb = (data: any) => {
               ? 'decimal'
               : 'exact',
         mathTrigMode: sugarpy.mathTrigMode === 'rad' ? 'rad' : metadata.trigMode === 'rad' ? 'rad' : 'deg',
+        ui: {
+          outputCollapsed: false,
+          mathView: sugarpy.mathOutput ? 'rendered' : 'source'
+        },
         isRunning: false
       };
     }
@@ -373,6 +391,9 @@ export const deserializeIpynb = (data: any) => {
         id: `cell-${Date.now()}-${idx}`,
         source: fromLines(cell?.source ?? ''),
         type: 'markdown',
+        ui: {
+          outputCollapsed: false
+        },
         isRunning: false
       };
     }
@@ -413,6 +434,9 @@ export const deserializeIpynb = (data: any) => {
       type: 'code',
       output: parsedOutput,
       execCount: cell?.execution_count ?? undefined,
+      ui: {
+        outputCollapsed: false
+      },
       isRunning: false
     };
   });
