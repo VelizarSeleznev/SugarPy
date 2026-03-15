@@ -12,6 +12,16 @@ This document describes a demo setup for multiple concurrent users on one server
 - Keeps Jupyter off the public interface directly.
 - Avoids mixed-content issues on iPad Safari by keeping browser origin and websocket scheme aligned.
 - Adds basic CPU/RAM limits in systemd to reduce blast radius from heavy code.
+- Uses backend-managed Docker notebook runtimes so live notebook kernels keep state without gaining direct access to the server filesystem.
+
+## Host prerequisites for notebook runtimes
+- Install Docker on the host and ensure the SugarPy service user can run `docker`.
+- Build the notebook runtime image from the current release:
+  ```bash
+  cd /opt/sugarpy/current
+  ./scripts/build-runtime-image.sh
+  ```
+- Notebook runtime metadata and per-notebook workspaces live under `SUGARPY_STORAGE_ROOT/live-runtimes`.
 
 ## Build frontend
 ```bash
@@ -118,6 +128,7 @@ The deploy job now uses:
 This script:
 - builds a fresh release under `/opt/sugarpy/releases/<sha>`
 - reuses `/opt/sugarpy/shared/.venv` and `/opt/sugarpy/shared/notebooks`
+- can reuse or rebuild the notebook runtime image via `./scripts/build-runtime-image.sh`
 - atomically switches `/opt/sugarpy/current`
 - reloads `sugarpy-jupyter.service` and `nginx`
 - verifies local health endpoints after deploy
@@ -137,6 +148,11 @@ Manual local deploy directly on `seggver`:
 DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-local.sh
+```
+
+Cleanup orphaned notebook runtimes after crashes or aborted deploys:
+```bash
+./scripts/cleanup-runtime-containers.sh
 ```
 
 ## Shared assistant keys on the demo host

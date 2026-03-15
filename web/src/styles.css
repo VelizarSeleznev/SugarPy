@@ -865,13 +865,14 @@ body {
 .cell-main {
   min-width: 0;
   position: relative;
-  padding: 8px 0 8px 0;
+  padding: 18px 0 8px 0;
 }
 
 .cell-action-bar {
   position: absolute;
-  top: 6px;
+  top: 0;
   right: 0;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   gap: 4px;

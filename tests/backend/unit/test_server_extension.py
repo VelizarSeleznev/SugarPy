@@ -37,18 +37,48 @@ def test_restricted_python_allows_basic_math_workflow():
 
 
 def test_execute_notebook_request_prefers_stdout_over_synthetic_none_for_print():
-    response = asyncio.run(
-        execute_notebook_request(
-            {
-                "cells": [{"id": "cell-1", "type": "code", "source": 'print("hello world")'}],
-                "targetCellId": "cell-1",
-                "trigMode": "deg",
-                "defaultMathRenderMode": "exact",
-                "timeoutMs": 5000,
-            }
+    class FakeRuntimeManager:
+        def __init__(self):
+            self.calls = []
+
+        async def execute_in_runtime(self, notebook_id, code, timeout_s):
+            self.calls.append((notebook_id, code, timeout_s))
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "hello world\n",
+                    "stderr": "",
+                    "mimeData": {},
+                    "errorName": None,
+                    "errorValue": None,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+    fake_manager = FakeRuntimeManager()
+
+    from sugarpy import server_extension
+
+    original_factory = server_extension._runtime_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_notebook_request(
+                {
+                    "notebookId": "nb-1",
+                    "cells": [{"id": "cell-1", "type": "code", "source": 'print("hello world")'}],
+                    "targetCellId": "cell-1",
+                    "trigMode": "deg",
+                    "defaultMathRenderMode": "exact",
+                    "timeoutMs": 5000,
+                }
+            )
         )
-    )
+    finally:
+        server_extension._runtime_manager = original_factory
 
     assert response["status"] == "ok"
     assert response["output"]["type"] == "mime"
     assert response["output"]["data"]["text/plain"] == "hello world\n"
+    assert response["runtime"]["status"] == "connected"
+    assert fake_manager.calls[0][0] == "nb-1"

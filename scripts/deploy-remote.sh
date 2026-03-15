@@ -78,6 +78,7 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "
   ln -sfn '${SHARED_DIR}/notebooks' '${RELEASE_PATH}/notebooks'
   cd '${RELEASE_PATH}'
   UV_PROJECT_ENVIRONMENT='${SHARED_DIR}/.venv' uv sync --extra lab --frozen
+  ./scripts/build-runtime-image.sh
   cd '${RELEASE_PATH}/web'
   npm ci
   npm run build

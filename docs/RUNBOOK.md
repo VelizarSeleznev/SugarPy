@@ -14,6 +14,11 @@ What it does:
 - Syncs user functions.
 - Starts the restricted SugarPy backend on `http://localhost:8888`.
 - Starts Vite dev server for the UI (`http://localhost:5173`) with a `/api` proxy to the backend.
+- Live notebook execution now expects a notebook runtime image for persistent per-notebook runtimes.
+- Build it before running container-backed notebook execution:
+  ```bash
+  ./scripts/build-runtime-image.sh
+  ```
 
 Optional assistant env vars:
 ```bash
@@ -66,6 +71,13 @@ Assistant UX notes:
 
 Runtime server config for restricted deployments:
 - SugarPy now supports a backend-side assistant proxy for shared server keys.
+- Live notebook execution uses a backend-managed persistent runtime per notebook.
+- Default runtime env vars:
+  ```bash
+  SUGARPY_NOTEBOOK_RUNTIME_BACKEND=docker
+  SUGARPY_NOTEBOOK_RUNTIME_IMAGE=sugarpy-runtime:latest
+  SUGARPY_RUNTIME_IDLE_TIMEOUT_S=1800
+  ```
 - Preferred server env vars:
   ```bash
   SUGARPY_ASSISTANT_OPENAI_API_KEY=...
@@ -132,7 +144,7 @@ Assistant regression checks:
 - New cells are created from the header `+` control and are inserted below the currently selected cell.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).
-- The same compact selected-cell action bar is used across desktop and touch layouts.
+- The same compact selected-cell action bar is used across desktop and touch layouts, aligned to the top-right edge of the active cell.
 
 ## Open the standalone wiki page
 - Open `http://localhost:5173/wiki`

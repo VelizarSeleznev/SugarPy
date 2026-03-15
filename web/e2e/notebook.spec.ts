@@ -142,6 +142,13 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const addCodeCellAfterFirstCode = async (page: any) => {
+  await addCodeCellToEmptyNotebook(page);
+  await page.getByTestId('add-cell-button').click();
+  await page.getByRole('button', { name: 'Code cell' }).click();
+  await expect(page.locator('[data-testid="cell-row-code"]').last()).toBeVisible();
+};
+
 const insertSpecialCellFromHeaderMenu = async (page: any, label: string) => {
   await page.getByTestId('add-cell-button').click();
   const menu = page.locator('.add-cell-menu');
@@ -578,6 +585,26 @@ test.describe('Notebook CAS outputs', () => {
     const errorOutput = page.getByTestId('cell-error');
     await expect(errorOutput).toBeVisible();
     await expect(errorOutput).toContainText('ZeroDivisionError: division by zero');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('@smoke Code runtime: print output renders and variables persist between cells', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await setCodeInFirstCell(page, `value = 41
+print("hello world")`);
+
+    const firstCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(firstCell.getByTestId('cell-plain-output')).toContainText('hello world');
+
+    await addCodeCellAfterFirstCode(page);
+    const secondCell = page.locator('[data-testid="cell-row-code"]').last();
+    const editor = secondCell.locator('.cm-content').first();
+    await editor.click();
+    await page.keyboard.type('value + 1');
+    await secondCell.locator('[data-testid="run-cell"]').click();
+
+    await expect(secondCell.getByTestId('cell-plain-output')).toContainText('42');
     await expectNoGlobalErrors(page, guards);
   });
 

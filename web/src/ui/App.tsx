@@ -34,12 +34,17 @@ import {
   runAssistantSandbox as runIsolatedAssistantSandbox
 } from './utils/assistantSandbox';
 import {
+  connectNotebookRuntime,
+  deleteNotebookRuntime,
   executeNotebookCell,
+  fetchNotebookRuntime,
   fetchRuntimeConfig,
   loadServerAutosave as loadServerAutosaveRequest,
   persistAssistantTraceToServer,
+  restartNotebookRuntime,
   saveNotebookDocument,
   saveServerAutosave as saveServerAutosaveRequest,
+  SugarPyNotebookRuntime,
   SugarPyRuntimeConfig
 } from './utils/backendApi';
 import {
@@ -331,6 +336,10 @@ function App() {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [notebookRuntime, setNotebookRuntime] = useState<SugarPyNotebookRuntime>({
+    notebookId: '',
+    status: 'disconnected'
+  });
   const [cells, setCells] = useState<CellModel[]>([]);
   const { allFunctions } = useFunctionLibrary();
   const [userFunctions, setUserFunctions] = useState<string[]>([]);
@@ -453,28 +462,83 @@ function App() {
     specialPaletteInputRef.current?.select();
   }, [specialPaletteOpen]);
 
-  const connectBackend = async () => {
-    if (connectingRef.current) return;
+  const connectBackend = async (): Promise<boolean> => {
+    if (connectingRef.current) return false;
     connectingRef.current = true;
     setStatus('connecting');
-    setStatusDetail('Checking restricted runtime...');
+    setStatusDetail('Checking backend runtime...');
     setErrorMsg('');
     try {
       const config = await fetchRuntimeConfig();
       setRuntimeConfig(config);
       setStatus('connected');
-      setStatusDetail(config.mode ? `Mode: ${config.mode}` : 'Restricted runtime ready');
+      setStatusDetail(config.mode ? `Mode: ${config.mode}` : 'Backend ready');
       setErrorMsg('');
+      return true;
     } catch (err) {
       setStatus('error');
       setStatusDetail('');
       setErrorMsg(err instanceof Error ? err.message : 'Failed to connect to SugarPy backend.');
+      return false;
     } finally {
       connectingRef.current = false;
     }
   };
 
   const activeKernel = status === 'connected';
+
+  const applyNotebookRuntime = (runtime: SugarPyNotebookRuntime) => {
+    setNotebookRuntime(runtime);
+    const detail =
+      runtime.status === 'connected'
+        ? 'Notebook runtime connected'
+        : runtime.status === 'disconnected'
+          ? 'Notebook runtime disconnected'
+          : runtime.status === 'starting'
+            ? 'Starting notebook runtime...'
+            : runtime.status === 'restarting'
+              ? 'Restarting notebook runtime...'
+              : runtime.status === 'deleting'
+                ? 'Deleting notebook runtime...'
+                : runtime.error || 'Notebook runtime error';
+    if (status === 'connected') {
+      setStatusDetail(detail);
+    }
+  };
+
+  const refreshNotebookRuntime = async (targetNotebookId = notebookId) => {
+    if (status !== 'connected') return;
+    try {
+      const runtime = await fetchNotebookRuntime(targetNotebookId);
+      applyNotebookRuntime(runtime);
+    } catch (_err) {
+      applyNotebookRuntime({ notebookId: targetNotebookId, status: 'disconnected' });
+    }
+  };
+
+  const ensureNotebookRuntime = async (targetNotebookId = notebookId) => {
+    let backendReady = status === 'connected';
+    if (!backendReady) {
+      backendReady = await connectBackend();
+    }
+    if (!backendReady) {
+      throw new Error(errorMsg || 'SugarPy backend is not connected.');
+    }
+    if (
+      notebookRuntime.notebookId === targetNotebookId &&
+      notebookRuntime.status === 'connected'
+    ) {
+      return notebookRuntime;
+    }
+    const starting: SugarPyNotebookRuntime = {
+      notebookId: targetNotebookId,
+      status: 'starting'
+    };
+    applyNotebookRuntime(starting);
+    const runtime = await connectNotebookRuntime(targetNotebookId);
+    applyNotebookRuntime(runtime);
+    return runtime;
+  };
 
   const buildSnapshot = (
     nextCells: CellModel[],
@@ -606,6 +670,11 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!notebookId || status !== 'connected') return;
+    void refreshNotebookRuntime(notebookId);
+  }, [notebookId, status]);
+
+  useEffect(() => {
     const updateEligibility = () => {
       const coarse = window.matchMedia('(pointer: coarse)').matches;
       const noHover = window.matchMedia('(hover: none)').matches;
@@ -719,6 +788,7 @@ function App() {
       const decoded = deserializeSugarPy(selected);
       const nextCells = decoded.cells;
       setNotebookId(decoded.id);
+      setNotebookRuntime({ notebookId: decoded.id, status: 'disconnected' });
       setNotebookName(decoded.name);
       setTrigMode(decoded.trigMode);
       setDefaultMathRenderMode(decoded.defaultMathRenderMode);
@@ -768,6 +838,9 @@ function App() {
     );
 
   const applyExecutionResult = (cellId: string, response: SugarPyExecutionResponse, countExecution = true) => {
+    if (response.runtime) {
+      applyNotebookRuntime(response.runtime);
+    }
     const updateCellState = (nextExecCount?: number) => {
       setCells((prev) =>
         prev.map((cell) => {
@@ -840,7 +913,6 @@ function App() {
   };
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
-    if (!activeKernel) return;
     setCells((prev) =>
       prev.map((cell) =>
         cell.id === cellId
@@ -858,7 +930,15 @@ function App() {
       )
     );
     try {
+      if (!activeKernel) {
+        const backendReady = await connectBackend();
+        if (!backendReady) {
+          throw new Error(errorMsg || 'SugarPy backend is not connected.');
+        }
+      }
+      await ensureNotebookRuntime();
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -898,7 +978,6 @@ function App() {
     trigModeOverride?: 'deg' | 'rad',
     preserveOutput = false
   ) => {
-    if (!activeKernel) return;
     const cell = cells.find((entry) => entry.id === cellId);
     const renderMode =
       renderModeOverride ??
@@ -920,7 +999,15 @@ function App() {
       )
     );
     try {
+      if (!activeKernel) {
+        const backendReady = await connectBackend();
+        if (!backendReady) {
+          throw new Error(errorMsg || 'SugarPy backend is not connected.');
+        }
+      }
+      await ensureNotebookRuntime();
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -950,7 +1037,6 @@ function App() {
   };
 
   const runStoichCell = async (cellId: string, state: StoichState) => {
-    if (!activeKernel) return;
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
@@ -966,6 +1052,13 @@ function App() {
       )
     );
     try {
+      if (!activeKernel) {
+        const backendReady = await connectBackend();
+        if (!backendReady) {
+          throw new Error(errorMsg || 'SugarPy backend is not connected.');
+        }
+      }
+      await ensureNotebookRuntime();
       const nextCells = cellsRef.current.map((cell) =>
         cell.id === cellId
           ? {
@@ -976,6 +1069,7 @@ function App() {
           : cell
       );
       const response = await executeNotebookCell({
+        notebookId,
         cells: nextCells as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -999,7 +1093,6 @@ function App() {
     customCell: CustomCellData,
     options?: { exportBindings?: boolean }
   ) => {
-    if (!activeKernel) return;
     const nextCustomCell: CustomCellData = {
       ...customCell,
       state: {
@@ -1023,6 +1116,13 @@ function App() {
       )
     );
     try {
+      if (!activeKernel) {
+        const backendReady = await connectBackend();
+        if (!backendReady) {
+          throw new Error(errorMsg || 'SugarPy backend is not connected.');
+        }
+      }
+      await ensureNotebookRuntime();
       const nextCells = cellsRef.current.map((cell) =>
         cell.id === cellId
           ? {
@@ -1033,6 +1133,7 @@ function App() {
           : cell
       );
       const response = await executeNotebookCell({
+        notebookId,
         cells: nextCells as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -1067,9 +1168,11 @@ function App() {
 
   const runAllCells = async () => {
     if (isRunningAll) return;
-    if (!activeKernel) {
-      await connectBackend();
-      if (status !== 'connected') return;
+    try {
+      await ensureNotebookRuntime();
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      return;
     }
     setIsRunningAll(true);
     try {
@@ -1212,6 +1315,60 @@ function App() {
       }))
     );
     setHeaderMenuOpen(false);
+  };
+
+  const handleRestartNotebookRuntime = async () => {
+    if (!(await connectBackend()) && status !== 'connected') return;
+    const nextRuntime: SugarPyNotebookRuntime = { notebookId, status: 'restarting' };
+    applyNotebookRuntime(nextRuntime);
+    try {
+      const runtime = await restartNotebookRuntime(notebookId);
+      applyNotebookRuntime(runtime);
+      clearNotebookOutputs();
+    } catch (error) {
+      applyNotebookRuntime({
+        notebookId,
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setHeaderMenuOpen(false);
+    }
+  };
+
+  const handleDeleteNotebookRuntime = async () => {
+    if (!(await connectBackend()) && status !== 'connected') return;
+    const nextRuntime: SugarPyNotebookRuntime = { notebookId, status: 'deleting' };
+    applyNotebookRuntime(nextRuntime);
+    try {
+      const runtime = await deleteNotebookRuntime(notebookId);
+      applyNotebookRuntime(runtime);
+      clearNotebookOutputs();
+    } catch (error) {
+      applyNotebookRuntime({
+        notebookId,
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setHeaderMenuOpen(false);
+    }
+  };
+
+  const handleConnectNotebookRuntime = async () => {
+    try {
+      await ensureNotebookRuntime();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErrorMsg(message);
+      applyNotebookRuntime({
+        notebookId,
+        status: 'error',
+        error: message
+      });
+    } finally {
+      setHeaderMenuOpen(false);
+    }
   };
 
   const toggleMathView = (cellId: string) => {
@@ -2465,6 +2622,7 @@ function App() {
     const nextId = createNotebookId();
     const nextCells: CellModel[] = [];
     setNotebookId(nextId);
+    setNotebookRuntime({ notebookId: nextId, status: 'disconnected' });
     setNotebookName('Untitled');
     setTrigMode('deg');
     setDefaultMathRenderMode('exact');
@@ -2559,6 +2717,7 @@ function App() {
       }
       const safeCells = next.cells.length > 0 ? next.cells : [createCell('code')];
       setNotebookId(next.id);
+      setNotebookRuntime({ notebookId: next.id, status: 'disconnected' });
       setNotebookName(next.name || 'Untitled');
       setTrigMode(next.trigMode);
       setDefaultMathRenderMode(next.defaultMathRenderMode);
@@ -2722,7 +2881,30 @@ function App() {
                     {syncMessage ? ` · ${syncMessage}` : ''}
                   </div>
                   <button className="menu-item" onClick={connectBackend}>
-                    {activeKernel ? 'Restricted Runtime Ready' : 'Reconnect Backend'}
+                    {activeKernel ? 'Backend Ready' : 'Reconnect Backend'}
+                  </button>
+                  <div className="menu-section-label">Runtime</div>
+                  <div className="save-status menu-save-status clean">
+                    {notebookRuntime.status === 'connected'
+                      ? 'Connected'
+                      : notebookRuntime.status === 'starting'
+                        ? 'Starting…'
+                        : notebookRuntime.status === 'restarting'
+                          ? 'Restarting…'
+                          : notebookRuntime.status === 'deleting'
+                            ? 'Deleting…'
+                            : notebookRuntime.status === 'error'
+                              ? `Error${notebookRuntime.error ? ` · ${notebookRuntime.error}` : ''}`
+                              : 'Disconnected'}
+                  </div>
+                  <button className="menu-item" onClick={handleConnectNotebookRuntime}>
+                    {notebookRuntime.status === 'connected' ? 'Reconnect Runtime' : 'Connect Runtime'}
+                  </button>
+                  <button className="menu-item" onClick={handleRestartNotebookRuntime}>
+                    Restart Runtime
+                  </button>
+                  <button className="menu-item" onClick={handleDeleteNotebookRuntime}>
+                    Disconnect and Delete Runtime
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}

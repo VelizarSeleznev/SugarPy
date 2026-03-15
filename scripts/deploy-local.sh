@@ -76,6 +76,7 @@ ${RUN_AS_SUGARPY} "
 
   cd '${RELEASE_PATH}'
   uv sync --extra lab --frozen
+  ./scripts/build-runtime-image.sh
 
   cd '${RELEASE_PATH}/web'
   npm ci
