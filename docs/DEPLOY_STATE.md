@@ -10,6 +10,7 @@ It intentionally excludes secrets (passwords, private keys, tokens, account data
 - Release directory root: `/opt/sugarpy/releases`
 - Shared runtime state: `/opt/sugarpy/shared`
 - Runtime user: `sugarpy`
+- Deploy/login user: `egg`
 
 ## Network layout
 - Jupyter server: `127.0.0.1:8888` with `base_url=/jupyter/`
@@ -42,12 +43,14 @@ All three services are expected to be `active` in systemd.
 
 ## Verification checklist
 1. UI returns 200 from the public tunnel URL.
-2. `GET /jupyter/api/status` returns 200 (with token).
-3. Creating multiple kernels via `/jupyter/api/kernels` succeeds.
-4. Deleting created kernels succeeds.
+2. `GET http://127.0.0.1:8888/jupyter/api/status?token=...` returns 200.
+3. `GET http://127.0.0.1:18081/` returns the built frontend.
+4. Creating multiple kernels via `/jupyter/api/kernels` succeeds.
+5. Deleting created kernels succeeds.
 
 ## Notes
-- `/jupyter/` is publicly reachable behind the same origin and currently depends on a shared token.
+- Public Nginx serves `/` and `/api/*` only; `/jupyter/` intentionally returns 404 at the edge.
+- Remote deploys log in as `egg`, run release-file steps as `sugarpy`, build Docker images with `egg`, and reload services through passwordless `sudo`.
 - This setup is demo-oriented (shared token, no per-user account isolation).
 - Deploys should target `/opt/sugarpy/current` and build a fresh release under `/opt/sugarpy/releases/<sha>` before switching the symlink.
 - Shared assistant keys, when used, should live in `/etc/sugarpy/assistant.env` and be consumed by the Jupyter service environment, not under `notebooks/`.

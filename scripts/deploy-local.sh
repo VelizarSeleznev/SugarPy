@@ -96,7 +96,7 @@ sudo systemctl reload nginx
 
 # 5) Health checks.
 retry_until_ok "Frontend health check" "curl -fsS http://127.0.0.1:18081/"
-retry_until_ok "Jupyter health check" "curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}'"
+retry_until_ok "Jupyter health check" "curl -fsS 'http://127.0.0.1:8888/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}'"
 
 # 6) Prune old releases.
 ${RUN_AS_SUGARPY} "

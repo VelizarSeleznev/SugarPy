@@ -133,15 +133,22 @@ This script:
 - reloads `sugarpy-jupyter.service` and `nginx`
 - verifies local health endpoints after deploy
 
-Manual deploy from local terminal (same mechanism as CI):
+Manual deploy from local terminal:
 ```bash
 DEPLOY_HOST=seggver \
-DEPLOY_USER=sugarpy \
+DEPLOY_USER=egg \
+DEPLOY_APP_USER=sugarpy \
+DEPLOY_DOCKER_USER=egg \
 DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_PORT=22 \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-remote.sh
 ```
+
+Use a login user that can:
+- run release file operations as `sugarpy` with passwordless `sudo -u sugarpy /bin/bash -lc ...`
+- build Docker images either directly or via passwordless `sudo`
+- restart `sugarpy-jupyter.service` and reload `nginx` with passwordless `sudo`
 
 Manual local deploy directly on `seggver`:
 ```bash
@@ -154,6 +161,13 @@ Cleanup orphaned notebook runtimes after crashes or aborted deploys:
 ```bash
 ./scripts/cleanup-runtime-containers.sh
 ```
+
+After deploy:
+- Confirm the frontend is reachable from `http://127.0.0.1:18081/` on the server.
+- Confirm Jupyter health from `http://127.0.0.1:8888/jupyter/api/status?token=sugarpy`.
+- Confirm the public Cloudflare URL is reachable and report `https://sugarpy.tech/`.
+- The public edge serves only `/` and `/api/*`; `/jupyter/` intentionally returns `404`.
+- Deploys now build into `/opt/sugarpy/releases/<sha>` and then atomically switch `/opt/sugarpy/current`.
 
 ## Shared assistant keys on the demo host
 To let the deployed site use the assistant without asking each browser for its own key,

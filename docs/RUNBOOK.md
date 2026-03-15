@@ -197,7 +197,9 @@ Deploy the current repository state to `seggver` and report whether deployment s
 Manual remote deploy:
 ```bash
 DEPLOY_HOST=seggver \
-DEPLOY_USER=sugarpy \
+DEPLOY_USER=egg \
+DEPLOY_APP_USER=sugarpy \
+DEPLOY_DOCKER_USER=egg \
 DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_PORT=22 \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
@@ -213,7 +215,7 @@ DEPLOY_JUPYTER_TOKEN=sugarpy \
 
 After deploy:
 - Confirm the frontend is reachable from `http://127.0.0.1:18081/` on the server.
-- Confirm Jupyter health from `http://127.0.0.1:18081/jupyter/api/status?token=sugarpy`.
+- Confirm Jupyter health from `http://127.0.0.1:8888/jupyter/api/status?token=sugarpy`.
 - Confirm the public Cloudflare URL is reachable and report `https://sugarpy.tech/`.
 - The public edge serves only `/` and `/api/*`; `/jupyter/` remains internal-only behind the backend runtime.
 - Deploys now build into `/opt/sugarpy/releases/<sha>` and then atomically switch `/opt/sugarpy/current`.
