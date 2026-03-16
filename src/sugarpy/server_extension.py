@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from jupyter_client.manager import AsyncKernelManager
 from jupyter_server.base.handlers import APIHandler
 from tornado import web
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
+
+from sugarpy.runtime_manager import RuntimeManager
 
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
@@ -84,6 +87,7 @@ BLOCKED_ATTR_CALLS = {
     "socket.socket",
     "pathlib.Path.open",
 }
+_RUNTIME_MANAGER: RuntimeManager | None = None
 
 
 def _assistant_secret_file_path() -> str:
@@ -128,14 +132,34 @@ def _assistant_traces_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _sandbox_code_cells_restricted() -> bool:
+    profile = _security_profile()
+    return profile in {"restricted-demo", "school-secure"}
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _storage_root() -> Path:
     configured = os.environ.get("SUGARPY_STORAGE_ROOT", "").strip()
+    candidates: list[Path] = []
     if configured:
-        root = Path(os.path.expanduser(configured))
+        candidates.append(Path(os.path.expanduser(configured)))
     else:
-        root = Path.home() / ".local" / "share" / "sugarpy" / DEFAULT_STORAGE_DIRNAME
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+        candidates.append(Path.home() / ".local" / "share" / "sugarpy" / DEFAULT_STORAGE_DIRNAME)
+        candidates.append(_project_root() / ".sugarpy-runtime")
+
+    for root in candidates:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / ".write-probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return root
+        except OSError:
+            continue
+    raise PermissionError("SugarPy could not find a writable runtime storage directory.")
 
 
 def _storage_subdir(name: str) -> Path:
@@ -190,10 +214,12 @@ def _load_assistant_server_config() -> dict[str, Any]:
             "groq": bool(_assistant_setting("SUGARPY_ASSISTANT_GROQ_API_KEY")),
         },
         "execution": {
-            "ephemeral": True,
-            "networkEnabled": False,
+            "ephemeral": False,
+            "networkEnabled": True,
             "directBrowserKernelAccess": False,
-            "codeCellsRestricted": profile in {"restricted-demo", "school-secure"},
+            "codeCellsRestricted": False,
+            "assistantSandboxEphemeral": True,
+            "runtimeBackend": os.environ.get("SUGARPY_NOTEBOOK_RUNTIME_BACKEND", "docker").strip() or "docker",
         },
     }
 
@@ -350,13 +376,22 @@ def _bootstrap_code() -> str:
         [
             "import math",
             "import json",
+            "import io",
+            "import sys",
+            "import contextlib",
             "import sympy as sp",
             "from sympy import *",
             "from sympy import symbols",
             'x, y, z, t = symbols("x y z t")',
             "from IPython.display import display as __sugarpy_display",
             "from sugarpy.startup import plot",
+            "def __sugarpy_emit_text(value):",
+            "    if not value:",
+            "        return",
+            "    __sugarpy_display({'text/plain': str(value)}, raw=True)",
             "def __sugarpy_emit_output(value):",
+            "    if value is None:",
+            "        return",
             "    payload = {'text/plain': repr(value)}",
             "    if isinstance(value, sp.Basic):",
             "        payload['text/plain'] = str(value)",
@@ -389,21 +424,38 @@ def _wrap_code_for_notebook_display(source: str) -> str:
         tree = ast.parse(source)
     except SyntaxError:
         return source
-    if not tree.body or not isinstance(tree.body[-1], ast.Expr):
+    if not tree.body:
         return source
 
-    prefix = ""
-    if len(tree.body) > 1:
-        prefix = ast.unparse(ast.Module(body=tree.body[:-1], type_ignores=[])).strip()
-    last_expr = ast.unparse(tree.body[-1].value).strip()
-    if not last_expr:
-        return source
-    lines = []
-    if prefix:
-        lines.append(prefix)
-    lines.append(f"__sugarpy_value = {last_expr}")
-    lines.append("__sugarpy_emit_output(__sugarpy_value)")
-    return "\n".join(lines)
+    body_lines: list[str] = [
+        "__sugarpy_stdout = io.StringIO()",
+        "__sugarpy_stderr = io.StringIO()",
+        "__sugarpy_has_value = False",
+        "__sugarpy_value = None",
+        "with contextlib.redirect_stdout(__sugarpy_stdout), contextlib.redirect_stderr(__sugarpy_stderr):",
+    ]
+
+    if isinstance(tree.body[-1], ast.Expr):
+        prefix = ast.unparse(ast.Module(body=tree.body[:-1], type_ignores=[])).strip() if len(tree.body) > 1 else ""
+        if prefix:
+            body_lines.append(textwrap.indent(prefix, "    "))
+        last_expr = ast.unparse(tree.body[-1].value).strip()
+        if last_expr:
+            body_lines.append(f"    __sugarpy_value = {last_expr}")
+            body_lines.append("    __sugarpy_has_value = True")
+    else:
+        body_lines.append(textwrap.indent(source, "    "))
+
+    body_lines.extend(
+        [
+            "__sugarpy_emit_text(__sugarpy_stdout.getvalue())",
+            "if __sugarpy_stderr.getvalue():",
+            "    print(__sugarpy_stderr.getvalue(), file=sys.stderr, end='')",
+            "if __sugarpy_has_value:",
+            "    __sugarpy_emit_output(__sugarpy_value)",
+        ]
+    )
+    return "\n".join(body_lines)
 
 
 def _cell_source_for_execution(cell: dict[str, Any], trig_mode: str, render_mode: str) -> str:
@@ -419,6 +471,8 @@ def _cell_source_for_execution(cell: dict[str, Any], trig_mode: str, render_mode
         reaction = str(state.get("reaction") or "")
         inputs = state.get("inputs") if isinstance(state.get("inputs"), dict) else {}
         return _build_stoich_code(reaction, inputs)
+    if cell_type == "custom":
+        raise web.HTTPError(400, reason="Unsupported custom cell template")
     return _wrap_code_for_notebook_display(str(cell.get("source") or ""))
 
 
@@ -426,10 +480,25 @@ def _join_execution_chunks(chunks: list[str]) -> str:
     return "\n\n".join(chunk for chunk in chunks if chunk.strip())
 
 
+def _runtime_manager() -> RuntimeManager:
+    global _RUNTIME_MANAGER
+    if _RUNTIME_MANAGER is None:
+        _RUNTIME_MANAGER = RuntimeManager(
+            storage_root=_storage_root(),
+            project_root=_project_root(),
+            bootstrap_code=_bootstrap_code(),
+            executor=_execute_kernel_code,
+        )
+    return _RUNTIME_MANAGER
+
+
 async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     cells = payload.get("cells")
     if not isinstance(cells, list):
         raise web.HTTPError(400, reason="cells must be a list")
+    notebook_id = str(payload.get("notebookId") or "").strip()
+    if not notebook_id:
+        raise web.HTTPError(400, reason="notebookId is required")
     target_cell_id = str(payload.get("targetCellId") or "")
     notebook_cells = [cell for cell in cells if isinstance(cell, dict)]
     target_index = next((index for index, cell in enumerate(notebook_cells) if str(cell.get("id")) == target_cell_id), -1)
@@ -442,87 +511,40 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     if len(target_source) > MAX_EXEC_SOURCE_LENGTH:
         raise web.HTTPError(400, reason=f"Cell source exceeds the {MAX_EXEC_SOURCE_LENGTH} character limit")
 
-    security = _load_assistant_server_config()["execution"]
-    restricted_code = bool(security.get("codeCellsRestricted"))
-    if target_type == "code" and restricted_code:
-        errors = validate_restricted_python(target_source)
-        if errors:
-            return {
-                "cellId": target_cell_id,
-                "cellType": target_type,
-                "status": "error",
-                "output": {"type": "error", "ename": "RestrictedExecution", "evalue": "; ".join(errors)},
-                "execCountIncrement": False,
-                "securityProfile": _security_profile(),
-            }
-
     trig_mode = "rad" if payload.get("trigMode") == "rad" else "deg"
     render_mode = "decimal" if payload.get("defaultMathRenderMode") == "decimal" else "exact"
     timeout_s = min(
         max(float(payload.get("timeoutMs") or DEFAULT_TIMEOUT_MS), 0.25),
         DEFAULT_TIMEOUT_MS,
     )
-
-    replay_cells = [
-        cell
-        for cell in notebook_cells[:target_index]
-        if str(cell.get("type") or "code") in {"code", "math"} and str(cell.get("source") or "").strip()
-    ][:MAX_REPLAY_CELLS]
-
-    kernel = AsyncKernelManager(kernel_name="python3")
-    tmp_home = tempfile.mkdtemp(prefix="sugarpy-sandbox-")
-    env = {
-        "HOME": tmp_home,
-        "PYTHONNOUSERSITE": "1",
-        "IPYTHONDIR": tmp_home,
-        "MPLCONFIGDIR": tmp_home,
-        "SUGARPY_SECURITY_PROFILE": _security_profile(),
-    }
-
-    await kernel.start_kernel(env={**os.environ, **env})
-    client = kernel.client()
-    client.start_channels()
+    runtime_code = _cell_source_for_execution(target_cell, trig_mode, render_mode)
     try:
-        await client.wait_for_ready(timeout=DEFAULT_START_TIMEOUT_MS)
-        execution_script = _join_execution_chunks(
-            [
-                _bootstrap_code(),
-                *[_cell_source_for_execution(replay_cell, trig_mode, render_mode) for replay_cell in replay_cells],
-                _cell_source_for_execution(target_cell, trig_mode, render_mode),
-            ]
-        )
-        result = await _execute_kernel_code(
-            client,
-            execution_script,
-            timeout_s,
-        )
+        result, runtime = await _runtime_manager().execute_in_runtime(notebook_id, runtime_code, timeout_s)
     except Exception as exc:
         return {
+            "notebookId": notebook_id,
             "cellId": target_cell_id,
             "cellType": target_type,
             "status": "error",
             "output": {"type": "error", "ename": exc.__class__.__name__, "evalue": str(exc)},
             "execCountIncrement": False,
             "securityProfile": _security_profile(),
+            "runtime": {
+                "notebookId": notebook_id,
+                "status": "error",
+                "error": str(exc),
+            },
         }
-    finally:
-        try:
-            await kernel.shutdown_kernel(now=True)
-        except Exception:
-            pass
-        try:
-            client.stop_channels()
-        except Exception:
-            pass
-        shutil.rmtree(tmp_home, ignore_errors=True)
 
     response: dict[str, Any] = {
+        "notebookId": notebook_id,
         "cellId": target_cell_id,
         "cellType": target_type,
         "status": result["status"],
         "execCountIncrement": result["status"] == "ok",
         "securityProfile": _security_profile(),
-        "replayedCellIds": [str(cell.get("id")) for cell in replay_cells],
+        "replayedCellIds": [],
+        "runtime": runtime,
     }
 
     if target_type == "math":
@@ -554,6 +576,19 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
             }
         return response
 
+    if target_type == "custom":
+        custom_payload = result["mimeData"].get("application/vnd.sugarpy.custom+json")
+        if isinstance(custom_payload, dict):
+            response["customOutput"] = custom_payload
+        else:
+            response["customOutput"] = {
+                "schema_version": 1,
+                "template_id": "unknown",
+                "ok": False,
+                "error": result.get("errorValue") or "Custom cell execution failed.",
+            }
+        return response
+
     if result["status"] == "error":
         response["output"] = {
             "type": "error",
@@ -562,7 +597,12 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return response
 
-    response["output"] = {"type": "mime", "data": result["mimeData"]}
+    output_data = dict(result["mimeData"])
+    stdout = result.get("stdout") or ""
+    if stdout:
+        existing_plain = str(output_data.get("text/plain") or "")
+        output_data["text/plain"] = f"{stdout}{existing_plain}"
+    response["output"] = {"type": "mime", "data": output_data}
     return response
 
 
@@ -634,7 +674,7 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
                 "executedBootstrap": False,
                 "replayedCellIds": [],
             }
-        if _load_assistant_server_config()["execution"]["codeCellsRestricted"]:
+        if _sandbox_code_cells_restricted():
             errors = validate_restricted_python(code)
             if errors:
                 return {
@@ -854,6 +894,41 @@ class TraceHandler(SugarPyAPIHandler):
         self.finish({"stored": True})
 
 
+class RuntimeConnectHandler(SugarPyAPIHandler):
+    async def post(self) -> None:
+        payload = self.get_json_body() or {}
+        if not isinstance(payload, dict):
+            raise web.HTTPError(400, reason="JSON body must be an object")
+        notebook_id = str(payload.get("notebookId") or "")
+        if not notebook_id:
+            raise web.HTTPError(400, reason="notebookId is required")
+        self.finish(await _runtime_manager().ensure_runtime(notebook_id))
+
+
+class RuntimeRestartHandler(SugarPyAPIHandler):
+    async def post(self) -> None:
+        payload = self.get_json_body() or {}
+        if not isinstance(payload, dict):
+            raise web.HTTPError(400, reason="JSON body must be an object")
+        notebook_id = str(payload.get("notebookId") or "")
+        if not notebook_id:
+            raise web.HTTPError(400, reason="notebookId is required")
+        self.finish(await _runtime_manager().restart_runtime(notebook_id))
+
+
+class RuntimeStatusHandler(SugarPyAPIHandler):
+    async def get(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().get_runtime_status(notebook_id))
+
+    async def delete(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().delete_runtime(notebook_id))
+
+
+class RuntimeCleanupHandler(SugarPyAPIHandler):
+    async def post(self) -> None:
+        self.finish(await _runtime_manager().cleanup_orphans())
+
+
 class ExecuteHandler(SugarPyAPIHandler):
     async def post(self) -> None:
         payload = self.get_json_body() or {}
@@ -990,6 +1065,10 @@ def _load_jupyter_server_extension(server_app: Any) -> None:
         (r"/sugarpy/api/notebooks/(.+)", NotebookHandler),
         (r"/sugarpy/api/autosave", AutosaveHandler),
         (r"/sugarpy/api/autosave/(.+)", AutosaveByIdHandler),
+        (r"/sugarpy/api/runtime/connect", RuntimeConnectHandler),
+        (r"/sugarpy/api/runtime/restart", RuntimeRestartHandler),
+        (r"/sugarpy/api/runtime/cleanup", RuntimeCleanupHandler),
+        (r"/sugarpy/api/runtime/(.+)", RuntimeStatusHandler),
         (r"/sugarpy/api/execute", ExecuteHandler),
         (r"/sugarpy/api/sandbox", SandboxHandler),
         (r"/sugarpy/api/traces", TraceHandler),

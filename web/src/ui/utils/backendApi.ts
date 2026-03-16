@@ -18,6 +18,7 @@ export type SugarPyRuntimeConfig = {
 };
 
 export type SugarPyExecutionRequest = {
+  notebookId: string;
   cells: Array<Record<string, unknown>>;
   targetCellId: string;
   trigMode: 'deg' | 'rad';
