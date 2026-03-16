@@ -1,5 +1,7 @@
 import asyncio
 
+from sugarpy import server_extension
+
 from sugarpy.server_extension import _load_assistant_server_config, execute_notebook_request, validate_restricted_python
 
 
@@ -34,6 +36,19 @@ def test_restricted_python_allows_basic_math_workflow():
         )
     )
     assert errors == []
+
+
+def test_wrap_code_for_notebook_display_leaves_final_print_unchanged():
+    wrapped = server_extension._wrap_code_for_notebook_display('print("hello")')
+
+    assert wrapped == 'print("hello")'
+
+
+def test_wrap_code_for_notebook_display_keeps_rendering_non_print_final_expression():
+    wrapped = server_extension._wrap_code_for_notebook_display('value = 41\nvalue + 1')
+
+    assert "__sugarpy_value = value + 1" in wrapped
+    assert "__sugarpy_emit_output(__sugarpy_value)" in wrapped
 
 
 def test_execute_notebook_request_replays_preceding_cells_for_fresh_runtime():
