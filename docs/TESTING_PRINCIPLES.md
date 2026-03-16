@@ -4,11 +4,13 @@
 Keep tests reliable, fast enough for daily use, and representative of real user flows.
 
 ## Single gatekeeper
-- `./scripts/test-all.sh` is the required project gate.
-- Gate order is fixed:
-  1. Frontend build
-  2. Backend pytest
-  3. Playwright E2E
+- `./scripts/check all` is the canonical full gate.
+- `./scripts/test-all.sh` is a thin compatibility wrapper around that command.
+- Canonical check entrypoints:
+  - `./scripts/check backend`
+  - `./scripts/check ui`
+  - `./scripts/check runtime`
+  - `./scripts/check all`
 
 ## Test pyramid for this project
 - Backend unit tests:
@@ -37,6 +39,7 @@ Keep tests reliable, fast enough for daily use, and representative of real user 
 - New user-facing behavior must include at least one automated test:
   - backend test for logic, and/or
   - e2e test for visible flow.
+- Runtime-critical changes must update at least one backend or browser regression test in the same change set.
 - Keep tests readable; prefer explicit expected values over vague truthy checks.
 
 ## Coverage matrix requirement
@@ -89,6 +92,9 @@ Every production bug must produce a regression test:
 - First add a failing/representative test for the reproduced scenario.
 - Then implement the fix.
 - Keep the test to prevent recurrence.
+- For runtime, sandbox, assistant execution, or recovery-flow bugs, completion also requires:
+  - an updated verification manifest under `docs/verification/`, and
+  - the targeted runtime gate (`./scripts/check runtime`) when affected.
 
 For assistant/runtime bugs, pair that regression test with a final live-browser verification when possible.
 
@@ -97,6 +103,16 @@ When working in this repository, keep testing policy in active context:
 - Read `docs/TESTING_PRINCIPLES.md` before significant UI/flow edits.
 - If a required guideline is missing from context or docs, add it as part of the same change.
 - Do not mark work complete if coverage mapping or regression gate evidence is missing.
+
+## Runtime-critical gate
+Changes touching notebook execution, runtime management, sandbox execution, or execution-control UI are runtime-critical.
+
+When runtime-critical paths change:
+- `./scripts/check all` automatically runs `./scripts/check runtime`.
+- The change must include:
+  - at least one matching docs update in `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md`, or `docs/PRODUCT_GUIDE.md`
+  - at least one verification manifest under `docs/verification/`
+  - at least one backend or browser regression test update
 
 ## Regression targets (large assignments)
 Large, multi-step “assignment-style” workflows must be covered by at least one automated regression test.

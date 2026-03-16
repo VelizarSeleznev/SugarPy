@@ -38,7 +38,7 @@ stop_port_listener 8888
 stop_port_listener 5173
 
 # Ensure python deps are synced via uv
-UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --frozen
+UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --extra test --frozen
 source "$ROOT_DIR/.venv/bin/activate"
 
 "$ROOT_DIR/scripts/sync-functions.sh"

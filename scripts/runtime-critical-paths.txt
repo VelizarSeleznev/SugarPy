@@ -1,0 +1,5 @@
+src/sugarpy/runtime_manager.py
+src/sugarpy/server_extension.py
+web/src/ui/App.tsx
+web/src/ui/utils/backendApi.ts
+web/src/ui/utils/assistantSandbox.ts

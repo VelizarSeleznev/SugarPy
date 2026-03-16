@@ -90,7 +90,8 @@ Use it together with:
 - Clicking the card reopens the raw CAS editor.
 - Simple duplicate source previews are hidden to reduce clutter.
 - Multi-statement cells render a symbolic trace with per-line grouping.
-- Cell execution is guarded by a hard UI timeout; if the kernel stalls, SugarPy interrupts it and shows an explicit timeout error instead of leaving the cell spinning indefinitely.
+- Cell execution uses a backend-owned runtime timeout. If a live notebook execution times out, SugarPy treats that runtime as unsafe, restarts it, and returns an explicit timeout-recovery error instead of relying on a browser-side kernel interrupt.
+- While a notebook cell is running, the header exposes `Stop Runtime`. The notebook menu also exposes `Restart Notebook Runtime` and `Delete Notebook Runtime` for explicit recovery.
 - A compact shortcut row supports:
   - `^2`
   - `sqrt(...)`
