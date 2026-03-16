@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=sugarpy
+SupplementaryGroups=docker
 WorkingDirectory=/opt/sugarpy/current
 Environment=IPYTHONDIR=/opt/sugarpy/shared/.ipython
 Environment=JUPYTER_CONFIG_DIR=/opt/sugarpy/shared/.jupyter
@@ -12,6 +13,7 @@ Environment=JUPYTER_RUNTIME_DIR=/opt/sugarpy/shared/.jupyter-runtime
 Environment=UV_PROJECT_ENVIRONMENT=/opt/sugarpy/shared/.venv
 EnvironmentFile=-/etc/sugarpy/assistant.env
 Environment=SUGARPY_SECURITY_PROFILE=restricted-demo
+Environment=SUGARPY_NOTEBOOK_RUNTIME_BACKEND=docker
 Environment=SUGARPY_STORAGE_ROOT=/opt/sugarpy/shared/runtime
 Environment=SUGARPY_ENABLE_ASSISTANT_TRACES=0
 ExecStart=/opt/sugarpy/current/scripts/start-jupyter-service.sh
