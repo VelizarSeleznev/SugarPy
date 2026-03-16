@@ -496,7 +496,9 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     cells = payload.get("cells")
     if not isinstance(cells, list):
         raise web.HTTPError(400, reason="cells must be a list")
-    notebook_id = str(payload.get("notebookId") or "notebook")
+    notebook_id = str(payload.get("notebookId") or "").strip()
+    if not notebook_id:
+        raise web.HTTPError(400, reason="notebookId is required")
     target_cell_id = str(payload.get("targetCellId") or "")
     notebook_cells = [cell for cell in cells if isinstance(cell, dict)]
     target_index = next((index for index, cell in enumerate(notebook_cells) if str(cell.get("id")) == target_cell_id), -1)

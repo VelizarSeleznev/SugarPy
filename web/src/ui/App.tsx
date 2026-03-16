@@ -788,6 +788,7 @@ function App() {
     );
     try {
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -850,6 +851,7 @@ function App() {
     );
     try {
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -905,6 +907,7 @@ function App() {
           : cell
       );
       const response = await executeNotebookCell({
+        notebookId,
         cells: nextCells as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
