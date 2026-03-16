@@ -74,6 +74,14 @@ def _reserve_kernel_ports() -> dict[str, int]:
                 sock.close()
 
 
+def _container_user_flag() -> list[str]:
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return []
+    return ["--user", f"{getuid()}:{getgid()}"]
+
+
 async def _run_command(args: list[str]) -> tuple[int, str, str]:
     process = await asyncio.create_subprocess_exec(
         *args,
@@ -187,7 +195,10 @@ class DockerKernelRuntime:
             return False
         if not await self.is_running():
             return False
-        await self._connect_client()
+        try:
+            await self._connect_client()
+        except OSError:
+            return False
         return True
 
     async def execute(self, code: str, timeout_s: float) -> dict[str, Any]:
@@ -228,6 +239,7 @@ class DockerKernelRuntime:
             "--rm",
             "--name",
             self.record.container_name,
+            *_container_user_flag(),
             "--memory",
             os.environ.get("SUGARPY_RUNTIME_MEMORY", "1g"),
             "--cpus",

@@ -1,10 +1,12 @@
 import asyncio
+import json
+import os
 from pathlib import Path
 
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
 
-from sugarpy.runtime_manager import RuntimeManager, RuntimeRecord
+from sugarpy.runtime_manager import DockerKernelRuntime, RuntimeManager, RuntimeRecord
 
 
 class FakeRuntime:
@@ -200,3 +202,148 @@ def test_runtime_manager_inprocess_backend_starts_with_existing_interactive_shel
         asyncio.run(manager.delete_runtime("nb-existing-shell"))
         assert InteractiveShell._instance is original_shell
         TerminalInteractiveShell.clear_instance()
+
+
+class FakeAttachFailureRuntime(FakeRuntime):
+    def __init__(self, record: RuntimeRecord):
+        super().__init__(record)
+        self.attach_calls = 0
+
+    async def attach(self):
+        self.attach_calls += 1
+        raise PermissionError("kernel-connection.json is not readable")
+
+
+class FakeAttachFailureManager(RuntimeManager):
+    def __init__(self, storage_root: Path):
+        super().__init__(
+            storage_root=storage_root,
+            project_root=storage_root,
+            bootstrap_code="print('bootstrap')",
+            executor=lambda *_args, **_kwargs: None,
+        )
+        self.created: list[FakeRuntime] = []
+
+    def _create_runtime(self, notebook_id: str, existing_record: RuntimeRecord | None = None):
+        record = existing_record or RuntimeRecord(
+            notebook_id=notebook_id,
+            status="disconnected",
+            backend="docker",
+            container_name=f"fake-{notebook_id}",
+            workspace_path=str((self.workspace_root / notebook_id).resolve()),
+            connection_file_path=str((self.workspace_root / notebook_id / "kernel.json").resolve()),
+            created_at="2026-03-13T00:00:00Z",
+            last_activity_at="2026-03-13T00:00:00Z",
+            image="fake-image",
+        )
+        if existing_record is not None:
+            return FakeAttachFailureRuntime(record)
+        runtime = FakeRuntime(record)
+        self.created.append(runtime)
+        return runtime
+
+
+def test_runtime_manager_recovers_when_attaching_to_unreadable_connection_file_fails(tmp_path: Path):
+    manager = FakeAttachFailureManager(tmp_path)
+    manager._persist_record(
+        RuntimeRecord(
+            notebook_id="nb-perms",
+            status="connected",
+            backend="docker",
+            container_name="fake-nb-perms",
+            workspace_path=str((manager.workspace_root / "nb-perms").resolve()),
+            connection_file_path=str((manager.workspace_root / "nb-perms" / "kernel.json").resolve()),
+            created_at="2026-03-13T00:00:00Z",
+            last_activity_at="2026-03-13T00:00:00Z",
+            image="fake-image",
+        )
+    )
+
+    runtime = asyncio.run(manager.ensure_runtime("nb-perms"))
+
+    assert runtime["status"] == "connected"
+    assert runtime["sessionState"] == "created"
+    assert len(manager.created) == 1
+    assert manager.created[0].start_calls == 1
+
+
+def test_docker_runtime_attach_returns_false_on_connection_file_permission_error(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    connection_file = workspace / "kernel-connection.json"
+    connection_file.write_text(json.dumps({"shell_port": 1}), encoding="utf-8")
+    runtime = DockerKernelRuntime(
+        RuntimeRecord(
+            notebook_id="nb-attach",
+            status="connected",
+            backend="docker",
+            container_name="fake-container",
+            workspace_path=str(workspace),
+            connection_file_path=str(connection_file),
+            created_at="2026-03-13T00:00:00Z",
+            last_activity_at="2026-03-13T00:00:00Z",
+            image="fake-image",
+        ),
+        project_root=tmp_path,
+        bootstrap_code="",
+        executor=lambda *_args, **_kwargs: None,
+        start_timeout_s=1.0,
+        exec_timeout_s=1.0,
+    )
+
+    async def fake_is_running():
+        return True
+
+    async def fake_connect():
+        raise PermissionError("kernel-connection.json is not readable")
+
+    monkeypatch.setattr(runtime, "is_running", fake_is_running)
+    monkeypatch.setattr(runtime, "_connect_client", fake_connect)
+
+    assert asyncio.run(runtime.attach()) is False
+
+
+def test_docker_runtime_uses_host_uid_gid_for_container_user(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = DockerKernelRuntime(
+        RuntimeRecord(
+            notebook_id="nb-user",
+            status="connected",
+            backend="docker",
+            container_name="fake-container",
+            workspace_path=str(workspace),
+            connection_file_path=str(workspace / "kernel-connection.json"),
+            created_at="2026-03-13T00:00:00Z",
+            last_activity_at="2026-03-13T00:00:00Z",
+            image="fake-image",
+        ),
+        project_root=tmp_path,
+        bootstrap_code="",
+        executor=lambda *_args, **_kwargs: None,
+        start_timeout_s=1.0,
+        exec_timeout_s=1.0,
+    )
+
+    monkeypatch.setattr("sugarpy.runtime_manager._reserve_kernel_ports", lambda: {
+        "shell_port": 10001,
+        "iopub_port": 10002,
+        "stdin_port": 10003,
+        "control_port": 10004,
+        "hb_port": 10005,
+    })
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 4321)
+
+    captured: list[str] = []
+
+    async def fake_run_command(args: list[str]):
+        captured[:] = args
+        return 0, "container-id", ""
+
+    monkeypatch.setattr("sugarpy.runtime_manager._run_command", fake_run_command)
+
+    asyncio.run(runtime._run_container())
+
+    assert "--user" in captured
+    assert "1234:4321" in captured

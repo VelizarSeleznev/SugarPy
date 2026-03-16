@@ -35,10 +35,12 @@
 - Notebook execution is backend-owned and stateful per notebook.
   - Each notebook uses a backend-managed runtime session.
   - The default restricted deployment target is a Docker-backed runtime container with a per-notebook writable workspace and a readonly app mount.
+  - Docker-backed runtimes are started with the same uid/gid as the host Jupyter service so workspace artifacts such as `kernel-connection.json` remain readable and removable by the backend.
   - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
   - Notebook execution timeouts are expressed in milliseconds at the API boundary and converted to seconds inside the backend executor.
   - If a live notebook execution times out, SugarPy treats that runtime as unsafe, restarts it, and returns an explicit timeout-recovery error so the next run starts from a clean kernel.
   - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy replays earlier runnable Code/Math cells once before the requested target cell so execution still follows notebook order.
+  - If runtime recovery finds a live container but cannot attach to its connection file, SugarPy treats that runtime as broken and recreates it instead of surfacing a generic backend error.
   - Runtime control is exposed through SugarPy-owned API routes for status, interrupt, restart, and delete; the UI uses those routes instead of talking to kernels directly.
   - Docker-backed live runtimes isolate notebook execution from the server process and filesystem. If SugarPy falls back to an in-process runtime, restricted profiles still statically reject blocked Python imports/calls such as `os`, `subprocess`, `open`, and related shell/file escape paths.
 - The assistant sandbox remains a separate backend-owned ephemeral execution path.
