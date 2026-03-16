@@ -46,6 +46,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+retry_remote_until_ok() {
+  local description="$1"
+  local command="$2"
+
+  for _ in {1..20}; do
+    if ssh "${SSH_OPTS[@]}" "${REMOTE}" "export PATH=\"\$HOME/.local/bin:\$PATH\"; ${command}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "${description} did not become healthy in time."
+  ssh "${SSH_OPTS[@]}" "${REMOTE}" "export PATH=\"\$HOME/.local/bin:\$PATH\"; ${command}"
+}
+
 echo "Deploying to ${REMOTE}:${DEPLOY_PATH}"
 echo "Release ID: ${RELEASE_ID}"
 
@@ -102,10 +117,9 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "
 "
 
 # 5) Health checks.
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS http://127.0.0.1:18081/ >/dev/null"
+retry_remote_until_ok "Frontend health check" "curl -fsS http://127.0.0.1:18081/ >/dev/null"
 if [[ -n "${DEPLOY_JUPYTER_TOKEN:-}" ]]; then
-  ssh "${SSH_OPTS[@]}" "${REMOTE}" \
-    "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS 'http://127.0.0.1:8888/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
+  retry_remote_until_ok "Jupyter health check" "curl -fsS 'http://127.0.0.1:8888/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
 fi
 
 # 6) Keep the most recent releases and prune older ones.
