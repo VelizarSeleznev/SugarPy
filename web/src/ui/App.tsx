@@ -788,6 +788,7 @@ function App() {
     );
     try {
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -850,6 +851,7 @@ function App() {
     );
     try {
       const response = await executeNotebookCell({
+        notebookId,
         cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -905,6 +907,7 @@ function App() {
           : cell
       );
       const response = await executeNotebookCell({
+        notebookId,
         cells: nextCells as Array<Record<string, unknown>>,
         targetCellId: cellId,
         trigMode,
@@ -1029,7 +1032,7 @@ function App() {
               ui: {
                 ...cell.ui,
                 outputCollapsed: false,
-                ...(cell.type === 'math' ? { mathView: 'source' as const } : {})
+                ...(cell.type === 'math' ? { mathView: 'rendered' as const } : {})
               }
             }
           : cell
@@ -2260,6 +2263,23 @@ function App() {
     setDirty(false);
   };
 
+  const clearNotebookOutputs = () => {
+    setCells((prev) =>
+      prev.map((cell) => ({
+        ...cell,
+        output: undefined,
+        mathOutput: undefined,
+        stoichOutput: undefined,
+        ui: {
+          ...cell.ui,
+          outputCollapsed: false,
+          ...(cell.type === 'math' ? { mathView: 'rendered' as const } : {})
+        }
+      }))
+    );
+    setHeaderMenuOpen(false);
+  };
+
   const handleDownloadSugarPy = () => {
     const payload = serializeSugarPy({
       id: notebookId,
@@ -2482,6 +2502,7 @@ function App() {
                   >
                     Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
+                  <button className="menu-item" onClick={clearNotebookOutputs}>Clear Outputs</button>
                   <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>

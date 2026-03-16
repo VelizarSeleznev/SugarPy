@@ -248,7 +248,7 @@ export function MathEditor({
             ))}
           </div>
         ) : (
-          <div className="math-empty">No rendered output yet.</div>
+          <div className="math-empty">Click to edit.</div>
         )}
       </div>
     );

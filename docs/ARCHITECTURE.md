@@ -32,10 +32,13 @@
 - `sugarpy.startup` preloads `from sympy import *`, `numpy as np`, defines `x, y, z, t`,
   enables `init_printing()`, and provides a custom `plot()` that emits
   `application/vnd.plotly.v1+json` to frontend MIME output.
-- Notebook execution is ephemeral and backend-owned.
-  - Each execute request starts from a fresh server-side kernel, replays earlier runnable notebook cells, runs the target cell, and shuts the kernel down.
-  - Restricted profiles statically reject blocked Python imports/calls such as `os`, `subprocess`, `open`, and related shell/file escape paths.
-- The assistant sandbox uses the same backend-owned isolated execution path.
+- Notebook execution is backend-owned and stateful per notebook.
+  - Each notebook uses a backend-managed runtime session.
+  - The default restricted deployment target is a Docker-backed runtime container with a per-notebook writable workspace and a readonly app mount.
+  - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
+  - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy replays earlier runnable Code/Math cells once before the requested target cell so execution still follows notebook order.
+  - Docker-backed live runtimes isolate notebook execution from the server process and filesystem. If SugarPy falls back to an in-process runtime, restricted profiles still statically reject blocked Python imports/calls such as `os`, `subprocess`, `open`, and related shell/file escape paths.
+- The assistant sandbox remains a separate backend-owned ephemeral execution path.
 - Math cell evaluation pipeline:
   - `sugarpy.math_parser.parse_math_input` classifies input as expression/equation/assignment.
   - `sugarpy.math_parser.parse_sympy_expression` parses CAS input with `^` and implicit multiplication.

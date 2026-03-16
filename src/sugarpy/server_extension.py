@@ -16,6 +16,8 @@ from jupyter_server.base.handlers import APIHandler
 from tornado import web
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 
+from sugarpy.runtime_manager import RuntimeManager
+
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
 GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
@@ -84,6 +86,7 @@ BLOCKED_ATTR_CALLS = {
     "socket.socket",
     "pathlib.Path.open",
 }
+_RUNTIME_MANAGER: RuntimeManager | None = None
 
 
 def _assistant_secret_file_path() -> str:
@@ -126,6 +129,26 @@ def _assistant_traces_enabled() -> bool:
     if not raw:
         return DEFAULT_ASSISTANT_TRACES_ENABLED
     return raw in {"1", "true", "yes", "on"}
+
+
+def _sandbox_code_cells_restricted() -> bool:
+    return _security_profile() in {"restricted-demo", "school-secure"}
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _live_runtime_backend() -> str:
+    return _runtime_manager().backend
+
+
+def _live_code_cells_restricted() -> bool:
+    return _live_runtime_backend() != "docker" and _sandbox_code_cells_restricted()
+
+
+def _live_runtime_network_enabled() -> bool:
+    return True
 
 
 def _storage_root() -> Path:
@@ -179,9 +202,9 @@ def _json_load(path: Path) -> dict[str, Any] | None:
 
 
 def _load_assistant_server_config() -> dict[str, Any]:
-    profile = _security_profile()
+    runtime_backend = _live_runtime_backend()
     return {
-        "mode": profile,
+        "mode": _security_profile(),
         "model": _assistant_setting("SUGARPY_ASSISTANT_MODEL") or None,
         "assistantTracesEnabled": _assistant_traces_enabled(),
         "providers": {
@@ -190,10 +213,13 @@ def _load_assistant_server_config() -> dict[str, Any]:
             "groq": bool(_assistant_setting("SUGARPY_ASSISTANT_GROQ_API_KEY")),
         },
         "execution": {
-            "ephemeral": True,
-            "networkEnabled": False,
+            "ephemeral": False,
+            "networkEnabled": _live_runtime_network_enabled(),
             "directBrowserKernelAccess": False,
-            "codeCellsRestricted": profile in {"restricted-demo", "school-secure"},
+            "codeCellsRestricted": _live_code_cells_restricted(),
+            "assistantSandboxEphemeral": True,
+            "assistantSandboxCodeCellsRestricted": _sandbox_code_cells_restricted(),
+            "runtimeBackend": runtime_backend,
         },
     }
 
@@ -426,10 +452,23 @@ def _join_execution_chunks(chunks: list[str]) -> str:
     return "\n\n".join(chunk for chunk in chunks if chunk.strip())
 
 
+def _runtime_manager() -> RuntimeManager:
+    global _RUNTIME_MANAGER
+    if _RUNTIME_MANAGER is None:
+        _RUNTIME_MANAGER = RuntimeManager(
+            storage_root=_storage_root(),
+            project_root=_project_root(),
+            bootstrap_code=_bootstrap_code(),
+            executor=_execute_kernel_code,
+        )
+    return _RUNTIME_MANAGER
+
+
 async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     cells = payload.get("cells")
     if not isinstance(cells, list):
         raise web.HTTPError(400, reason="cells must be a list")
+    notebook_id = str(payload.get("notebookId") or "notebook").strip() or "notebook"
     target_cell_id = str(payload.get("targetCellId") or "")
     notebook_cells = [cell for cell in cells if isinstance(cell, dict)]
     target_index = next((index for index, cell in enumerate(notebook_cells) if str(cell.get("id")) == target_cell_id), -1)
@@ -442,12 +481,11 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     if len(target_source) > MAX_EXEC_SOURCE_LENGTH:
         raise web.HTTPError(400, reason=f"Cell source exceeds the {MAX_EXEC_SOURCE_LENGTH} character limit")
 
-    security = _load_assistant_server_config()["execution"]
-    restricted_code = bool(security.get("codeCellsRestricted"))
-    if target_type == "code" and restricted_code:
+    if target_type == "code" and _live_code_cells_restricted():
         errors = validate_restricted_python(target_source)
         if errors:
             return {
+                "notebookId": notebook_id,
                 "cellId": target_cell_id,
                 "cellType": target_type,
                 "status": "error",
@@ -462,67 +500,45 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         max(float(payload.get("timeoutMs") or DEFAULT_TIMEOUT_MS), 0.25),
         DEFAULT_TIMEOUT_MS,
     )
-
-    replay_cells = [
-        cell
-        for cell in notebook_cells[:target_index]
-        if str(cell.get("type") or "code") in {"code", "math"} and str(cell.get("source") or "").strip()
-    ][:MAX_REPLAY_CELLS]
-
-    kernel = AsyncKernelManager(kernel_name="python3")
-    tmp_home = tempfile.mkdtemp(prefix="sugarpy-sandbox-")
-    env = {
-        "HOME": tmp_home,
-        "PYTHONNOUSERSITE": "1",
-        "IPYTHONDIR": tmp_home,
-        "MPLCONFIGDIR": tmp_home,
-        "SUGARPY_SECURITY_PROFILE": _security_profile(),
-    }
-
-    await kernel.start_kernel(env={**os.environ, **env})
-    client = kernel.client()
-    client.start_channels()
+    runtime = await _runtime_manager().ensure_runtime(notebook_id)
+    execution_chunks: list[str] = []
+    if runtime.get("sessionState") == "created":
+        replay_cells = [
+            cell
+            for cell in notebook_cells[:target_index]
+            if str(cell.get("type") or "code") in {"code", "math"} and str(cell.get("source") or "").strip()
+        ][:MAX_REPLAY_CELLS]
+        execution_chunks.extend(_cell_source_for_execution(replay_cell, trig_mode, render_mode) for replay_cell in replay_cells)
+    else:
+        replay_cells = []
+    execution_chunks.append(_cell_source_for_execution(target_cell, trig_mode, render_mode))
     try:
-        await client.wait_for_ready(timeout=DEFAULT_START_TIMEOUT_MS)
-        execution_script = _join_execution_chunks(
-            [
-                _bootstrap_code(),
-                *[_cell_source_for_execution(replay_cell, trig_mode, render_mode) for replay_cell in replay_cells],
-                _cell_source_for_execution(target_cell, trig_mode, render_mode),
-            ]
-        )
-        result = await _execute_kernel_code(
-            client,
-            execution_script,
+        result, runtime_payload = await _runtime_manager().execute_code(
+            notebook_id,
+            _join_execution_chunks(execution_chunks),
             timeout_s,
         )
     except Exception as exc:
         return {
+            "notebookId": notebook_id,
             "cellId": target_cell_id,
             "cellType": target_type,
             "status": "error",
             "output": {"type": "error", "ename": exc.__class__.__name__, "evalue": str(exc)},
             "execCountIncrement": False,
             "securityProfile": _security_profile(),
+            "runtime": {**runtime, "status": "error", "error": str(exc)},
         }
-    finally:
-        try:
-            await kernel.shutdown_kernel(now=True)
-        except Exception:
-            pass
-        try:
-            client.stop_channels()
-        except Exception:
-            pass
-        shutil.rmtree(tmp_home, ignore_errors=True)
 
     response: dict[str, Any] = {
+        "notebookId": notebook_id,
         "cellId": target_cell_id,
         "cellType": target_type,
         "status": result["status"],
         "execCountIncrement": result["status"] == "ok",
         "securityProfile": _security_profile(),
         "replayedCellIds": [str(cell.get("id")) for cell in replay_cells],
+        "runtime": {**runtime_payload, "sessionState": runtime.get("sessionState", "existing")},
     }
 
     if target_type == "math":
@@ -634,7 +650,7 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
                 "executedBootstrap": False,
                 "replayedCellIds": [],
             }
-        if _load_assistant_server_config()["execution"]["codeCellsRestricted"]:
+        if _sandbox_code_cells_restricted():
             errors = validate_restricted_python(code)
             if errors:
                 return {

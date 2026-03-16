@@ -14,10 +14,14 @@ export type SugarPyRuntimeConfig = {
     networkEnabled?: boolean;
     directBrowserKernelAccess?: boolean;
     codeCellsRestricted?: boolean;
+    assistantSandboxEphemeral?: boolean;
+    assistantSandboxCodeCellsRestricted?: boolean;
+    runtimeBackend?: string;
   };
 };
 
 export type SugarPyExecutionRequest = {
+  notebookId: string;
   cells: Array<Record<string, unknown>>;
   targetCellId: string;
   trigMode: 'deg' | 'rad';
