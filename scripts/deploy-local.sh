@@ -19,6 +19,32 @@ SHARED_DIR="${DEPLOY_ROOT}/shared"
 RELEASE_PATH="${RELEASES_DIR}/${RELEASE_ID}"
 RUN_AS_SUGARPY="sudo -u sugarpy /bin/bash -lc"
 
+create_repo_archive() {
+  local tar_format_args=()
+
+  if tar --version 2>/dev/null | grep -qi 'bsdtar'; then
+    tar_format_args+=(--format=ustar)
+    COPYFILE_DISABLE=1 tar "${tar_format_args[@]}" \
+      --exclude='.git' \
+      --exclude='.venv' \
+      --exclude='web/node_modules' \
+      --exclude='artifacts' \
+      --exclude='output' \
+      --exclude='notebooks/.sugarpy-autosave' \
+      -czf - .
+    return
+  fi
+
+  tar \
+    --exclude='.git' \
+    --exclude='.venv' \
+    --exclude='web/node_modules' \
+    --exclude='artifacts' \
+    --exclude='output' \
+    --exclude='notebooks/.sugarpy-autosave' \
+    -czf - .
+}
+
 retry_until_ok() {
   local description="$1"
   local command="$2"
@@ -48,14 +74,7 @@ ${RUN_AS_SUGARPY} "
 "
 
 # 2) Copy the checked-out repository into the release directory.
-COPYFILE_DISABLE=1 tar \
-  --exclude='.git' \
-  --exclude='.venv' \
-  --exclude='web/node_modules' \
-  --exclude='artifacts' \
-  --exclude='output' \
-  --exclude='notebooks/.sugarpy-autosave' \
-  -czf - . \
+create_repo_archive \
   | ${RUN_AS_SUGARPY} "
       export PATH=\"\$HOME/.local/bin:\$PATH\"
       set -euo pipefail

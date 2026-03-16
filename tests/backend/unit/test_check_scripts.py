@@ -79,6 +79,10 @@ def test_deploy_scripts_probe_internal_jupyter_health_endpoint():
     remote_script = (ROOT / "scripts" / "deploy-remote.sh").read_text()
     local_script = (ROOT / "scripts" / "deploy-local.sh").read_text()
 
+    assert "create_repo_archive()" in remote_script
+    assert "create_repo_archive()" in local_script
+    assert "--format=ustar" in remote_script
+    assert "--format=ustar" in local_script
     assert "http://127.0.0.1:8888/jupyter/api/status" in remote_script
     assert "http://127.0.0.1:8888/jupyter/api/status" in local_script
     assert "http://127.0.0.1:18081/jupyter/api/status" not in remote_script

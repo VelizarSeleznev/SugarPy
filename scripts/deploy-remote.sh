@@ -46,6 +46,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+create_repo_archive() {
+  local tar_format_args=()
+
+  if tar --version 2>/dev/null | grep -qi 'bsdtar'; then
+    tar_format_args+=(--format=ustar)
+    COPYFILE_DISABLE=1 tar "${tar_format_args[@]}" \
+      --exclude='.git' \
+      --exclude='.venv' \
+      --exclude='web/node_modules' \
+      --exclude='artifacts' \
+      --exclude='output' \
+      --exclude='notebooks/.sugarpy-autosave' \
+      -czf - .
+    return
+  fi
+
+  tar \
+    --exclude='.git' \
+    --exclude='.venv' \
+    --exclude='web/node_modules' \
+    --exclude='artifacts' \
+    --exclude='output' \
+    --exclude='notebooks/.sugarpy-autosave' \
+    -czf - .
+}
+
 retry_remote_until_ok() {
   local description="$1"
   local command="$2"
@@ -68,14 +94,7 @@ echo "Release ID: ${RELEASE_ID}"
 
 # 1) Upload repository snapshot into a new release directory.
 cd "${ROOT_DIR}"
-COPYFILE_DISABLE=1 tar \
-  --exclude='.git' \
-  --exclude='.venv' \
-  --exclude='web/node_modules' \
-  --exclude='artifacts' \
-  --exclude='output' \
-  --exclude='notebooks/.sugarpy-autosave' \
-  -czf - . \
+create_repo_archive \
   | ssh "${SSH_OPTS[@]}" "${REMOTE}" "
       export PATH=\"\$HOME/.local/bin:\$PATH\"
       set -euo pipefail
