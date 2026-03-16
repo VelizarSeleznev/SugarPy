@@ -49,6 +49,8 @@ trap cleanup EXIT
 echo "Deploying to ${REMOTE}:${DEPLOY_PATH}"
 echo "Release ID: ${RELEASE_ID}"
 
+"$ROOT_DIR/scripts/deploy-preflight.sh"
+
 # 1) Upload repository snapshot into a new release directory.
 cd "${ROOT_DIR}"
 tar \

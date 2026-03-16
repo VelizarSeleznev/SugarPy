@@ -24,9 +24,12 @@ DEFAULT_RUNTIME_IMAGE = "sugarpy-runtime:latest"
 DEFAULT_RUNTIME_BACKEND = "docker"
 DEFAULT_IDLE_TIMEOUT_S = 1800.0
 DEFAULT_RUNTIME_START_TIMEOUT_S = 20.0
-DEFAULT_EXEC_TIMEOUT_S = 5.0
+DEFAULT_EXEC_TIMEOUT_S = 20.0
 CONTAINER_WORKDIR = "/runtime/workspace"
 RUNTIME_CONTAINER_PREFIX = "sugarpy-rt"
+MAX_STREAM_TEXT_LENGTH = 4000
+MAX_MIME_TEXT_LENGTH = 4000
+MAX_MIME_OBJECT_ENTRIES = 20
 
 KernelExecutor = Callable[[Any, str, float], Awaitable[dict[str, Any]]]
 
@@ -37,6 +40,7 @@ class RuntimeSession(Protocol):
     async def start(self) -> None: ...
     async def attach(self) -> bool: ...
     async def execute(self, code: str, timeout_s: float) -> dict[str, Any]: ...
+    async def interrupt(self) -> bool: ...
     async def restart(self) -> None: ...
     async def stop(self, remove_workspace: bool) -> None: ...
     async def is_running(self) -> bool: ...
@@ -82,6 +86,22 @@ async def _run_command(args: list[str]) -> tuple[int, str, str]:
         stdout_bytes.decode("utf-8", errors="replace").strip(),
         stderr_bytes.decode("utf-8", errors="replace").strip(),
     )
+
+
+def _truncate_text(value: str, limit: int = MAX_STREAM_TEXT_LENGTH) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 1)]}…"
+
+
+def _truncate_mime_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _truncate_text(value, limit=MAX_MIME_TEXT_LENGTH)
+    if isinstance(value, list):
+        return [_truncate_mime_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {key: _truncate_mime_value(entry) for key, entry in value.items()}
 
 
 @dataclass
@@ -174,6 +194,10 @@ class DockerKernelRuntime:
         if self.client is None:
             raise RuntimeError("Notebook runtime client is not connected.")
         return await self.executor(self.client, code, timeout_s)
+
+    async def interrupt(self) -> bool:
+        code, _stdout, _stderr = await _run_command(["docker", "kill", "--signal=SIGINT", self.record.container_name])
+        return code == 0
 
     async def restart(self) -> None:
         await self.stop(remove_workspace=False)
@@ -351,6 +375,9 @@ class InProcessKernelRuntime:
             raise RuntimeError("Notebook runtime client is not connected.")
         return await self._execute_inprocess(code, timeout_s)
 
+    async def interrupt(self) -> bool:
+        return False
+
     async def restart(self) -> None:
         await self.stop(remove_workspace=False)
         await self.start()
@@ -415,18 +442,18 @@ class InProcessKernelRuntime:
                 if msg_type == "stream":
                     text = str(content.get("text") or "")
                     if content.get("name") == "stderr":
-                        stderr += text
+                        stderr = _truncate_text(stderr + text)
                     else:
-                        stdout += text
+                        stdout = _truncate_text(stdout + text)
                     continue
                 if msg_type in {"execute_result", "display_data"}:
                     data = content.get("data") or {}
                     if isinstance(data, dict):
                         for mime, value in data.items():
                             if mime == "text/plain":
-                                mime_data[mime] = f"{mime_data.get(mime, '')}{value}"
+                                mime_data[mime] = _truncate_text(f"{mime_data.get(mime, '')}{value}", limit=MAX_MIME_TEXT_LENGTH)
                             else:
-                                mime_data[mime] = value
+                                mime_data[mime] = _truncate_mime_value(value)
                     continue
                 if msg_type == "error":
                     error_name = str(content.get("ename") or "Error")
@@ -436,8 +463,8 @@ class InProcessKernelRuntime:
             raise RuntimeError("Kernel shell reply did not match the execution request.")
         return {
             "status": "error" if error_name else "ok",
-            "stdout": f"{stdout}{stdout_buffer.getvalue()}",
-            "stderr": f"{stderr}{stderr_buffer.getvalue()}",
+            "stdout": _truncate_text(f"{stdout}{stdout_buffer.getvalue()}"),
+            "stderr": _truncate_text(f"{stderr}{stderr_buffer.getvalue()}"),
             "mimeData": mime_data,
             "errorName": error_name,
             "errorValue": error_value,
@@ -469,6 +496,7 @@ class RuntimeManager:
         self.metadata_root.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, RuntimeSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._execution_locks: dict[str, asyncio.Lock] = {}
 
     async def ensure_runtime(self, notebook_id: str) -> dict[str, Any]:
         await self._cleanup_idle_runtimes()
@@ -503,19 +531,33 @@ class RuntimeManager:
             runtime = self._sessions.get(notebook_id)
             if runtime is None:
                 raise RuntimeError("Notebook runtime is not connected.")
-            try:
-                result = await runtime.execute(code, timeout_s)
-            except Exception as exc:
-                runtime.record.status = "error"
-                runtime.record.error = str(exc)
-                runtime.record.last_activity_at = _utc_now()
-                self._persist_record(runtime.record)
-                raise
-            runtime.record.status = "connected"
+            runtime.record.status = "executing"
             runtime.record.error = None
             runtime.record.last_activity_at = _utc_now()
             self._persist_record(runtime.record)
-            return result, runtime.record.to_dict()
+        async with self._execution_lock_for(notebook_id):
+            try:
+                result = await runtime.execute(code, timeout_s)
+            except Exception as exc:
+                async with self._lock_for(notebook_id):
+                    current_runtime = self._sessions.get(notebook_id)
+                    if current_runtime is runtime:
+                        runtime.record.status = "error"
+                        runtime.record.error = str(exc)
+                        runtime.record.last_activity_at = _utc_now()
+                        self._persist_record(runtime.record)
+                raise
+        async with self._lock_for(notebook_id):
+            current_runtime = self._sessions.get(notebook_id)
+            if current_runtime is runtime:
+                runtime.record.status = "connected"
+                runtime.record.error = None
+                runtime.record.last_activity_at = _utc_now()
+                self._persist_record(runtime.record)
+                return result, runtime.record.to_dict()
+            if current_runtime is not None:
+                return result, current_runtime.record.to_dict()
+            return result, self._disconnected_payload(notebook_id)
 
     async def execute_in_runtime(self, notebook_id: str, code: str, timeout_s: float) -> tuple[dict[str, Any], dict[str, Any]]:
         runtime = await self.ensure_runtime(notebook_id)
@@ -558,6 +600,33 @@ class RuntimeManager:
             self._sessions[notebook_id] = runtime
             self._persist_record(runtime.record)
             return runtime.record.to_dict()
+
+    async def interrupt_runtime(self, notebook_id: str) -> dict[str, Any]:
+        async with self._lock_for(notebook_id):
+            runtime = await self._load_or_recover_runtime(notebook_id)
+            if runtime is None:
+                return {**self._disconnected_payload(notebook_id), "interrupted": False}
+            runtime.record.status = "interrupting"
+            runtime.record.error = None
+            self._persist_record(runtime.record)
+            try:
+                interrupted = await runtime.interrupt()
+            except Exception as exc:
+                runtime.record.status = "error"
+                runtime.record.error = str(exc)
+                self._persist_record(runtime.record)
+                raise
+            is_running = await runtime.is_running()
+            runtime.record.status = "connected" if is_running else "disconnected"
+            runtime.record.last_activity_at = _utc_now()
+            runtime.record.error = None if interrupted else "Runtime interrupt is not supported for this backend."
+            if is_running:
+                self._sessions[notebook_id] = runtime
+                self._persist_record(runtime.record)
+                return {**runtime.record.to_dict(), "interrupted": interrupted}
+            self._sessions.pop(notebook_id, None)
+            self._delete_record(notebook_id)
+            return {**self._disconnected_payload(notebook_id), "interrupted": interrupted}
 
     async def delete_runtime(self, notebook_id: str) -> dict[str, Any]:
         async with self._lock_for(notebook_id):
@@ -654,6 +723,13 @@ class RuntimeManager:
         if lock is None:
             lock = asyncio.Lock()
             self._locks[notebook_id] = lock
+        return lock
+
+    def _execution_lock_for(self, notebook_id: str) -> asyncio.Lock:
+        lock = self._execution_locks.get(notebook_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._execution_locks[notebook_id] = lock
         return lock
 
     def _metadata_path(self, notebook_id: str) -> Path:

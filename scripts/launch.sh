@@ -23,7 +23,7 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --frozen
+UV_PROJECT_ENVIRONMENT="$ROOT_DIR/.venv" uv sync --extra lab --extra test --frozen
 source "$ROOT_DIR/.venv/bin/activate"
 
 jupyter server \

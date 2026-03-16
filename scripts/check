@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/check-common.sh"
+
+MODE="${1:-}"
+shift || true
+
+for arg in "$@"; do
+  if [[ "$arg" == "--dry-run" ]]; then
+    DRY_RUN=1
+  fi
+done
+
+run_backend() {
+  ensure_python_env
+  sync_functions
+  run_cmd bash -lc "cd '$ROOT_DIR' && source '$ROOT_DIR/.venv/bin/activate' && python -m pytest tests/backend/"
+}
+
+run_ui() {
+  ensure_node_env
+  run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run build"
+  run_cmd "$ROOT_DIR/scripts/ui-check.sh"
+}
+
+run_runtime() {
+  run_cmd "$ROOT_DIR/scripts/check-runtime.sh"
+  run_cmd "$ROOT_DIR/scripts/check-runtime-ui.sh"
+}
+
+case "$MODE" in
+  backend)
+    run_backend
+    ;;
+  ui)
+    run_ui
+    ;;
+  runtime)
+    run_runtime
+    ;;
+  notebook-smoke)
+    ensure_node_env
+    run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run test:e2e -- --grep @smoke"
+    ;;
+  assistant-mocked)
+    ensure_node_env
+    run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run test:e2e -- --grep 'Assistant ' --grep-invert 'live|Live'"
+    ;;
+  assistant-live)
+    run_cmd "$ROOT_DIR/scripts/assistant-live-check.sh"
+    ;;
+  all)
+    if has_runtime_critical_changes; then
+      require_runtime_change_artifacts
+      run_runtime
+    fi
+    run_backend
+    ensure_node_env
+    run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run build"
+    run_cmd bash -lc "cd '$ROOT_DIR/web' && npm audit --audit-level=moderate || true"
+    if [[ "${SUGARPY_INCLUDE_ASSISTANT_E2E:-0}" == "1" ]]; then
+      run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run test:e2e"
+    else
+      run_cmd bash -lc "cd '$ROOT_DIR/web' && npm run test:e2e -- --grep-invert 'Assistant '"
+    fi
+    echo "Hooray, all checks passed!"
+    ;;
+  *)
+    cat <<'EOF' >&2
+Usage: ./scripts/check <backend|ui|runtime|all|notebook-smoke|assistant-mocked|assistant-live> [--dry-run]
+EOF
+    exit 1
+    ;;
+esac

@@ -36,7 +36,10 @@
   - Each notebook uses a backend-managed runtime session.
   - The default restricted deployment target is a Docker-backed runtime container with a per-notebook writable workspace and a readonly app mount.
   - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
+  - Notebook execution timeouts are expressed in milliseconds at the API boundary and converted to seconds inside the backend executor.
+  - If a live notebook execution times out, SugarPy treats that runtime as unsafe, restarts it, and returns an explicit timeout-recovery error so the next run starts from a clean kernel.
   - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy replays earlier runnable Code/Math cells once before the requested target cell so execution still follows notebook order.
+  - Runtime control is exposed through SugarPy-owned API routes for status, interrupt, restart, and delete; the UI uses those routes instead of talking to kernels directly.
   - Docker-backed live runtimes isolate notebook execution from the server process and filesystem. If SugarPy falls back to an in-process runtime, restricted profiles still statically reject blocked Python imports/calls such as `os`, `subprocess`, `open`, and related shell/file escape paths.
 - The assistant sandbox remains a separate backend-owned ephemeral execution path.
 - Math cell evaluation pipeline:
@@ -54,9 +57,11 @@
 - `scripts/sync-functions.sh` keeps function definitions synchronized for runtime use.
 
 ## Invariants
-- `./scripts/test-all.sh` is the primary project verification entrypoint.
-- `./scripts/test-all.sh` gate order is: frontend build -> backend pytest -> Playwright E2E.
+- `./scripts/check all` is the primary project verification entrypoint.
+- `./scripts/test-all.sh` is a compatibility wrapper around `./scripts/check all`.
+- `./scripts/check all` gate order is: runtime-specific checks when required -> backend pytest -> frontend build/audit -> Playwright E2E.
 - Default `./scripts/test-all.sh` runs the non-assistant E2E suite; set `SUGARPY_INCLUDE_ASSISTANT_E2E=1` to include assistant-heavy browser scenarios.
+- Runtime-critical changes automatically trigger `./scripts/check runtime` during the full gate.
 - UI changes must be validated by `./scripts/ui-check.sh` (or by `./scripts/test-all.sh`).
 - Assistant changes should also be checked against the targeted browser suite in `web/e2e/notebook.spec.ts` when model payloads or notebook-context assembly change.
 - Assistant sandbox invariants:
@@ -70,6 +75,7 @@
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.
   - `error` -> concise `ename: evalue` output.
+  - Backend execution truncates long stream text and large MIME payloads before returning them so pathological prints/plots do not grow unbounded in a single response.
 - Math/Stoich transport contract is MIME-first (no stdout marker parsing):
   - `application/vnd.sugarpy.math+json` -> `cell.mathOutput`.
   - `application/vnd.sugarpy.stoich+json` -> `cell.stoichOutput`.

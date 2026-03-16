@@ -24,7 +24,8 @@ GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 GROQ_API_ROOT = "https://api.groq.com/openai/v1"
 DEFAULT_SECURITY_PROFILE = "restricted-demo"
 DEFAULT_STORAGE_DIRNAME = "runtime"
-DEFAULT_TIMEOUT_MS = 5.0
+DEFAULT_NOTEBOOK_TIMEOUT_S = 20.0
+DEFAULT_SANDBOX_TIMEOUT_S = 5.0
 DEFAULT_START_TIMEOUT_MS = 12.0
 DEFAULT_ASSISTANT_TRACES_ENABLED = False
 MAX_EXEC_SOURCE_LENGTH = 8000
@@ -299,6 +300,16 @@ def _truncate_text(value: str, limit: int = 4000) -> str:
     return f"{value[: max(0, limit - 1)]}…"
 
 
+def _truncate_mime_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _truncate_text(value, limit=4000)
+    if isinstance(value, list):
+        return [_truncate_mime_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {key: _truncate_mime_value(entry) for key, entry in value.items()}
+
+
 def _loopback_hostname(hostname: str) -> bool:
     return hostname in {"localhost", "127.0.0.1", "::1"}
 
@@ -312,6 +323,12 @@ def _origin_allowed_for_host(candidate: str, host: str) -> bool:
     if parsed.netloc == host:
         return True
     return _loopback_hostname(candidate_host) and _loopback_hostname(host_name)
+
+
+def _is_execution_timeout(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    return "timed out" in str(exc).lower()
 
 
 async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict[str, Any]:
@@ -336,9 +353,9 @@ async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict
         if msg_type == "stream":
             text = str(content.get("text") or "")
             if content.get("name") == "stderr":
-                stderr += text
+                stderr = _truncate_text(stderr + text)
             else:
-                stdout += text
+                stdout = _truncate_text(stdout + text)
             continue
         if msg_type in {"execute_result", "display_data"}:
             data = content.get("data") or {}
@@ -347,7 +364,7 @@ async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict
                     if mime == "text/plain":
                         mime_data[mime] = _truncate_text(str(mime_data.get(mime, "")) + str(value))
                     else:
-                        mime_data[mime] = value
+                        mime_data[mime] = _truncate_mime_value(value)
             continue
         if msg_type == "error":
             error_name = str(content.get("ename") or "Error")
@@ -497,8 +514,8 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
     trig_mode = "rad" if payload.get("trigMode") == "rad" else "deg"
     render_mode = "decimal" if payload.get("defaultMathRenderMode") == "decimal" else "exact"
     timeout_s = min(
-        max(float(payload.get("timeoutMs") or DEFAULT_TIMEOUT_MS), 0.25),
-        DEFAULT_TIMEOUT_MS,
+        max(float(payload.get("timeoutMs") or DEFAULT_NOTEBOOK_TIMEOUT_S * 1000.0) / 1000.0, 0.25),
+        DEFAULT_NOTEBOOK_TIMEOUT_S,
     )
     runtime = await _runtime_manager().ensure_runtime(notebook_id)
     execution_chunks: list[str] = []
@@ -519,6 +536,27 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
             timeout_s,
         )
     except Exception as exc:
+        if _is_execution_timeout(exc):
+            recovery_error = ""
+            try:
+                recovered_runtime = await _runtime_manager().restart_runtime(notebook_id)
+            except Exception as recovery_exc:
+                recovered_runtime = {**runtime, "status": "error", "error": str(recovery_exc)}
+                recovery_error = f" Runtime restart failed: {recovery_exc}"
+            return {
+                "notebookId": notebook_id,
+                "cellId": target_cell_id,
+                "cellType": target_type,
+                "status": "error",
+                "output": {
+                    "type": "error",
+                    "ename": exc.__class__.__name__,
+                    "evalue": f"{exc} Runtime was restarted to recover from the timeout.{recovery_error}",
+                },
+                "execCountIncrement": False,
+                "securityProfile": _security_profile(),
+                "runtime": {**recovered_runtime, "sessionState": "recreated-after-timeout"},
+            }
         return {
             "notebookId": notebook_id,
             "cellId": target_cell_id,
@@ -627,8 +665,8 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
     context_preset = str(request.get("contextPreset") or ("selected-cells" if target == "math" else "bootstrap-only"))
     selected_cell_ids = {str(value) for value in request.get("selectedCellIds", [])} if isinstance(request.get("selectedCellIds"), list) else set()
     timeout_s = min(
-        max(float(request.get("timeoutMs") or DEFAULT_TIMEOUT_MS) / 1000.0, 0.25),
-        DEFAULT_TIMEOUT_MS,
+        max(float(request.get("timeoutMs") or DEFAULT_SANDBOX_TIMEOUT_S * 1000.0) / 1000.0, 0.25),
+        DEFAULT_SANDBOX_TIMEOUT_S,
     )
     trig_mode = "rad" if request.get("trigMode") == "rad" else "deg"
     render_mode = "decimal" if request.get("renderMode") == "decimal" else "exact"
@@ -854,6 +892,26 @@ class AutosaveByIdHandler(SugarPyAPIHandler):
         self.finish(payload)
 
 
+class RuntimeStatusHandler(SugarPyAPIHandler):
+    async def get(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().get_runtime_status(notebook_id))
+
+
+class RuntimeInterruptHandler(SugarPyAPIHandler):
+    async def post(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().interrupt_runtime(notebook_id))
+
+
+class RuntimeRestartHandler(SugarPyAPIHandler):
+    async def post(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().restart_runtime(notebook_id))
+
+
+class RuntimeDeleteHandler(SugarPyAPIHandler):
+    async def post(self, notebook_id: str) -> None:
+        self.finish(await _runtime_manager().delete_runtime(notebook_id))
+
+
 class TraceHandler(SugarPyAPIHandler):
     async def post(self) -> None:
         if not _assistant_traces_enabled():
@@ -1006,6 +1064,10 @@ def _load_jupyter_server_extension(server_app: Any) -> None:
         (r"/sugarpy/api/notebooks/(.+)", NotebookHandler),
         (r"/sugarpy/api/autosave", AutosaveHandler),
         (r"/sugarpy/api/autosave/(.+)", AutosaveByIdHandler),
+        (r"/sugarpy/api/runtime/(.+)/interrupt", RuntimeInterruptHandler),
+        (r"/sugarpy/api/runtime/(.+)/restart", RuntimeRestartHandler),
+        (r"/sugarpy/api/runtime/(.+)/delete", RuntimeDeleteHandler),
+        (r"/sugarpy/api/runtime/(.+)", RuntimeStatusHandler),
         (r"/sugarpy/api/execute", ExecuteHandler),
         (r"/sugarpy/api/sandbox", SandboxHandler),
         (r"/sugarpy/api/traces", TraceHandler),

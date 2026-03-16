@@ -32,8 +32,11 @@ import {
   runAssistantSandbox as runIsolatedAssistantSandbox
 } from './utils/assistantSandbox';
 import {
+  deleteNotebookRuntime,
   executeNotebookCell,
   fetchRuntimeConfig,
+  interruptNotebookRuntime,
+  restartNotebookRuntime,
   loadServerAutosave as loadServerAutosaveRequest,
   persistAssistantTraceToServer,
   saveNotebookDocument,
@@ -271,49 +274,7 @@ const isCanceledFutureError = (error: unknown) => {
   return message.includes('Canceled future for execute_request message before replies were done');
 };
 
-const isDeadKernelError = (error: unknown) => {
-  if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return message.toLowerCase().includes('kernel is dead');
-};
-
 const CELL_EXECUTION_TIMEOUT_MS = 20_000;
-
-const isExecutionTimeoutError = (error: unknown) => {
-  if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('Cell execution timed out after');
-};
-
-const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
-  let timer: number | null = null;
-  try {
-    const timeoutPromise = new Promise<T>((_resolve, reject) => {
-      timer = window.setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    });
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer) {
-      window.clearTimeout(timer);
-    }
-  }
-};
-
-const awaitFutureDoneWithTimeout = async (future: any, kernel: any) => {
-  try {
-    return await withTimeout(future.done, CELL_EXECUTION_TIMEOUT_MS, 'Cell execution');
-  } catch (error) {
-    if (!isExecutionTimeoutError(error)) {
-      throw error;
-    }
-    try {
-      await kernel?.interrupt();
-    } catch {
-      // Keep the timeout visible even if kernel interruption fails.
-    }
-    throw new Error(`Cell execution timed out after ${CELL_EXECUTION_TIMEOUT_MS}ms. The kernel was interrupted.`);
-  }
-};
 
 const readOptionalStorageItem = (key: string) => {
   try {
@@ -395,6 +356,8 @@ function App() {
   const assistantTracePendingRef = useRef<Map<string, AssistantRunTrace>>(new Map());
   const assistantTraceFlushRef = useRef<Map<string, Promise<void>>>(new Map());
   const connectingRef = useRef(false);
+  const stopRunAllRequestedRef = useRef(false);
+  const executionGenerationRef = useRef(0);
   const cellsRef = useRef<CellModel[]>([]);
   const trigModeRef = useRef<'deg' | 'rad'>('deg');
   const renderModeRef = useRef<'exact' | 'decimal'>('exact');
@@ -450,6 +413,86 @@ function App() {
   };
 
   const activeKernel = status === 'connected';
+  const hasRunningCells = cells.some((cell) => !!cell.isRunning);
+
+  const clearRunningState = (message: string) => {
+    setCells((prev) =>
+      prev.map((cell) => {
+        if (!cell.isRunning) return cell;
+        const nextCell: CellModel = { ...cell, isRunning: false };
+        if (cell.type === 'math') {
+          nextCell.mathOutput = {
+            kind: cell.mathOutput?.kind ?? 'expression',
+            steps: [],
+            error: message,
+            mode: cell.mathTrigMode ?? trigModeRef.current,
+            warnings: []
+          };
+          return nextCell;
+        }
+        if (cell.type === 'stoich') {
+          nextCell.stoichOutput = {
+            ok: false,
+            error: message,
+            species: []
+          };
+          return nextCell;
+        }
+        nextCell.output = {
+          type: 'error',
+          ename: 'ExecutionStopped',
+          evalue: message
+        };
+        return nextCell;
+      })
+    );
+    setIsRunningAll(false);
+  };
+
+  const invalidateActiveExecutions = () => {
+    executionGenerationRef.current += 1;
+    stopRunAllRequestedRef.current = true;
+  };
+
+  const stopNotebookRuntimeExecution = async () => {
+    invalidateActiveExecutions();
+    try {
+      const runtime = await interruptNotebookRuntime(notebookId);
+      const message = runtime.interrupted
+        ? 'Execution interrupted.'
+        : runtime.error || 'Runtime interrupt was requested.';
+      clearRunningState(message);
+      setSyncMessage(runtime.interrupted ? 'Runtime interrupt sent.' : message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to interrupt runtime.';
+      clearRunningState(message);
+      setSyncMessage(message);
+    }
+  };
+
+  const handleRestartNotebookRuntime = async () => {
+    invalidateActiveExecutions();
+    setHeaderMenuOpen(false);
+    try {
+      await restartNotebookRuntime(notebookId);
+      clearRunningState('Runtime restarted. Re-run any required setup cells.');
+      setSyncMessage('Runtime restarted.');
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Failed to restart runtime.');
+    }
+  };
+
+  const handleDeleteNotebookRuntime = async () => {
+    invalidateActiveExecutions();
+    setHeaderMenuOpen(false);
+    try {
+      await deleteNotebookRuntime(notebookId);
+      clearRunningState('Runtime deleted. The next execution will start a fresh runtime.');
+      setSyncMessage('Runtime deleted.');
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : 'Failed to delete runtime.');
+    }
+  };
 
   const buildSnapshot = (
     nextCells: CellModel[],
@@ -770,6 +813,7 @@ function App() {
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
     if (!activeKernel) return;
+    const executionGeneration = executionGenerationRef.current;
     setCells((prev) =>
       prev.map((cell) =>
         cell.id === cellId
@@ -795,6 +839,7 @@ function App() {
         defaultMathRenderMode,
         timeoutMs: CELL_EXECUTION_TIMEOUT_MS
       });
+      if (executionGeneration !== executionGenerationRef.current) return;
       if (showOutput) {
         applyExecutionResult(cellId, response, countExecution);
       }
@@ -803,6 +848,7 @@ function App() {
         setUserFunctions((prev) => Array.from(new Set([...prev, ...defs])));
       }
     } catch (error) {
+      if (executionGeneration !== executionGenerationRef.current) return;
       setCells((prev) =>
         prev.map((cell) =>
           cell.id === cellId
@@ -829,6 +875,7 @@ function App() {
     preserveOutput = false
   ) => {
     if (!activeKernel) return;
+    const executionGeneration = executionGenerationRef.current;
     const cell = cells.find((entry) => entry.id === cellId);
     const renderMode =
       renderModeOverride ??
@@ -858,8 +905,10 @@ function App() {
         defaultMathRenderMode,
         timeoutMs: CELL_EXECUTION_TIMEOUT_MS
       });
+      if (executionGeneration !== executionGenerationRef.current) return;
       applyExecutionResult(cellId, response, true);
     } catch (error) {
+      if (executionGeneration !== executionGenerationRef.current) return;
       setCells((prev) =>
         prev.map((c) =>
           c.id === cellId
@@ -882,6 +931,7 @@ function App() {
 
   const runStoichCell = async (cellId: string, state: StoichState) => {
     if (!activeKernel) return;
+    const executionGeneration = executionGenerationRef.current;
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
@@ -914,8 +964,10 @@ function App() {
         defaultMathRenderMode,
         timeoutMs: CELL_EXECUTION_TIMEOUT_MS
       });
+      if (executionGeneration !== executionGenerationRef.current) return;
       applyExecutionResult(cellId, response, true);
     } catch (error) {
+      if (executionGeneration !== executionGenerationRef.current) return;
       setCells((prev) =>
         prev.map((c) =>
           c.id === cellId
@@ -932,10 +984,12 @@ function App() {
       await connectBackend();
       if (status !== 'connected') return;
     }
+    stopRunAllRequestedRef.current = false;
     setIsRunningAll(true);
     try {
       const queue = [...cells];
       for (const cell of queue) {
+        if (stopRunAllRequestedRef.current) break;
         setActiveCellId(cell.id);
         if (cell.type === 'markdown') continue;
         if (cell.type === 'math') {
@@ -945,13 +999,16 @@ function App() {
             cell.mathRenderMode ?? defaultMathRenderMode,
             cell.mathTrigMode ?? trigMode
           );
+          if (stopRunAllRequestedRef.current) break;
           continue;
         }
         if (cell.type === 'stoich') {
           await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
+          if (stopRunAllRequestedRef.current) break;
           continue;
         }
         await runCell(cell.id, cell.source);
+        if (stopRunAllRequestedRef.current) break;
       }
     } finally {
       setIsRunningAll(false);
@@ -2459,6 +2516,13 @@ function App() {
               {isRunningAll ? 'Running…' : 'Run All'}
             </button>
             <button
+              className="button danger"
+              onClick={() => void stopNotebookRuntimeExecution()}
+              disabled={!hasRunningCells}
+            >
+              Stop Runtime
+            </button>
+            <button
               ref={assistantToggleRef}
               className="button secondary"
               data-testid="assistant-toggle"
@@ -2490,6 +2554,12 @@ function App() {
                   </div>
                   <button className="menu-item" onClick={connectBackend}>
                     {activeKernel ? 'Restricted Runtime Ready' : 'Reconnect Backend'}
+                  </button>
+                  <button className="menu-item" onClick={() => void handleRestartNotebookRuntime()}>
+                    Restart Notebook Runtime
+                  </button>
+                  <button className="menu-item" onClick={() => void handleDeleteNotebookRuntime()}>
+                    Delete Notebook Runtime
                   </button>
                   <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}

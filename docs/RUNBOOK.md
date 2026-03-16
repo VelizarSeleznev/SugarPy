@@ -4,6 +4,24 @@
 - `uv` installed (https://astral.sh/uv)
 - Node.js + npm available for `web/`
 
+## Canonical checks
+Use these commands instead of ad hoc `uv run`, direct `pytest`, or manual Playwright command guessing:
+
+```bash
+./scripts/check backend
+./scripts/check ui
+./scripts/check runtime
+./scripts/check all
+```
+
+Helpful targeted commands:
+```bash
+./scripts/check notebook-smoke
+./scripts/check assistant-mocked
+./scripts/check assistant-live
+./scripts/doctor.sh
+```
+
 ## Start everything (recommended)
 ```bash
 ./scripts/run-all.sh
@@ -128,6 +146,8 @@ Assistant regression checks:
 - The optional AI assistant is opened from the `Assistant` button in the header.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
+- If a notebook runtime gets stuck, the header exposes `Stop Runtime` while cells are running plus menu actions for `Restart Notebook Runtime` and `Delete Notebook Runtime`.
+- A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
 - New cells are created from the header `+` control and are inserted below the currently selected cell.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
@@ -213,11 +233,14 @@ After deploy:
 
 ## Full verification (recommended before completion)
 ```bash
-./scripts/test-all.sh
+./scripts/check all
 ```
 
 What it covers:
 - Frontend install/build/audit.
+- Backend tests.
+- Full non-assistant notebook E2E by default.
+- Runtime-specific gates automatically when runtime-critical files changed.
 - Backend pytest suite (`tests/backend/`).
 - Playwright E2E suite (`web/e2e/`) excluding assistant-heavy scenarios by default.
 - Set `SUGARPY_INCLUDE_ASSISTANT_E2E=1` to include assistant browser scenarios in the same run.

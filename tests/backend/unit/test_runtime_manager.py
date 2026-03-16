@@ -15,6 +15,7 @@ class FakeRuntime:
         self.restart_calls = 0
         self.stop_calls: list[bool] = []
         self.execute_calls: list[tuple[str, float]] = []
+        self.interrupt_calls = 0
 
     async def start(self):
         self.start_calls += 1
@@ -37,6 +38,10 @@ class FakeRuntime:
     async def restart(self):
         self.restart_calls += 1
         self.running = True
+
+    async def interrupt(self):
+        self.interrupt_calls += 1
+        return True
 
     async def stop(self, remove_workspace: bool):
         self.stop_calls.append(remove_workspace)
@@ -99,6 +104,17 @@ def test_runtime_manager_restart_and_delete(tmp_path: Path):
     assert manager.created[0].restart_calls == 1
     assert deleted["status"] == "disconnected"
     assert manager.created[0].stop_calls[-1] is True
+
+
+def test_runtime_manager_interrupt_marks_runtime_connected(tmp_path: Path):
+    manager = FakeRuntimeManager(tmp_path)
+
+    asyncio.run(manager.ensure_runtime("nb-int"))
+    interrupted = asyncio.run(manager.interrupt_runtime("nb-int"))
+
+    assert interrupted["status"] == "connected"
+    assert interrupted["interrupted"] is True
+    assert manager.created[0].interrupt_calls == 1
 
 
 def test_runtime_manager_execute_updates_runtime_status(tmp_path: Path):

@@ -44,6 +44,21 @@ export type SugarPyExecutionResponse = {
   execCountIncrement?: boolean;
   replayedCellIds?: string[];
   securityProfile?: string;
+  runtime?: Record<string, unknown>;
+};
+
+export type SugarPyNotebookRuntime = {
+  notebookId: string;
+  status: string;
+  backend: string;
+  containerName: string;
+  workspacePath: string;
+  connectionFilePath: string;
+  createdAt?: string | null;
+  lastActivityAt?: string | null;
+  image: string;
+  error?: string | null;
+  interrupted?: boolean;
 };
 
 const resolveApiRoot = () => {
@@ -114,6 +129,24 @@ export const executeNotebookCell = (payload: SugarPyExecutionRequest) =>
   apiRequest<SugarPyExecutionResponse>('execute', {
     method: 'POST',
     body: JSON.stringify(payload)
+  });
+
+export const getNotebookRuntimeStatus = (notebookId: string) =>
+  apiRequest<SugarPyNotebookRuntime>(`runtime/${encodeURIComponent(notebookId)}`);
+
+export const interruptNotebookRuntime = (notebookId: string) =>
+  apiRequest<SugarPyNotebookRuntime>(`runtime/${encodeURIComponent(notebookId)}/interrupt`, {
+    method: 'POST'
+  });
+
+export const restartNotebookRuntime = (notebookId: string) =>
+  apiRequest<SugarPyNotebookRuntime>(`runtime/${encodeURIComponent(notebookId)}/restart`, {
+    method: 'POST'
+  });
+
+export const deleteNotebookRuntime = (notebookId: string) =>
+  apiRequest<SugarPyNotebookRuntime>(`runtime/${encodeURIComponent(notebookId)}/delete`, {
+    method: 'POST'
   });
 
 export const runAssistantSandboxRequest = (params: {

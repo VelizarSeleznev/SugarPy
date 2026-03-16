@@ -1,0 +1,26 @@
+# Runtime Hardening Verification Manifest
+
+- Change class: notebook runtime / execution / workflow gates
+- Impacted runtime or execution paths:
+  - live notebook timeout recovery
+  - live notebook interrupt / restart / delete controls
+  - stale execute response handling after runtime recovery
+  - runtime-specific verification entrypoints
+  - runtime-critical change classification in the full gate
+- Verification mapping:
+  - timeout recovery -> `tests/backend/unit/test_server_extension.py`
+  - runtime lifecycle and recovery flows -> `tests/backend/integration/test_runtime_reliability.py`
+  - interrupt / restart / delete UI flows -> `web/e2e/runtime-controls.spec.ts`
+  - full notebook regression -> `./scripts/test-all.sh`
+- Regression tests added:
+  - `tests/backend/integration/test_runtime_reliability.py`
+  - `web/e2e/runtime-controls.spec.ts`
+- Browser verification:
+  - runtime-control Playwright suite
+  - full non-assistant notebook Playwright suite
+- Recovery paths covered:
+  - interrupt active execution
+  - restart active execution
+  - delete active execution
+  - timeout -> forced runtime recreation
+  - next execution after timeout recovery
