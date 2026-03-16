@@ -77,6 +77,7 @@
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
   - `text/plain` -> plain text fallback.
   - `error` -> concise `ename: evalue` output.
+  - A trailing top-level `print(...)` call is treated as stdout-only and does not also render its `None` return value as the final expression output.
   - Backend execution truncates long stream text and large MIME payloads before returning them so pathological prints/plots do not grow unbounded in a single response.
 - Math/Stoich transport contract is MIME-first (no stdout marker parsing):
   - `application/vnd.sugarpy.math+json` -> `cell.mathOutput`.

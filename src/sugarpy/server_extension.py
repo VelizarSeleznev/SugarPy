@@ -438,7 +438,14 @@ def _wrap_code_for_notebook_display(source: str) -> str:
     prefix = ""
     if len(tree.body) > 1:
         prefix = ast.unparse(ast.Module(body=tree.body[:-1], type_ignores=[])).strip()
-    last_expr = ast.unparse(tree.body[-1].value).strip()
+    last_value = tree.body[-1].value
+    if (
+        isinstance(last_value, ast.Call)
+        and isinstance(last_value.func, ast.Name)
+        and last_value.func.id == "print"
+    ):
+        return source
+    last_expr = ast.unparse(last_value).strip()
     if not last_expr:
         return source
     lines = []
