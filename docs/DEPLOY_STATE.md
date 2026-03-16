@@ -42,12 +42,12 @@ All three services are expected to be `active` in systemd.
 
 ## Verification checklist
 1. UI returns 200 from the public tunnel URL.
-2. `GET /jupyter/api/status` returns 200 (with token).
-3. Creating multiple kernels via `/jupyter/api/kernels` succeeds.
+2. `GET http://127.0.0.1:8888/jupyter/api/status` returns 200 (with token).
+3. Creating multiple kernels via `http://127.0.0.1:8888/jupyter/api/kernels` succeeds.
 4. Deleting created kernels succeeds.
 
 ## Notes
-- `/jupyter/` is publicly reachable behind the same origin and currently depends on a shared token.
+- `/jupyter/` is intentionally blocked at Nginx and remains internal-only on `127.0.0.1:8888`.
 - This setup is demo-oriented (shared token, no per-user account isolation).
 - Deploys should target `/opt/sugarpy/current` and build a fresh release under `/opt/sugarpy/releases/<sha>` before switching the symlink.
 - Shared assistant keys, when used, should live in `/etc/sugarpy/assistant.env` and be consumed by the Jupyter service environment, not under `notebooks/`.

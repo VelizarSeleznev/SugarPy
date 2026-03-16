@@ -53,7 +53,7 @@ echo "Release ID: ${RELEASE_ID}"
 
 # 1) Upload repository snapshot into a new release directory.
 cd "${ROOT_DIR}"
-tar \
+COPYFILE_DISABLE=1 tar \
   --exclude='.git' \
   --exclude='.venv' \
   --exclude='web/node_modules' \
@@ -105,7 +105,7 @@ ssh "${SSH_OPTS[@]}" "${REMOTE}" "
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS http://127.0.0.1:18081/ >/dev/null"
 if [[ -n "${DEPLOY_JUPYTER_TOKEN:-}" ]]; then
   ssh "${SSH_OPTS[@]}" "${REMOTE}" \
-    "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS 'http://127.0.0.1:18081/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
+    "export PATH=\"\$HOME/.local/bin:\$PATH\"; curl -fsS 'http://127.0.0.1:8888/jupyter/api/status?token=${DEPLOY_JUPYTER_TOKEN}' >/dev/null"
 fi
 
 # 6) Keep the most recent releases and prune older ones.
