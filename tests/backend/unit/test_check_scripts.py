@@ -73,3 +73,13 @@ def test_doctor_script_reports_missing_tooling_with_nonzero_status(tmp_path: Pat
 
     assert result.returncode != 0
     assert "[missing] uv" in result.stdout
+
+
+def test_deploy_scripts_probe_internal_jupyter_health_endpoint():
+    remote_script = (ROOT / "scripts" / "deploy-remote.sh").read_text()
+    local_script = (ROOT / "scripts" / "deploy-local.sh").read_text()
+
+    assert "http://127.0.0.1:8888/jupyter/api/status" in remote_script
+    assert "http://127.0.0.1:8888/jupyter/api/status" in local_script
+    assert "http://127.0.0.1:18081/jupyter/api/status" not in remote_script
+    assert "http://127.0.0.1:18081/jupyter/api/status" not in local_script

@@ -139,6 +139,12 @@ DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-local.sh
 ```
 
+Deploy health checks use two different local endpoints on purpose:
+- Frontend/public shell: `http://127.0.0.1:18081/`
+- Internal Jupyter runtime: `http://127.0.0.1:8888/jupyter/api/status?token=...`
+
+Do not probe `/jupyter/` through Nginx on port `18081`; the bundled Nginx config intentionally returns `404` there.
+
 ## Shared assistant keys on the demo host
 To let the deployed site use the assistant without asking each browser for its own key,
 store the shared provider keys in the Jupyter service environment instead of in
