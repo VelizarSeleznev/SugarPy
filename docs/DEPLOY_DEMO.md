@@ -121,6 +121,7 @@ This script:
 - atomically switches `/opt/sugarpy/current`
 - reloads `sugarpy-jupyter.service` and `nginx`
 - verifies local health endpoints after deploy
+- emits a plain tar archive on macOS so deploy output is not polluted by Apple extended-attribute warnings
 
 Manual deploy from local terminal (same mechanism as CI):
 ```bash
