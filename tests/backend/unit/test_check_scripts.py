@@ -83,3 +83,4 @@ def test_deploy_scripts_probe_internal_jupyter_health_endpoint():
     assert "http://127.0.0.1:8888/jupyter/api/status" in local_script
     assert "http://127.0.0.1:18081/jupyter/api/status" not in remote_script
     assert "http://127.0.0.1:18081/jupyter/api/status" not in local_script
+    assert "retry_remote_until_ok" in remote_script
