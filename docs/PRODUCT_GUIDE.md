@@ -46,6 +46,9 @@ Use it together with:
 ### File actions
 - `Save to Server`: writes an `.ipynb` file under `notebooks/` and refreshes server autosave.
 - `Export PDF`
+  - Uses a print-specific page layout tuned for A4 export.
+  - Hides notebook editing chrome and keeps the notebook in a continuous vertical flow for printing.
+  - Lets long cells continue across pages instead of forcing one cell per page.
 - `Download .ipynb`
 - `Download .sugarpy`
 - `Import`

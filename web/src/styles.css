@@ -1805,7 +1805,7 @@ html.ios-compact-inputs select {
 
 @media print {
   @page {
-    size: auto;
+    size: A4 portrait;
     margin: 12mm;
   }
 
@@ -1815,16 +1815,34 @@ html.ios-compact-inputs select {
     overflow: visible !important;
   }
 
+  body {
+    color: #111827;
+  }
+
   .app-header,
   .cell-gutter,
-  .cell-action-bar {
+  .cell-action-bar,
+  .cell-divider {
     display: none !important;
   }
 
   .workspace {
-    margin: 0;
-    max-width: none;
+    width: 186mm !important;
+    max-width: 186mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+  }
+
+  .notebook-stack {
+    gap: 0;
     padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .notebook-item + .notebook-item {
+    margin-top: 10px;
   }
 
   .cell-shell {
@@ -1832,8 +1850,74 @@ html.ios-compact-inputs select {
     border: none;
     box-shadow: none;
     padding: 0;
-    break-inside: avoid;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .notebook-item,
+  .cell-main,
+  .cell-content,
+  .output,
+  .output-rich,
+  .math-card,
+  .math-card-source,
+  .math-step,
+  .math-trace-source-rendered,
+  .stoich-table-wrap {
+    max-width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .output,
+  .math-card,
+  .stoich-cell {
+    box-shadow: none;
+  }
+
+  .output {
+    background: #f8fafc;
+  }
+
+  .markdown h1,
+  .markdown h2,
+  .markdown h3,
+  .markdown h4,
+  .markdown blockquote,
+  .markdown pre,
+  .output,
+  .math-card,
+  .stoich-cell,
+  .stoich-table,
+  .math-trace-item {
+    break-inside: avoid-page;
     page-break-inside: avoid;
+  }
+
+  .math-card-source .katex-display,
+  .math-step .katex-display,
+  .output-rich .katex-display {
+    overflow: visible !important;
+  }
+
+  .js-plotly-plot,
+  .js-plotly-plot .plot-container,
+  .js-plotly-plot .svg-container {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .js-plotly-plot {
+    margin: 0 auto;
+  }
+
+  .stoich-table {
+    table-layout: fixed;
+    font-size: 11px;
+  }
+
+  .stoich-table th,
+  .stoich-table td {
+    word-break: break-word;
   }
 }
 
@@ -1843,12 +1927,26 @@ body.print-mode {
 
 body.print-mode .app-header,
 body.print-mode .cell-gutter,
-body.print-mode .cell-action-bar {
+body.print-mode .cell-action-bar,
+body.print-mode .cell-divider {
   display: none !important;
 }
 
 body.print-mode .workspace {
-  margin: 0 !important;
-  max-width: none !important;
+  width: 186mm !important;
+  max-width: 186mm !important;
+  margin: 0 auto !important;
   padding: 0 !important;
+}
+
+body.print-mode .notebook-stack {
+  gap: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+body.print-mode .notebook-item + .notebook-item {
+  margin-top: 10px;
 }
