@@ -201,9 +201,15 @@ What the release command does:
 
 ## Update code on the demo server
 When a change is intended to affect the live demo, do not stop at local edits.
-Deploy the current repository state to `seggver` and report whether deployment succeeded.
+The default production path is:
+1. finish work on a branch
+2. run `./scripts/release.sh`
+3. let the push to `master` trigger GitHub Actions deploy on `seggver`
 
-Manual remote deploy:
+Use manual deploy commands only as a fallback for emergency/manual roll-forward cases,
+or when you intentionally need to deploy branch state that has not been released to `master`.
+
+Fallback manual remote deploy:
 ```bash
 DEPLOY_HOST=seggver \
 DEPLOY_USER=sugarpy \
@@ -213,7 +219,7 @@ DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-remote.sh
 ```
 
-Local deploy from a self-hosted runner or an interactive shell on `seggver`:
+Fallback local deploy from a self-hosted runner or an interactive shell on `seggver`:
 ```bash
 DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_JUPYTER_TOKEN=sugarpy \
