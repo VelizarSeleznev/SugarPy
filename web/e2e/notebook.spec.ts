@@ -329,6 +329,29 @@ test.describe('Notebook CAS outputs', () => {
     await expect(codeCell.locator('.cell-action-bar')).toBeVisible();
     await page.locator('.app-header').click();
     await expect(codeCell.locator('.cell-action-bar')).toHaveCount(0);
+    await expect(codeCell.locator('.cell-shell')).toHaveClass(/is-last-active/);
+    await page.locator('.app-header').click();
+    await expect(codeCell.locator('.cell-shell')).not.toHaveClass(/is-last-active/);
+  });
+
+  test('Notebook chrome: add menu inserts below the last active cell after outside click', async ({ page }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Text cell' }).click();
+
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    await codeCell.click();
+    await page.locator('.app-header').click();
+
+    await page.getByTestId('add-cell-button').click();
+    await page.getByRole('button', { name: 'Math cell' }).click();
+
+    const rows = page.locator('.notebook-item');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toHaveAttribute('data-testid', 'cell-row-code');
+    await expect(rows.nth(1)).toHaveAttribute('data-testid', 'cell-row-math');
+    await expect(rows.nth(2)).toHaveAttribute('data-testid', 'cell-row-markdown');
   });
 
   test('Notebook chrome: code and math outputs can collapse and reopen', async ({ page }) => {
