@@ -188,4 +188,6 @@ through Jupyter under `/jupyter/sugarpy/assistant/*`.
 ## Notes and limitations
 - This is still a demo configuration (no full per-user account isolation).
 - Shared/demo access is acceptable only through the restricted SugarPy API; do not publish raw Jupyter contents or kernel endpoints.
+- Restricted/server deployments now assume Docker-backed isolation for both live notebook execution and assistant validation. If Docker is unavailable, SugarPy should report runtime/sandbox unavailability instead of falling back to host-side execution.
+- Cold-start runtime recovery no longer replays earlier notebook cells automatically. After a restart or timeout recovery, users should rerun setup cells or use `Run All`.
 - For production multi-user separation, migrate to JupyterHub/TLJH or a stronger execution boundary.

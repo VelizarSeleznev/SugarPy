@@ -2,7 +2,12 @@ import asyncio
 
 from sugarpy import server_extension
 
-from sugarpy.server_extension import _load_assistant_server_config, execute_notebook_request, validate_restricted_python
+from sugarpy.server_extension import (
+    _load_assistant_server_config,
+    execute_notebook_request,
+    execute_sandbox_request,
+    validate_restricted_python,
+)
 
 
 def test_restricted_python_blocks_shell_and_file_access():
@@ -97,7 +102,7 @@ def test_execute_notebook_request_merges_stdout_into_visible_mime_output():
     assert response["output"] == {"type": "mime", "data": {"text/plain": "hello\n"}}
 
 
-def test_execute_notebook_request_replays_preceding_cells_for_fresh_runtime():
+def test_execute_notebook_request_marks_fresh_runtime_without_replay():
     class FakeRuntimeManager:
         def __init__(self):
             self.backend = "docker"
@@ -150,8 +155,9 @@ def test_execute_notebook_request_replays_preceding_cells_for_fresh_runtime():
         server_extension._runtime_manager = original_factory
 
     assert response["status"] == "ok"
-    assert response["replayedCellIds"] == ["cell-1"]
-    assert "value = 41" in fake_manager.execute_calls[0][1]
+    assert response["freshRuntime"] is True
+    assert response["replayedCellIds"] == []
+    assert "value = 41" not in fake_manager.execute_calls[0][1]
     assert "value + 1" in fake_manager.execute_calls[0][1]
 
 
@@ -217,6 +223,9 @@ def test_runtime_config_keeps_live_docker_execution_unrestricted_but_sandbox_res
     assert config["execution"]["runtimeBackend"] == "docker"
     assert config["execution"]["codeCellsRestricted"] is False
     assert config["execution"]["assistantSandboxCodeCellsRestricted"] is True
+    assert config["execution"]["assistantSandboxAvailable"] is True
+    assert config["execution"]["assistantSandboxDockerOnly"] is True
+    assert config["execution"]["coldStartReplay"] is False
 
 
 def test_execute_notebook_request_converts_timeout_ms_to_seconds():
@@ -308,5 +317,34 @@ def test_execute_notebook_request_restarts_runtime_after_timeout():
         server_extension._runtime_manager = original_factory
 
     assert response["status"] == "error"
+    assert response["freshRuntime"] is True
     assert response["runtime"]["sessionState"] == "recreated-after-timeout"
     assert fake_manager.restart_calls == ["nb-timeout"]
+
+
+def test_execute_sandbox_request_returns_unavailable_when_docker_is_missing():
+    class FakeRuntimeManager:
+        backend = "unavailable"
+
+    original_factory = server_extension._runtime_manager
+    original_manager = server_extension._RUNTIME_MANAGER
+    server_extension._RUNTIME_MANAGER = FakeRuntimeManager()
+    server_extension._runtime_manager = lambda: server_extension._RUNTIME_MANAGER
+    try:
+        response = asyncio.run(
+            execute_sandbox_request(
+                {
+                    "request": {
+                        "target": "code",
+                        "code": "2 + 2",
+                        "timeoutMs": 5000,
+                    }
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = original_manager
+        server_extension._runtime_manager = original_factory
+
+    assert response["status"] == "error"
+    assert response["errorName"] == "SandboxUnavailable"

@@ -61,6 +61,8 @@ class FakeRuntimeManager(RuntimeManager):
             bootstrap_code="print('bootstrap')",
             executor=lambda *_args, **_kwargs: None,
         )
+        self.backend = "docker"
+        self.unavailable_reason = None
         self.created: list[FakeRuntime] = []
 
     def _create_runtime(self, notebook_id: str, existing_record: RuntimeRecord | None = None):
@@ -128,6 +130,24 @@ def test_runtime_manager_execute_updates_runtime_status(tmp_path: Path):
     assert runtime["status"] == "connected"
     assert runtime["sessionState"] == "created"
     assert manager.created[0].execute_calls == [("2 + 2", 5.0)]
+
+
+def test_runtime_manager_reports_unavailable_backend_in_restricted_profile(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SUGARPY_NOTEBOOK_RUNTIME_BACKEND", "docker")
+    monkeypatch.setenv("SUGARPY_SECURITY_PROFILE", "restricted-demo")
+    monkeypatch.setattr(RuntimeManager, "_docker_available", staticmethod(lambda: False))
+
+    manager = RuntimeManager(
+        storage_root=tmp_path,
+        project_root=tmp_path,
+        bootstrap_code="",
+        executor=lambda *_args, **_kwargs: None,
+    )
+
+    assert manager.backend == "unavailable"
+    status = asyncio.run(manager.get_runtime_status("nb-unavailable"))
+    assert status["status"] == "disconnected"
+    assert "Docker-backed isolation" in (status["error"] or "")
 
 
 def test_runtime_manager_cleans_up_idle_metadata_backed_runtime(tmp_path: Path):
@@ -222,6 +242,8 @@ class FakeAttachFailureManager(RuntimeManager):
             bootstrap_code="print('bootstrap')",
             executor=lambda *_args, **_kwargs: None,
         )
+        self.backend = "docker"
+        self.unavailable_reason = None
         self.created: list[FakeRuntime] = []
 
     def _create_runtime(self, notebook_id: str, existing_record: RuntimeRecord | None = None):

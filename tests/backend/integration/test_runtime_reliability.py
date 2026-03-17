@@ -81,6 +81,8 @@ class ControllableRuntimeManager(RuntimeManager):
             bootstrap_code="",
             executor=lambda *_args, **_kwargs: None,
         )
+        self.backend = "docker"
+        self.unavailable_reason = None
         self.created: dict[str, ControllableRuntime] = {}
 
     def _create_runtime(self, notebook_id: str, existing_record: RuntimeRecord | None = None):
@@ -118,7 +120,7 @@ def patched_runtime_manager(fake_manager: ControllableRuntimeManager):
         server_extension._runtime_manager = original_factory
 
 
-def test_runtime_reliability_replays_once_then_reuses_runtime(tmp_path: Path):
+def test_runtime_reliability_fresh_runtime_executes_only_target_cell(tmp_path: Path):
     manager = ControllableRuntimeManager(tmp_path)
     payload = {
         "notebookId": "nb-replay",
@@ -137,9 +139,10 @@ def test_runtime_reliability_replays_once_then_reuses_runtime(tmp_path: Path):
         second = asyncio.run(execute_notebook_request(payload))
 
     runtime = manager.created["nb-replay"]
-    assert first["replayedCellIds"] == ["cell-1"]
+    assert first["freshRuntime"] is True
+    assert first["replayedCellIds"] == []
     assert second["replayedCellIds"] == []
-    assert runtime.execute_calls[0].count("value = 41") == 1
+    assert runtime.execute_calls[0].count("value = 41") == 0
     assert runtime.execute_calls[1].count("value = 41") == 0
 
 
