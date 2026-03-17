@@ -724,6 +724,11 @@ body {
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.14);
 }
 
+.cell-shell.is-last-active {
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.1);
+}
+
 .cell-gutter {
   display: flex;
   flex-direction: column;

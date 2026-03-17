@@ -162,6 +162,7 @@ type AssistantSnapshot = {
   trigMode: 'deg' | 'rad';
   defaultMathRenderMode: 'exact' | 'decimal';
   activeCellId: string | null;
+  lastActiveCellId: string | null;
 };
 
 type AssistantRuntimeConfig = {
@@ -305,6 +306,7 @@ function App() {
   const [dirty, setDirty] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string>('');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
+  const [lastActiveCellId, setLastActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
   const [isRunningAll, setIsRunningAll] = useState(false);
@@ -367,6 +369,7 @@ function App() {
   const trigModeRef = useRef<'deg' | 'rad'>('deg');
   const renderModeRef = useRef<'exact' | 'decimal'>('exact');
   const activeCellIdRef = useRef<string | null>(null);
+  const lastActiveCellIdRef = useRef<string | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
@@ -393,7 +396,15 @@ function App() {
     trigModeRef.current = trigMode;
     renderModeRef.current = defaultMathRenderMode;
     activeCellIdRef.current = activeCellId;
-  }, [cells, trigMode, defaultMathRenderMode, activeCellId]);
+    lastActiveCellIdRef.current = lastActiveCellId;
+  }, [cells, trigMode, defaultMathRenderMode, activeCellId, lastActiveCellId]);
+
+  const activateCell = (cellId: string | null, options?: { preserveLast?: boolean }) => {
+    setActiveCellId(cellId);
+    if (!options?.preserveLast) {
+      setLastActiveCellId(cellId);
+    }
+  };
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
   const connectBackend = async () => {
@@ -615,12 +626,17 @@ function App() {
   useEffect(() => {
     if (cells.length === 0) {
       setActiveCellId(null);
+      setLastActiveCellId(null);
       return;
     }
     if (activeCellId && !cells.some((cell) => cell.id === activeCellId)) {
-      setActiveCellId(cells[0].id);
+      activateCell(cells[0].id);
+      return;
     }
-  }, [cells, activeCellId]);
+    if (lastActiveCellId && !cells.some((cell) => cell.id === lastActiveCellId)) {
+      setLastActiveCellId(activeCellId && cells.some((cell) => cell.id === activeCellId) ? activeCellId : cells[0].id);
+    }
+  }, [cells, activeCellId, lastActiveCellId]);
 
   useEffect(() => {
     if (connectOnce.current) return;
@@ -660,7 +676,11 @@ function App() {
         !headerMenuRef.current?.contains(target) &&
         !addCellMenuRef.current?.contains(target)
       ) {
-        setActiveCellId(null);
+        if (activeCellIdRef.current !== null) {
+          setActiveCellId(null);
+        } else if (lastActiveCellIdRef.current !== null) {
+          setLastActiveCellId(null);
+        }
       }
       if (
         assistantOpen &&
@@ -723,7 +743,7 @@ function App() {
       setDefaultMathRenderMode(decoded.defaultMathRenderMode);
       setCells(nextCells);
       setExecCounter(getNotebookExecCounter(nextCells));
-      setActiveCellId(nextCells[0]?.id ?? null);
+      activateCell(nextCells[0]?.id ?? null);
       setLastSavedAt(selected.updatedAt ?? null);
       lastSnapshot.current = buildSnapshot(
         nextCells,
@@ -999,7 +1019,7 @@ function App() {
       const queue = [...cells];
       for (const cell of queue) {
         if (stopRunAllRequestedRef.current) break;
-        setActiveCellId(cell.id);
+        activateCell(cell.id);
         if (cell.type === 'markdown') continue;
         if (cell.type === 'math') {
           await runMathCell(
@@ -1052,6 +1072,8 @@ function App() {
       }
     };
   };
+
+  const getInsertionAnchorId = () => activeCellId || lastActiveCellId;
 
   const updateCellUi = (
     cellId: string,
@@ -1194,7 +1216,8 @@ function App() {
     })),
     trigMode: trigModeRef.current,
     defaultMathRenderMode: renderModeRef.current,
-    activeCellId: activeCellIdRef.current
+    activeCellId: activeCellIdRef.current,
+    lastActiveCellId: lastActiveCellIdRef.current
   });
 
   const restoreAssistantSnapshot = (snapshot: AssistantSnapshot) => {
@@ -1202,10 +1225,12 @@ function App() {
     setTrigMode(snapshot.trigMode);
     setDefaultMathRenderMode(snapshot.defaultMathRenderMode);
     setActiveCellId(snapshot.activeCellId);
+    setLastActiveCellId(snapshot.lastActiveCellId);
     cellsRef.current = snapshot.cells;
     trigModeRef.current = snapshot.trigMode;
     renderModeRef.current = snapshot.defaultMathRenderMode;
     activeCellIdRef.current = snapshot.activeCellId;
+    lastActiveCellIdRef.current = snapshot.lastActiveCellId;
   };
 
   const isRunnableAssistantOperation = (operation: AssistantOperation) =>
@@ -1489,12 +1514,13 @@ function App() {
     const bounded = Math.max(0, Math.min(index, cells.length));
     const nextCell = createCell(type, source, bounded + 1);
     setCells((prev) => [...prev.slice(0, bounded), nextCell, ...prev.slice(bounded)]);
-    setActiveCellId(nextCell.id);
+    activateCell(nextCell.id);
     setAddCellMenuOpen(false);
   };
 
   const insertCellBelowActive = (type: 'code' | 'markdown' | 'math') => {
-    const activeIndex = activeCellId ? cells.findIndex((cell) => cell.id === activeCellId) : -1;
+    const insertionAnchorId = getInsertionAnchorId();
+    const activeIndex = insertionAnchorId ? cells.findIndex((cell) => cell.id === insertionAnchorId) : -1;
     const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
     insertCellAt(targetIndex, type);
   };
@@ -2052,6 +2078,7 @@ function App() {
     let nextTrigMode = trigModeRef.current;
     let nextRenderMode = renderModeRef.current;
     let nextActiveCellId = activeCellIdRef.current;
+    let nextLastActiveCellId = lastActiveCellIdRef.current;
 
     const makeStoichCell = (source: string, indexSeed?: number) => {
       const cell = createCell('stoich', '', indexSeed);
@@ -2075,6 +2102,7 @@ function App() {
           const nextCell = createFromOperation(operation);
           nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
           nextActiveCellId = nextCell.id;
+          nextLastActiveCellId = nextCell.id;
           return;
         }
         if (operation.type === 'update_cell') {
@@ -2098,12 +2126,16 @@ function App() {
             };
           });
           nextActiveCellId = operation.cellId;
+          nextLastActiveCellId = operation.cellId;
           return;
         }
         if (operation.type === 'delete_cell') {
           nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
           if (nextActiveCellId === operation.cellId) {
             nextActiveCellId = nextCells[0]?.id ?? null;
+          }
+          if (nextLastActiveCellId === operation.cellId) {
+            nextLastActiveCellId = nextActiveCellId ?? nextCells[0]?.id ?? null;
           }
           return;
         }
@@ -2115,6 +2147,7 @@ function App() {
           nextCells.splice(bounded, 0, { ...cell, assistantMeta: undefined });
           nextCells = [...nextCells];
           nextActiveCellId = operation.cellId;
+          nextLastActiveCellId = operation.cellId;
           return;
         }
         if (operation.type === 'set_notebook_defaults') {
@@ -2128,10 +2161,12 @@ function App() {
     setTrigMode(nextTrigMode);
     setDefaultMathRenderMode(nextRenderMode);
     setActiveCellId(nextActiveCellId);
+    setLastActiveCellId(nextLastActiveCellId);
     cellsRef.current = nextCells;
     trigModeRef.current = nextTrigMode;
     renderModeRef.current = nextRenderMode;
     activeCellIdRef.current = nextActiveCellId;
+    lastActiveCellIdRef.current = nextLastActiveCellId;
   };
 
   const rejectAssistantDraft = (messageId: string) => {
@@ -2324,7 +2359,7 @@ function App() {
     setDefaultMathRenderMode('exact');
     setCells(nextCells);
     setExecCounter(0);
-    setActiveCellId(nextCells[0]?.id ?? null);
+    activateCell(nextCells[0]?.id ?? null);
     setLastSavedAt(null);
     lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'exact', 'Untitled', nextId);
     setDirty(false);
@@ -2436,7 +2471,7 @@ function App() {
       setDefaultMathRenderMode(next.defaultMathRenderMode);
       setCells(safeCells);
       setExecCounter(getNotebookExecCounter(safeCells));
-      setActiveCellId(safeCells[0]?.id ?? null);
+      activateCell(safeCells[0]?.id ?? null);
       const payload = serializeSugarPy({
         id: next.id,
         name: next.name || 'Untitled',
@@ -2634,7 +2669,8 @@ function App() {
                         key={cells[index].id}
                         cell={cells[index]}
                         isActive={cells[index].id === activeCellId}
-                        onActivate={() => setActiveCellId(cells[index].id)}
+                        isLastActive={cells[index].id === lastActiveCellId}
+                        onActivate={() => activateCell(cells[index].id)}
                         onAddAbove={() => insertSiblingCell(cells[index].id, 'above')}
                         onAddBelow={() => insertSiblingCell(cells[index].id, 'below')}
                         onChange={(value) => updateCell(cells[index].id, value)}

@@ -11,6 +11,7 @@ import { OutputArea } from './OutputArea';
 type Props = {
   cell: CellModel;
   isActive: boolean;
+  isLastActive: boolean;
   onActivate: () => void;
   onAddAbove: () => void;
   onAddBelow: () => void;
@@ -75,6 +76,7 @@ const TrashIcon = () => (
 export function NotebookCell({
   cell,
   isActive,
+  isLastActive,
   onActivate,
   onAddAbove,
   onAddBelow,
@@ -153,6 +155,7 @@ export function NotebookCell({
       <CellWrapper
         cellType={cellType}
         isActive={isActive}
+        isLastActive={isLastActive}
         status={statusFromCell(cell)}
         onRun={runHandler}
         onActivate={onActivate}

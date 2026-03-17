@@ -18,6 +18,7 @@ type QuickAction = {
 type Props = {
   cellType: string;
   isActive: boolean;
+  isLastActive?: boolean;
   status: string;
   onRun?: () => void;
   onActivate?: () => void;
@@ -29,6 +30,7 @@ type Props = {
 export function CellWrapper({
   cellType,
   isActive,
+  isLastActive = false,
   status,
   onRun,
   onActivate,
@@ -105,7 +107,7 @@ export function CellWrapper({
   return (
     <article
       ref={shellRef}
-      className={`cell-shell cell-type-${cellType}${isActive ? ' is-active' : ''}`}
+      className={`cell-shell cell-type-${cellType}${isActive ? ' is-active' : ''}${!isActive && isLastActive ? ' is-last-active' : ''}`}
       data-testid="cell-wrapper"
       onClick={() => onActivate?.()}
     >
