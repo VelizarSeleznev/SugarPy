@@ -36,15 +36,16 @@
   - Each notebook uses a backend-managed runtime session.
   - Frontend execution numbering is also notebook-scoped: loading or creating a different notebook must not carry the previous notebook's gutter count forward.
   - The default restricted deployment target is a Docker-backed runtime container with a per-notebook writable workspace and a readonly app mount.
+  - Restricted profiles (`restricted-demo`, `school-secure`) require Docker-backed isolation; they do not fall back to an in-process runtime when Docker is unavailable.
   - Docker-backed runtimes are started with the same uid/gid as the host Jupyter service so workspace artifacts such as `kernel-connection.json` remain readable and removable by the backend.
   - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
   - Notebook execution timeouts are expressed in milliseconds at the API boundary and converted to seconds inside the backend executor.
   - If a live notebook execution times out, SugarPy treats that runtime as unsafe, restarts it, and returns an explicit timeout-recovery error so the next run starts from a clean kernel.
-  - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy replays earlier runnable Code/Math cells once before the requested target cell so execution still follows notebook order.
+  - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy does not replay earlier cells automatically; users must rerun setup cells or use `Run All`, matching standard Jupyter restart behavior.
   - If runtime recovery finds a live container but cannot attach to its connection file, SugarPy treats that runtime as broken and recreates it instead of surfacing a generic backend error.
   - Runtime control is exposed through SugarPy-owned API routes for status, interrupt, restart, and delete; the UI uses those routes instead of talking to kernels directly.
-  - Docker-backed live runtimes isolate notebook execution from the server process and filesystem. If SugarPy falls back to an in-process runtime, restricted profiles still statically reject blocked Python imports/calls such as `os`, `subprocess`, `open`, and related shell/file escape paths.
-- The assistant sandbox remains a separate backend-owned ephemeral execution path.
+  - Docker-backed live runtimes isolate notebook execution from the server process and filesystem.
+- The assistant sandbox remains a separate backend-owned ephemeral execution path backed by the same runtime manager and Docker isolation model as live notebook execution.
 - Math cell evaluation pipeline:
   - `sugarpy.math_parser.parse_math_input` classifies input as expression/equation/assignment.
   - `sugarpy.math_parser.parse_sympy_expression` parses CAS input with `^` and implicit multiplication.
@@ -68,9 +69,10 @@
 - UI changes must be validated by `./scripts/ui-check.sh` (or by `./scripts/test-all.sh`).
 - Assistant changes should also be checked against the targeted browser suite in `web/e2e/notebook.spec.ts` when model payloads or notebook-context assembly change.
 - Assistant sandbox invariants:
-  - `run_code_in_sandbox` may execute Python or Math-cell validation only through backend-owned ephemeral kernels, never through shell access.
-  - Default sandbox mode is `bootstrap-only` with a hard 5-second timeout.
-  - Context replay is explicit via presets: `none`, `bootstrap-only`, `imports-only`, `selected-cells`, `full-notebook-replay`.
+  - `run_code_in_sandbox` may execute Python or Math-cell validation only through backend-owned Docker-isolated runtimes, never through host-side kernels or shell access in restricted profiles.
+  - Restricted profiles fail closed when Docker-backed sandbox isolation is unavailable.
+  - Default sandbox mode is `none` with a hard 5-second timeout.
+  - Assistant validation does not replay client-provided notebook cells on cold start; it validates only the submitted target code/math source.
   - Sandbox execution must not mutate notebook state, outputs, autosave, or any shared live kernel namespace.
   - Draft state is chat-owned and separate from the live notebook state used for autosave, save, and export.
 - CAS UI behavior for code cells is MIME-first:

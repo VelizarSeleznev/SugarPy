@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import json
 import os
 import re
-import shutil
-import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
-from jupyter_client.manager import AsyncKernelManager
 from jupyter_server.base.handlers import APIHandler
 from tornado import web
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
@@ -26,10 +25,8 @@ DEFAULT_SECURITY_PROFILE = "restricted-demo"
 DEFAULT_STORAGE_DIRNAME = "runtime"
 DEFAULT_NOTEBOOK_TIMEOUT_S = 20.0
 DEFAULT_SANDBOX_TIMEOUT_S = 5.0
-DEFAULT_START_TIMEOUT_MS = 12.0
 DEFAULT_ASSISTANT_TRACES_ENABLED = False
 MAX_EXEC_SOURCE_LENGTH = 8000
-MAX_REPLAY_CELLS = 64
 ALLOWED_IMPORTS = {
     "math",
     "cmath",
@@ -149,7 +146,11 @@ def _live_code_cells_restricted() -> bool:
 
 
 def _live_runtime_network_enabled() -> bool:
-    return True
+    return _live_runtime_backend() == "docker"
+
+
+def _assistant_sandbox_available() -> bool:
+    return _runtime_manager().backend == "docker"
 
 
 def _storage_root() -> Path:
@@ -220,6 +221,9 @@ def _load_assistant_server_config() -> dict[str, Any]:
             "codeCellsRestricted": _live_code_cells_restricted(),
             "assistantSandboxEphemeral": True,
             "assistantSandboxCodeCellsRestricted": _sandbox_code_cells_restricted(),
+            "assistantSandboxAvailable": _assistant_sandbox_available(),
+            "assistantSandboxDockerOnly": _security_profile() in {"restricted-demo", "school-secure"},
+            "coldStartReplay": False,
             "runtimeBackend": runtime_backend,
         },
     }
@@ -533,20 +537,28 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         max(float(payload.get("timeoutMs") or DEFAULT_NOTEBOOK_TIMEOUT_S * 1000.0) / 1000.0, 0.25),
         DEFAULT_NOTEBOOK_TIMEOUT_S,
     )
-    runtime = await _runtime_manager().ensure_runtime(notebook_id)
-    execution_chunks: list[str] = []
-    if runtime.get("sessionState") == "created":
-        replay_cells = [
-            cell
-            for cell in notebook_cells[:target_index]
-            if str(cell.get("type") or "code") in {"code", "math"} and str(cell.get("source") or "").strip()
-        ][:MAX_REPLAY_CELLS]
-        execution_chunks.extend(_cell_source_for_execution(replay_cell, trig_mode, render_mode) for replay_cell in replay_cells)
-    else:
-        replay_cells = []
-    execution_chunks.append(_cell_source_for_execution(target_cell, trig_mode, render_mode))
+    manager = _runtime_manager()
     try:
-        result, runtime_payload = await _runtime_manager().execute_code(
+        runtime = await manager.ensure_runtime(notebook_id)
+    except Exception as exc:
+        runtime_status = await manager.get_runtime_status(notebook_id)
+        return {
+            "notebookId": notebook_id,
+            "cellId": target_cell_id,
+            "cellType": target_type,
+            "status": "error",
+            "output": {"type": "error", "ename": exc.__class__.__name__, "evalue": str(exc)},
+            "execCountIncrement": False,
+            "securityProfile": _security_profile(),
+            "freshRuntime": False,
+            "replayedCellIds": [],
+            "runtime": runtime_status,
+        }
+
+    replay_cells: list[dict[str, Any]] = []
+    execution_chunks = [_cell_source_for_execution(target_cell, trig_mode, render_mode)]
+    try:
+        result, runtime_payload = await manager.execute_code(
             notebook_id,
             _join_execution_chunks(execution_chunks),
             timeout_s,
@@ -571,7 +583,9 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
                 },
                 "execCountIncrement": False,
                 "securityProfile": _security_profile(),
-                "runtime": {**recovered_runtime, "sessionState": "recreated-after-timeout"},
+                "freshRuntime": True,
+                "replayedCellIds": [],
+                "runtime": {**recovered_runtime, "sessionState": "recreated-after-timeout", "freshRuntime": True},
             }
         return {
             "notebookId": notebook_id,
@@ -581,9 +595,12 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
             "output": {"type": "error", "ename": exc.__class__.__name__, "evalue": str(exc)},
             "execCountIncrement": False,
             "securityProfile": _security_profile(),
+            "freshRuntime": False,
+            "replayedCellIds": [],
             "runtime": {**runtime, "status": "error", "error": str(exc)},
         }
 
+    fresh_runtime = runtime.get("sessionState") == "created"
     response: dict[str, Any] = {
         "notebookId": notebook_id,
         "cellId": target_cell_id,
@@ -591,8 +608,9 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         "status": result["status"],
         "execCountIncrement": result["status"] == "ok",
         "securityProfile": _security_profile(),
-        "replayedCellIds": [str(cell.get("id")) for cell in replay_cells],
-        "runtime": {**runtime_payload, "sessionState": runtime.get("sessionState", "existing")},
+        "freshRuntime": fresh_runtime,
+        "replayedCellIds": [],
+        "runtime": {**runtime_payload, "sessionState": runtime.get("sessionState", "existing"), "freshRuntime": fresh_runtime},
     }
 
     if target_type == "math":
@@ -678,18 +696,32 @@ def _build_math_validation_code(source: str, trig_mode: str, render_mode: str) -
 
 async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
     request = payload.get("request") if isinstance(payload.get("request"), dict) else payload
-    notebook_cells = payload.get("notebookCells") if isinstance(payload.get("notebookCells"), list) else []
-    bootstrap_code = str(payload.get("bootstrapCode") or "").strip()
+    _notebook_cells = payload.get("notebookCells") if isinstance(payload.get("notebookCells"), list) else []
+    _bootstrap_code = str(payload.get("bootstrapCode") or "").strip()
     target = "math" if request.get("target") == "math" else "code"
-    context_preset = str(request.get("contextPreset") or ("selected-cells" if target == "math" else "bootstrap-only"))
-    selected_cell_ids = {str(value) for value in request.get("selectedCellIds", [])} if isinstance(request.get("selectedCellIds"), list) else set()
+    context_preset = "none"
     timeout_s = min(
         max(float(request.get("timeoutMs") or DEFAULT_SANDBOX_TIMEOUT_S * 1000.0) / 1000.0, 0.25),
         DEFAULT_SANDBOX_TIMEOUT_S,
     )
     trig_mode = "rad" if request.get("trigMode") == "rad" else "deg"
     render_mode = "decimal" if request.get("renderMode") == "decimal" else "exact"
-    replayed_cell_ids: list[str] = []
+    manager = _runtime_manager()
+
+    if not _assistant_sandbox_available():
+        return {
+            "target": target,
+            "status": "error",
+            "stdout": "",
+            "stderr": "",
+            "mimeData": {},
+            "errorName": "SandboxUnavailable",
+            "errorValue": "Assistant validation is unavailable because restricted mode requires Docker-backed isolation.",
+            "durationMs": 0,
+            "contextPresetUsed": context_preset,
+            "executedBootstrap": False,
+            "replayedCellIds": [],
+        }
 
     if target == "code":
         code = str(request.get("code") or "").strip()
@@ -742,65 +774,10 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
             }
         target_code = _build_math_validation_code(source, trig_mode, render_mode)
 
-    replay_cells: list[dict[str, Any]] = []
-    if context_preset == "imports-only":
-        replay_cells = [
-            cell
-            for cell in notebook_cells[:MAX_REPLAY_CELLS]
-            if isinstance(cell, dict)
-            and str(cell.get("type") or "code") == "code"
-            and str(cell.get("source") or "").strip().startswith(("import ", "from "))
-        ]
-    elif context_preset == "selected-cells":
-        replay_cells = [
-            cell
-            for cell in notebook_cells[:MAX_REPLAY_CELLS]
-            if isinstance(cell, dict)
-            and str(cell.get("id") or "") in selected_cell_ids
-            and str(cell.get("type") or "code") in ({"code", "math"} if target == "math" else {"code"})
-        ]
-    elif context_preset == "full-notebook-replay":
-        replay_cells = [
-            cell
-            for cell in notebook_cells[:MAX_REPLAY_CELLS]
-            if isinstance(cell, dict) and str(cell.get("type") or "code") in ({"code", "math"} if target == "math" else {"code"})
-        ]
-
-    kernel = AsyncKernelManager(kernel_name="python3")
-    tmp_home = tempfile.mkdtemp(prefix="sugarpy-sandbox-")
-    env = {
-        "HOME": tmp_home,
-        "PYTHONNOUSERSITE": "1",
-        "IPYTHONDIR": tmp_home,
-        "MPLCONFIGDIR": tmp_home,
-        "SUGARPY_SECURITY_PROFILE": _security_profile(),
-    }
+    sandbox_notebook_id = f"assistant-sandbox-{uuid.uuid4().hex}"
     started_at = time.perf_counter()
-    executed_bootstrap = False
-
-    await kernel.start_kernel(env={**os.environ, **env})
-    client = kernel.client()
-    client.start_channels()
     try:
-        await client.wait_for_ready(timeout=DEFAULT_START_TIMEOUT_MS)
-        execution_chunks: list[str] = [_bootstrap_code()]
-        if bootstrap_code:
-            execution_chunks.append(bootstrap_code)
-            executed_bootstrap = True
-        for cell in replay_cells:
-            execution_chunks.append(
-                _build_math_validation_code(
-                    str(cell.get("source") or ""),
-                    "rad" if cell.get("mathTrigMode") == "rad" else "deg",
-                    "decimal" if cell.get("mathRenderMode") == "decimal" else "exact",
-                )
-                if str(cell.get("type") or "code") == "math"
-                else _wrap_code_for_notebook_display(str(cell.get("source") or ""))
-            )
-            replayed_cell_ids.append(str(cell.get("id") or ""))
-        execution_chunks.append(target_code)
-
-        result = await _execute_kernel_code(client, _join_execution_chunks(execution_chunks), timeout_s)
+        result, _runtime_payload = await manager.execute_in_runtime(sandbox_notebook_id, target_code, timeout_s)
     except Exception as exc:
         return {
             "target": target,
@@ -812,26 +789,19 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
             "errorValue": str(exc),
             "durationMs": int((time.perf_counter() - started_at) * 1000),
             "contextPresetUsed": context_preset,
-            "executedBootstrap": executed_bootstrap,
-            "replayedCellIds": replayed_cell_ids,
+            "executedBootstrap": False,
+            "replayedCellIds": [],
         }
     finally:
-        try:
-            await kernel.shutdown_kernel(now=True)
-        except Exception:
-            pass
-        try:
-            client.stop_channels()
-        except Exception:
-            pass
-        shutil.rmtree(tmp_home, ignore_errors=True)
+        with contextlib.suppress(Exception):
+            await manager.delete_runtime(sandbox_notebook_id)
 
     response = {
         "target": target,
         **result,
         "contextPresetUsed": context_preset,
-        "executedBootstrap": executed_bootstrap,
-        "replayedCellIds": replayed_cell_ids,
+        "executedBootstrap": False,
+        "replayedCellIds": [],
     }
     if target == "math":
         response["mathValidation"] = _parse_math_validation(result.get("stdout") or "") or {

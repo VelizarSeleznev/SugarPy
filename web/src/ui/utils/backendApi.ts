@@ -16,6 +16,9 @@ export type SugarPyRuntimeConfig = {
     codeCellsRestricted?: boolean;
     assistantSandboxEphemeral?: boolean;
     assistantSandboxCodeCellsRestricted?: boolean;
+    assistantSandboxAvailable?: boolean;
+    assistantSandboxDockerOnly?: boolean;
+    coldStartReplay?: boolean;
     runtimeBackend?: string;
   };
 };
@@ -41,6 +44,7 @@ export type SugarPyExecutionResponse = {
   };
   mathOutput?: Record<string, unknown>;
   stoichOutput?: Record<string, unknown>;
+  freshRuntime?: boolean;
   execCountIncrement?: boolean;
   replayedCellIds?: string[];
   securityProfile?: string;
@@ -59,6 +63,7 @@ export type SugarPyNotebookRuntime = {
   image: string;
   error?: string | null;
   interrupted?: boolean;
+  freshRuntime?: boolean;
 };
 
 const resolveApiRoot = () => {

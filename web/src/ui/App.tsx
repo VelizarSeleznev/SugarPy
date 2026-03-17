@@ -481,7 +481,7 @@ function App() {
     setHeaderMenuOpen(false);
     try {
       await restartNotebookRuntime(notebookId);
-      clearRunningState('Runtime restarted. Re-run any required setup cells.');
+      clearRunningState('Runtime restarted. Rerun setup cells or use Run All.');
       setSyncMessage('Runtime restarted.');
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : 'Failed to restart runtime.');
@@ -813,9 +813,12 @@ function App() {
         updateCellState(next);
         return next;
       });
-      return;
+    } else {
+      updateCellState();
     }
-    updateCellState();
+    if (response.freshRuntime) {
+      setSyncMessage('Fresh runtime started. Rerun setup cells or use Run All.');
+    }
   };
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {

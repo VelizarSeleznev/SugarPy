@@ -30,6 +30,7 @@ RUNTIME_CONTAINER_PREFIX = "sugarpy-rt"
 MAX_STREAM_TEXT_LENGTH = 4000
 MAX_MIME_TEXT_LENGTH = 4000
 MAX_MIME_OBJECT_ENTRIES = 20
+RESTRICTED_DOCKER_ONLY_PROFILES = {"restricted-demo", "school-secure"}
 
 KernelExecutor = Callable[[Any, str, float], Awaitable[dict[str, Any]]]
 
@@ -497,7 +498,11 @@ class RuntimeManager:
         self.project_root = project_root
         self.bootstrap_code = bootstrap_code
         self.executor = executor
-        self.backend = self._resolve_backend(os.environ.get("SUGARPY_NOTEBOOK_RUNTIME_BACKEND", DEFAULT_RUNTIME_BACKEND).strip())
+        self.security_profile = os.environ.get("SUGARPY_SECURITY_PROFILE", "").strip()
+        self.backend, self.unavailable_reason = self._resolve_backend(
+            os.environ.get("SUGARPY_NOTEBOOK_RUNTIME_BACKEND", DEFAULT_RUNTIME_BACKEND).strip(),
+            self.security_profile,
+        )
         self.image = os.environ.get("SUGARPY_NOTEBOOK_RUNTIME_IMAGE", DEFAULT_RUNTIME_IMAGE).strip() or DEFAULT_RUNTIME_IMAGE
         self.start_timeout_s = float(os.environ.get("SUGARPY_RUNTIME_START_TIMEOUT_S", DEFAULT_RUNTIME_START_TIMEOUT_S))
         self.exec_timeout_s = float(os.environ.get("SUGARPY_RUNTIME_EXEC_TIMEOUT_S", DEFAULT_EXEC_TIMEOUT_S))
@@ -511,6 +516,7 @@ class RuntimeManager:
         self._execution_locks: dict[str, asyncio.Lock] = {}
 
     async def ensure_runtime(self, notebook_id: str) -> dict[str, Any]:
+        self._require_available_backend()
         await self._cleanup_idle_runtimes()
         async with self._lock_for(notebook_id):
             existing = self._sessions.get(notebook_id)
@@ -577,6 +583,8 @@ class RuntimeManager:
         return result, {**payload, "sessionState": runtime.get("sessionState", "existing")}
 
     async def get_runtime_status(self, notebook_id: str) -> dict[str, Any]:
+        if self.backend == "unavailable":
+            return self._disconnected_payload(notebook_id)
         await self._cleanup_idle_runtimes()
         async with self._lock_for(notebook_id):
             runtime = await self._load_or_recover_runtime(notebook_id)
@@ -593,6 +601,7 @@ class RuntimeManager:
             return self._disconnected_payload(notebook_id)
 
     async def restart_runtime(self, notebook_id: str) -> dict[str, Any]:
+        self._require_available_backend()
         async with self._lock_for(notebook_id):
             runtime = await self._load_or_recover_runtime(notebook_id)
             if runtime is None:
@@ -614,6 +623,8 @@ class RuntimeManager:
             return runtime.record.to_dict()
 
     async def interrupt_runtime(self, notebook_id: str) -> dict[str, Any]:
+        if self.backend == "unavailable":
+            return {**self._disconnected_payload(notebook_id), "interrupted": False}
         async with self._lock_for(notebook_id):
             runtime = await self._load_or_recover_runtime(notebook_id)
             if runtime is None:
@@ -641,6 +652,8 @@ class RuntimeManager:
             return {**self._disconnected_payload(notebook_id), "interrupted": interrupted}
 
     async def delete_runtime(self, notebook_id: str) -> dict[str, Any]:
+        if self.backend == "unavailable":
+            return self._disconnected_payload(notebook_id)
         async with self._lock_for(notebook_id):
             runtime = await self._load_or_recover_runtime(notebook_id)
             if runtime is not None:
@@ -654,6 +667,8 @@ class RuntimeManager:
             return self._disconnected_payload(notebook_id)
 
     async def cleanup_orphans(self) -> dict[str, Any]:
+        if self.backend == "unavailable":
+            return {"removedNotebookIds": []}
         removed_notebooks: list[str] = []
         for metadata_path in self.metadata_root.glob("*.json"):
             payload = self._load_record_file(metadata_path)
@@ -670,6 +685,8 @@ class RuntimeManager:
         return {"removedNotebookIds": removed_notebooks}
 
     async def _cleanup_idle_runtimes(self) -> None:
+        if self.backend == "unavailable":
+            return
         if self.idle_timeout_s <= 0:
             return
         now = time.time()
@@ -779,7 +796,7 @@ class RuntimeManager:
             "createdAt": None,
             "lastActivityAt": None,
             "image": self.image,
-            "error": None,
+            "error": self.unavailable_reason if self.backend == "unavailable" else None,
         }
 
     @staticmethod
@@ -792,11 +809,13 @@ class RuntimeManager:
             return 0.0
         return float(calendar.timegm(parsed))
 
+    def _require_available_backend(self) -> None:
+        if self.backend != "unavailable":
+            return
+        raise RuntimeError(self.unavailable_reason or "Notebook runtime backend is unavailable.")
+
     @staticmethod
-    def _resolve_backend(requested_backend: str) -> str:
-        requested = requested_backend or DEFAULT_RUNTIME_BACKEND
-        if requested in {"docker", "inprocess"}:
-            return requested
+    def _docker_available() -> bool:
         try:
             result = subprocess.run(
                 ["docker", "info"],
@@ -805,5 +824,25 @@ class RuntimeManager:
                 stderr=subprocess.DEVNULL,
             )
         except OSError:
-            return "inprocess"
-        return "docker" if result.returncode == 0 else "inprocess"
+            return False
+        return result.returncode == 0
+
+    @classmethod
+    def _resolve_backend(cls, requested_backend: str, security_profile: str) -> tuple[str, str | None]:
+        requested = requested_backend or DEFAULT_RUNTIME_BACKEND
+        restricted = security_profile in RESTRICTED_DOCKER_ONLY_PROFILES
+        docker_available = cls._docker_available()
+        unavailable_reason = "Restricted runtime requires Docker-backed isolation, but Docker is unavailable."
+
+        if restricted:
+            if requested == "inprocess":
+                return "unavailable", "Restricted runtime does not allow the in-process backend."
+            if docker_available:
+                return "docker", None
+            return "unavailable", unavailable_reason
+
+        if requested in {"docker", "inprocess"}:
+            if requested == "docker" and not docker_available:
+                return "unavailable", "Docker-backed runtime is unavailable because Docker is not accessible."
+            return requested, None
+        return ("docker", None) if docker_available else ("inprocess", None)

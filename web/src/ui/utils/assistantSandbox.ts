@@ -51,8 +51,6 @@ export type AssistantSandboxResult = {
 };
 
 const DEFAULT_TIMEOUT_MS = 5000;
-const KERNEL_START_TIMEOUT_MS = 12000;
-const KERNEL_SHUTDOWN_TIMEOUT_MS = 2500;
 const MAX_CODE_LENGTH = 6000;
 const MAX_TEXT_LENGTH = 4000;
 const MAX_MIME_TEXT_LENGTH = 2000;
@@ -102,205 +100,6 @@ export const buildAssistantBootstrapCode = (allFunctions: FunctionEntry[]) => {
   return ['import math', defs].filter(Boolean).join('\n\n').trim();
 };
 
-const isImportOnlyCode = (source: string) => {
-  const lines = source
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'));
-  if (lines.length === 0) return false;
-  return lines.every((line) => line.startsWith('import ') || line.startsWith('from '));
-};
-
-const isRunnableCodeCell = (cell: AssistantSandboxNotebookCell) => cell.type === 'code' && cell.source.trim().length > 0;
-const isRunnableMathCell = (cell: AssistantSandboxNotebookCell) => cell.type === 'math' && cell.source.trim().length > 0;
-const isReplayableCell = (cell: AssistantSandboxNotebookCell) => isRunnableCodeCell(cell) || isRunnableMathCell(cell);
-
-const selectReplayCells = (
-  cells: AssistantSandboxNotebookCell[],
-  contextPreset: AssistantSandboxContextPreset,
-  selectedCellIds: string[],
-  target: AssistantSandboxTarget
-) => {
-  switch (contextPreset) {
-    case 'imports-only':
-      return cells.filter((cell) => isRunnableCodeCell(cell) && isImportOnlyCode(cell.source));
-    case 'selected-cells': {
-      const selected = new Set(selectedCellIds);
-      return cells.filter((cell) => selected.has(cell.id) && (target === 'math' ? isReplayableCell(cell) : isRunnableCodeCell(cell)));
-    }
-    case 'full-notebook-replay':
-      return cells.filter(target === 'math' ? isReplayableCell : isRunnableCodeCell);
-    default:
-      return [];
-  }
-};
-
-const truncateMimeValue = (value: unknown): unknown => {
-  if (typeof value === 'string') return truncateText(value, MAX_MIME_TEXT_LENGTH);
-  if (Array.isArray(value)) return truncateText(value.map((item) => asText(item)).join(''), MAX_MIME_TEXT_LENGTH);
-  if (!value || typeof value !== 'object') return value;
-  const limitedEntries = Object.entries(value as Record<string, unknown>).slice(0, 20);
-  return Object.fromEntries(limitedEntries.map(([key, entry]) => [key, truncateMimeValue(entry)]));
-};
-
-const executeCodeOnKernel = async (
-  kernel: any,
-  code: string,
-  timeoutMs: number
-): Promise<AssistantSandboxResult> => {
-  const startedAt = Date.now();
-  let future: any;
-  let stdout = '';
-  let stderr = '';
-  let mimeData: Record<string, unknown> = {};
-  let errorName: string | undefined;
-  let errorValue: string | undefined;
-  try {
-    future = kernel.requestExecute({ code, stop_on_error: true });
-  } catch (error) {
-    return {
-      target: 'code',
-      status: 'error',
-      stdout: '',
-      stderr: '',
-      mimeData: {},
-      errorName: 'ExecutionError',
-      errorValue: error instanceof Error ? error.message : String(error),
-      durationMs: Date.now() - startedAt,
-      contextPresetUsed: 'none',
-      executedBootstrap: false,
-      replayedCellIds: []
-    };
-  }
-
-  future.onIOPub = (msg: any) => {
-    if (msg.header.msg_type === 'stream') {
-      const name = (msg.content as any).name ?? 'stdout';
-      const text = asText((msg.content as any).text);
-      if (name === 'stderr') {
-        stderr += text;
-      } else {
-        stdout += text;
-      }
-      return;
-    }
-    if (msg.header.msg_type === 'execute_result' || msg.header.msg_type === 'display_data') {
-      const data = ((msg.content as any).data ?? {}) as Record<string, unknown>;
-      const merged = { ...mimeData };
-      Object.entries(data).forEach(([mime, value]) => {
-        if (mime === 'text/plain') {
-          const nextText = `${asText(merged['text/plain'])}${asText(value)}`;
-          merged['text/plain'] = truncateText(nextText, MAX_MIME_TEXT_LENGTH);
-        } else {
-          merged[mime] = truncateMimeValue(value);
-        }
-      });
-      mimeData = merged;
-      return;
-    }
-    if (msg.header.msg_type === 'error') {
-      errorName = (msg.content as any).ename ?? 'Error';
-      errorValue = (msg.content as any).evalue ?? '';
-      const traceback = Array.isArray((msg.content as any).traceback)
-        ? (msg.content as any).traceback.join('\n')
-        : '';
-      stderr = stderr || traceback;
-    }
-  };
-
-  try {
-    await withTimeout(Promise.resolve(future.done), timeoutMs, 'Sandbox execution');
-    return {
-      target: 'code',
-      status: errorName ? 'error' : 'ok',
-      stdout: truncateText(stdout),
-      stderr: truncateText(stderr),
-      mimeData,
-      errorName,
-      errorValue,
-      durationMs: Date.now() - startedAt,
-      contextPresetUsed: 'none',
-      executedBootstrap: false,
-      replayedCellIds: []
-    };
-  } catch (error) {
-    future.dispose?.();
-    return {
-      target: 'code',
-      status: 'timeout',
-      stdout: truncateText(stdout),
-      stderr: truncateText(stderr),
-      mimeData,
-      errorName: 'TimeoutError',
-      errorValue: error instanceof Error ? error.message : String(error),
-      durationMs: Date.now() - startedAt,
-      contextPresetUsed: 'none',
-      executedBootstrap: false,
-      replayedCellIds: []
-    };
-  }
-};
-
-const buildMathValidationCode = (source: string, trigMode: 'deg' | 'rad', renderMode: 'exact' | 'decimal') =>
-  [
-    'import json',
-    'from sugarpy.math_cell import render_math_cell',
-    `_result = render_math_cell(${JSON.stringify(source)}, mode=${JSON.stringify(trigMode)}, render_mode=${JSON.stringify(renderMode)})`,
-    '_summary = {',
-    "  'kind': _result.get('kind'),",
-    "  'error': _result.get('error'),",
-    "  'warnings': _result.get('warnings') or [],",
-    "  'steps': (_result.get('steps') or [])[:6],",
-    "  'plotly_figure': bool(_result.get('plotly_figure')),",
-    '}',
-    'print(json.dumps(_summary))'
-  ].join('\n');
-
-const executeMathOnKernel = async (
-  kernel: any,
-  source: string,
-  timeoutMs: number,
-  trigMode: 'deg' | 'rad',
-  renderMode: 'exact' | 'decimal'
-): Promise<AssistantSandboxResult> => {
-  const result = await executeCodeOnKernel(kernel, buildMathValidationCode(source, trigMode, renderMode), timeoutMs);
-  const mathValidation = parseMathValidation(result.stdout);
-  return {
-    ...result,
-    target: 'math',
-    status: result.status === 'ok' && (!mathValidation || !!mathValidation.error) ? 'error' : result.status,
-    mathValidation:
-      mathValidation ?? {
-        error: 'Math validation did not return structured output.',
-        warnings: [],
-        stepsPreview: [],
-        hasPlot: false
-      }
-  };
-};
-
-const parseMathValidation = (stdout: string) => {
-  const lines = stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      const parsed = JSON.parse(lines[index]) as Record<string, unknown>;
-      return {
-        kind: typeof parsed.kind === 'string' ? parsed.kind : undefined,
-        error: typeof parsed.error === 'string' ? parsed.error : undefined,
-        warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((value) => String(value)) : [],
-        stepsPreview: Array.isArray(parsed.steps) ? parsed.steps.map((value) => String(value)).slice(0, 6) : [],
-        hasPlot: !!parsed.plotly_figure
-      };
-    } catch (_error) {
-      continue;
-    }
-  }
-  return null;
-};
-
 export const runAssistantSandbox = async (params: {
   request: AssistantSandboxRequest;
   notebookCells: AssistantSandboxNotebookCell[];
@@ -321,7 +120,7 @@ export const runAssistantSandbox = async (params: {
       errorName: 'ValidationError',
       errorValue: 'Sandbox code cannot be empty.',
       durationMs: 0,
-      contextPresetUsed: request.contextPreset ?? 'bootstrap-only',
+      contextPresetUsed: 'none',
       executedBootstrap: false,
       replayedCellIds: []
     };
@@ -336,7 +135,7 @@ export const runAssistantSandbox = async (params: {
       errorName: 'ValidationError',
       errorValue: 'Math sandbox source cannot be empty.',
       durationMs: 0,
-      contextPresetUsed: request.contextPreset ?? 'bootstrap-only',
+      contextPresetUsed: 'none',
       executedBootstrap: false,
       replayedCellIds: []
     };
@@ -351,34 +150,18 @@ export const runAssistantSandbox = async (params: {
       errorName: 'ValidationError',
       errorValue: `Sandbox code exceeds the ${MAX_CODE_LENGTH} character limit.`,
       durationMs: 0,
-      contextPresetUsed: request.contextPreset ?? 'bootstrap-only',
+      contextPresetUsed: 'none',
       executedBootstrap: false,
       replayedCellIds: []
     };
   }
 
-  const contextPreset: AssistantSandboxContextPreset = request.contextPreset ?? (target === 'math' ? 'selected-cells' : 'bootstrap-only');
+  const contextPreset: AssistantSandboxContextPreset = 'none';
   const timeoutMs =
     typeof request.timeoutMs === 'number' && Number.isFinite(request.timeoutMs) && request.timeoutMs > 0
       ? Math.min(Math.max(Math.round(request.timeoutMs), 250), DEFAULT_TIMEOUT_MS)
       : DEFAULT_TIMEOUT_MS;
-  const selectedCellIds = Array.isArray(request.selectedCellIds)
-    ? request.selectedCellIds.map((cellId) => String(cellId))
-    : [];
-  const replayedCells = selectReplayCells(notebookCells, contextPreset, selectedCellIds, target);
-  if (contextPreset !== 'none' && bootstrapCode.trim()) {
-    onActivity?.('Loading sandbox bootstrap');
-  }
-  if (replayedCells.length > 0) {
-    const label =
-      contextPreset === 'imports-only'
-        ? 'Replaying imports'
-        : contextPreset === 'selected-cells'
-          ? 'Replaying selected code cells'
-          : 'Replaying notebook code cells';
-    onActivity?.(label, `${replayedCells.length} cell${replayedCells.length === 1 ? '' : 's'}`);
-  }
-  onActivity?.('Running isolated check', target === 'math' ? 'math' : contextPreset);
+  onActivity?.('Running isolated check', target === 'math' ? 'math' : 'code');
   const result = await runAssistantSandboxRequest({
     request: {
       ...request,

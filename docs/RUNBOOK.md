@@ -76,10 +76,11 @@ Assistant UX notes:
 - For direct circle-from-points-and-radius prompts, if the model drafts a Math solution without `solve(...)`, SugarPy can replace that draft with a local CAS solve template instead of spending another slow model round on replanning.
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
 - Runnable assistant draft steps are validated before acceptance.
-  - Validation uses a fresh backend-owned temporary kernel, not a browser-managed live kernel.
+  - Validation uses a fresh backend-owned temporary runtime, not a browser-managed live kernel.
   - Python code uses the existing sandbox presets.
   - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are accepted.
-  - If a new Math step depends on earlier runnable cells, the validator replays those earlier Code/Math cells inside the temporary kernel first.
+  - Restricted deployments require Docker-backed sandbox isolation; if Docker is unavailable, assistant validation returns an explicit unavailable error instead of falling back to host execution.
+  - Assistant validation no longer replays earlier notebook cells automatically. If a draft depends on prior notebook state, rerun setup cells or use `Run All` after applying the accepted draft.
   - A sandbox timeout or runtime error is surfaced in the preview and blocks acceptance for that step.
 
 Runtime server config for restricted deployments:
@@ -131,7 +132,7 @@ Assistant regression checks:
 - If `ASSISTANT_LIVE_API_KEY` is omitted, the suite uses the shared runtime key/config already available to the app.
 - If `ASSISTANT_LIVE_API_KEY` is set, it overrides the provider-specific live-key env vars.
 - This suite covers the OpenAI Responses payload contract, seeded notebook fixtures, degree-mode defaults, recent-error tool outputs, and the staged preview plus accept/reject flow.
-- It also covers isolated assistant sandbox validation, timeout/error reporting, replay presets such as `imports-only` and `selected-cells`, reject-without-mutation checks, and partial `Accept step` behavior when a draft contains multiple validated steps.
+- It also covers isolated assistant sandbox validation, timeout/error reporting, reject-without-mutation checks, and partial `Accept step` behavior when a draft contains multiple validated steps.
 
 ## Notebook persistence (autosave + recovery)
 - The UI now keeps a lightweight local autosave in browser `localStorage` for crash/reload recovery.
@@ -147,7 +148,7 @@ Assistant regression checks:
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
 - A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
 - If a notebook runtime gets stuck, the header exposes `Stop Runtime` while cells are running plus menu actions for `Restart Notebook Runtime` and `Delete Notebook Runtime`.
-- A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace.
+- A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace or use `Run All`.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
 - New cells are created from the header `+` control and are inserted below the currently selected cell.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
