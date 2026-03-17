@@ -106,7 +106,9 @@ Quick meaning:
 
 Notes:
 - These render helpers affect Math cell display behavior.
-- They do **not** change SymPy `N(...)` behavior.
+- `N(...)` itself does not do angle-unit conversion.
+- `Deg` / `Rad` changes how trig helpers are interpreted before evaluation, including inverse trig helpers such as `acos(...)`.
+- The same applies when those helpers are reached through the built-in `math.` namespace alias.
 - If both styles are needed in one cell, wrap each line explicitly:
   - `render_exact(...)` for symbolic view
   - `render_decimal(...)` for numeric view

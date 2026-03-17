@@ -30,6 +30,18 @@ def test_math_cell_smoke():
     result_deg = render_math_cell("sin(30)", mode="deg")
     assert result_deg["ok"] and result_deg["value"] == r"\frac{1}{2}"
 
+    result_acos_deg = render_math_cell("acos(1/2)", mode="deg")
+    assert result_acos_deg["ok"] and result_acos_deg["value"] == "60"
+
+    result_acos_rad = render_math_cell("acos(1/2)", mode="rad")
+    assert result_acos_rad["ok"] and result_acos_rad["value"] == r"\frac{\pi}{3}"
+
+    result_math_sin_deg = render_math_cell("math.sin(30)", mode="deg")
+    assert result_math_sin_deg["ok"] and result_math_sin_deg["value"] == r"\frac{1}{2}"
+
+    result_math_sin_rad = render_math_cell("math.sin(30)", mode="rad")
+    assert result_math_sin_rad["ok"] and result_math_sin_rad["value"] == r"\sin{\left(30 \right)}"
+
     result_equation = render_math_cell("x^2 = 2")
     assert result_equation["ok"] and result_equation["kind"] == "equation"
 
@@ -161,6 +173,29 @@ def test_math_cas_circle_intersections_smoke():
         numeric = render_math_cell("solN := N(sol)\nsolN")
         assert numeric["ok"]
         assert "2.211" in (numeric["value"] or "")
+
+
+def test_math_inverse_trig_numeric_mode_respects_degree_toggle():
+    expr = "angle_BOD := N(acos((2*5^2 - 6^2)/(2*5^2)))\nangle_BOD"
+
+    result_deg = render_math_cell(expr, mode="deg")
+    result_rad = render_math_cell(expr, mode="rad")
+
+    assert result_deg["ok"]
+    assert result_rad["ok"]
+    assert result_deg["value"] != result_rad["value"]
+    assert result_deg["value"] == "73.739795291688"
+    assert result_rad["value"] == "1.28700221758657"
+
+
+def test_math_namespace_trig_helpers_respect_degree_toggle():
+    result_deg = render_math_cell("N(math.acos(1/2))", mode="deg")
+    result_rad = render_math_cell("N(math.acos(1/2))", mode="rad")
+
+    assert result_deg["ok"]
+    assert result_rad["ok"]
+    assert result_deg["value"] == "60.0"
+    assert result_rad["value"].startswith("1.0471975511966")
 
 
 def test_math_multiline_plot_statement_smoke():

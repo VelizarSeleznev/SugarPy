@@ -764,7 +764,6 @@ def build_math_locals(
         "set_decimal_places": set_decimal_places,
         "render_decimal": render_decimal,
         "render_exact": render_exact,
-        "math": sp,
     }
 
     plot_fn = user_ns.get("plot")
@@ -791,7 +790,33 @@ def build_math_locals(
         def tand(x: Any, **_kwargs: Any) -> Any:
             return sp.tan(x * sp.pi / 180)
 
-        mapping.update({"sin": sind, "cos": cosd, "tan": tand})
+        def asind(x: Any, **_kwargs: Any) -> Any:
+            return sp.asin(x) * 180 / sp.pi
+
+        def acosd(x: Any, **_kwargs: Any) -> Any:
+            return sp.acos(x) * 180 / sp.pi
+
+        def atand(x: Any, **_kwargs: Any) -> Any:
+            return sp.atan(x) * 180 / sp.pi
+
+        mapping.update(
+            {
+                "sin": sind,
+                "cos": cosd,
+                "tan": tand,
+                "asin": asind,
+                "acos": acosd,
+                "atan": atand,
+            }
+        )
+
+    class _MathNamespaceProxy:
+        def __getattr__(self, name: str) -> Any:
+            if name != "math" and name in mapping:
+                return mapping[name]
+            return getattr(sp, name)
+
+    mapping["math"] = _MathNamespaceProxy()
 
     for name in names:
         if name in mapping:
