@@ -97,6 +97,14 @@ This repository uses a split CI/CD flow in `.github/workflows/deploy.yml`:
 - `checks` run on GitHub-hosted `ubuntu-latest`.
 - `deploy` runs on a self-hosted runner on `seggver` with label `sugarpy-prod`.
 
+This is the primary production deploy path.
+Normal releases should go through:
+```bash
+./scripts/release.sh
+```
+
+That command pushes `master`, which triggers this workflow automatically.
+
 Why:
 - `seggver` is reachable only from the Tailnet/local environment, not from GitHub-hosted runners.
 - The self-hosted runner performs a local release build and atomic symlink switch on the server.
@@ -123,7 +131,10 @@ This script:
 - verifies local health endpoints after deploy
 - emits a plain tar archive on macOS so deploy output is not polluted by Apple extended-attribute warnings
 
-Manual deploy from local terminal (same mechanism as CI):
+Manual deploy from local terminal is fallback-only.
+Use it for emergency/manual roll-forward cases or for intentional branch deploys that have not been released to `master`.
+
+Fallback remote deploy:
 ```bash
 DEPLOY_HOST=seggver \
 DEPLOY_USER=sugarpy \
@@ -133,7 +144,7 @@ DEPLOY_JUPYTER_TOKEN=sugarpy \
 ./scripts/deploy-remote.sh
 ```
 
-Manual local deploy directly on `seggver`:
+Fallback local deploy directly on `seggver`:
 ```bash
 DEPLOY_PATH=/opt/sugarpy/current \
 DEPLOY_JUPYTER_TOKEN=sugarpy \

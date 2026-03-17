@@ -157,7 +157,6 @@ const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:model';
 const ASSISTANT_THINKING_STORAGE = 'sugarpy:assistant:thinking';
 const ASSISTANT_SCOPE: 'notebook' = 'notebook';
 const ASSISTANT_PREFERENCE: 'auto' = 'auto';
-
 type AssistantSnapshot = {
   cells: CellModel[];
   trigMode: 'deg' | 'rad';
