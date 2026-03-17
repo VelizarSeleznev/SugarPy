@@ -105,6 +105,28 @@ const assistantNotebookFixtures = {
         }
       }
     ]
+  },
+  executed_code: {
+    version: 1,
+    id: 'nb-executed-code',
+    name: 'Executed Code Fixture',
+    trigMode: 'deg',
+    defaultMathRenderMode: 'exact',
+    updatedAt: '2026-03-09T00:00:00.000Z',
+    cells: [
+      {
+        id: 'cell-code-executed',
+        type: 'code',
+        source: '2 + 2',
+        execCount: 20,
+        output: {
+          type: 'mime',
+          data: {
+            'text/plain': '4'
+          }
+        }
+      }
+    ]
   }
 } as const;
 
@@ -133,6 +155,57 @@ const setCodeInFirstCell = async (page: any, code: string) => {
   await page.keyboard.type(code);
 
   await firstCell.locator('[data-testid="run-cell"]').click();
+};
+
+const installExecutionCounterApiMocks = async (page: any) => {
+  let executionCount = 20;
+  await page.route('**/api/config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'restricted-demo' })
+    });
+  });
+  await page.route('**/api/autosave/**', async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'not found' })
+    });
+  });
+  await page.route('**/api/runtime/*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notebookId: 'notebook',
+        status: 'connected',
+        backend: 'docker',
+        containerName: 'fake',
+        workspacePath: '/tmp/fake',
+        connectionFilePath: '/tmp/fake/kernel.json',
+        image: 'fake-image'
+      })
+    });
+  });
+  await page.route('**/api/execute', async (route) => {
+    executionCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notebookId: 'notebook',
+        cellId: 'cell-code-1',
+        cellType: 'code',
+        status: 'ok',
+        execCountIncrement: true,
+        output: {
+          type: 'mime',
+          data: { 'text/plain': String(executionCount) }
+        }
+      })
+    });
+  });
 };
 
 const addMathCellAfterFirstCode = async (page: any) => {
@@ -475,6 +548,29 @@ test.describe('Notebook CAS outputs', () => {
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
     await expect(mathCell.getByTestId('math-latex')).toBeVisible();
     await expectNoPageCrashes(page, guards);
+  });
+
+  test('Notebook chrome: New Notebook resets execution numbering instead of reusing the last notebook count', async ({
+    page
+  }) => {
+    await installExecutionCounterApiMocks(page);
+    await seedNotebookFixture(page, assistantNotebookFixtures.executed_code);
+    await page.goto('/');
+
+    const existingCell = page.locator('[data-testid="cell-row-code"]').first();
+    await expect(existingCell.locator('.cell-gutter-status')).toContainText('20');
+
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('button', { name: 'New Notebook' }).click();
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+
+    const freshCell = page.locator('[data-testid="cell-row-code"]').first();
+    await freshCell.locator('.cm-content').click();
+    await page.keyboard.type('1 + 1');
+    await freshCell.locator('[data-testid="run-cell"]').click();
+
+    await expect(freshCell.locator('.cell-gutter-status')).toContainText('1');
+    await expect(freshCell.getByTestId('cell-plain-output')).toContainText('21');
   });
 
   test('Critical flow: Code function is callable from Math cell', async ({ page }) => {
