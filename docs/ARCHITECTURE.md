@@ -75,7 +75,7 @@
 - CAS UI behavior for code cells is MIME-first:
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
-  - `text/plain` -> plain text fallback.
+  - `text/plain` -> plain text fallback. Notebook code-cell `stdout` is merged into this plain-text channel so `print(...)` remains visible in the same output area.
   - `error` -> concise `ename: evalue` output.
   - A trailing top-level `print(...)` call is treated as stdout-only and does not also render its `None` return value as the final expression output.
   - Backend execution truncates long stream text and large MIME payloads before returning them so pathological prints/plots do not grow unbounded in a single response.
