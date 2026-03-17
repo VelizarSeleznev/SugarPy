@@ -476,6 +476,15 @@ def _join_execution_chunks(chunks: list[str]) -> str:
     return "\n\n".join(chunk for chunk in chunks if chunk.strip())
 
 
+def _merge_stdout_into_mime_data(stdout: str, mime_data: dict[str, Any]) -> dict[str, Any]:
+    if not stdout:
+        return dict(mime_data)
+    merged = dict(mime_data)
+    existing = str(merged.get("text/plain") or "")
+    merged["text/plain"] = f"{stdout}{existing}"
+    return merged
+
+
 def _runtime_manager() -> RuntimeManager:
     global _RUNTIME_MANAGER
     if _RUNTIME_MANAGER is None:
@@ -623,7 +632,10 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         }
         return response
 
-    response["output"] = {"type": "mime", "data": result["mimeData"]}
+    response["output"] = {
+        "type": "mime",
+        "data": _merge_stdout_into_mime_data(str(result.get("stdout") or ""), result["mimeData"]),
+    }
     return response
 
 

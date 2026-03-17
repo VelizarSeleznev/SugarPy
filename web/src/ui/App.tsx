@@ -174,6 +174,12 @@ type AssistantRuntimeConfig = {
   };
 };
 
+const getNotebookExecCounter = (cells: CellModel[]) =>
+  cells.reduce((max, cell) => {
+    if (typeof cell.execCount !== 'number' || Number.isNaN(cell.execCount)) return max;
+    return Math.max(max, cell.execCount);
+  }, 0);
+
 const matchesAssistantProvider = (apiKey: string, model: string) => {
   const trimmed = apiKey.trim();
   if (!trimmed) return false;
@@ -717,6 +723,7 @@ function App() {
       setTrigMode(decoded.trigMode);
       setDefaultMathRenderMode(decoded.defaultMathRenderMode);
       setCells(nextCells);
+      setExecCounter(getNotebookExecCounter(nextCells));
       setActiveCellId(nextCells[0]?.id ?? null);
       setLastSavedAt(selected.updatedAt ?? null);
       lastSnapshot.current = buildSnapshot(
@@ -2314,6 +2321,7 @@ function App() {
     setTrigMode('deg');
     setDefaultMathRenderMode('exact');
     setCells(nextCells);
+    setExecCounter(0);
     setActiveCellId(nextCells[0]?.id ?? null);
     setLastSavedAt(null);
     lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'exact', 'Untitled', nextId);
@@ -2425,6 +2433,7 @@ function App() {
       setTrigMode(next.trigMode);
       setDefaultMathRenderMode(next.defaultMathRenderMode);
       setCells(safeCells);
+      setExecCounter(getNotebookExecCounter(safeCells));
       setActiveCellId(safeCells[0]?.id ?? null);
       const payload = serializeSugarPy({
         id: next.id,

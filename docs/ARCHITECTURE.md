@@ -34,6 +34,7 @@
   `application/vnd.plotly.v1+json` to frontend MIME output.
 - Notebook execution is backend-owned and stateful per notebook.
   - Each notebook uses a backend-managed runtime session.
+  - Frontend execution numbering is also notebook-scoped: loading or creating a different notebook must not carry the previous notebook's gutter count forward.
   - The default restricted deployment target is a Docker-backed runtime container with a per-notebook writable workspace and a readonly app mount.
   - Docker-backed runtimes are started with the same uid/gid as the host Jupyter service so workspace artifacts such as `kernel-connection.json` remain readable and removable by the backend.
   - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
@@ -75,7 +76,7 @@
 - CAS UI behavior for code cells is MIME-first:
   - `application/vnd.plotly.v1+json` -> interactive Plotly render.
   - `text/latex` -> KaTeX render (after stripping SymPy wrappers).
-  - `text/plain` -> plain text fallback.
+  - `text/plain` -> plain text fallback. Notebook code-cell `stdout` is merged into this plain-text channel so `print(...)` remains visible in the same output area.
   - `error` -> concise `ename: evalue` output.
   - A trailing top-level `print(...)` call is treated as stdout-only and does not also render its `None` return value as the final expression output.
   - Backend execution truncates long stream text and large MIME payloads before returning them so pathological prints/plots do not grow unbounded in a single response.

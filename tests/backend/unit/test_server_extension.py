@@ -51,6 +51,52 @@ def test_wrap_code_for_notebook_display_keeps_rendering_non_print_final_expressi
     assert "__sugarpy_emit_output(__sugarpy_value)" in wrapped
 
 
+def test_execute_notebook_request_merges_stdout_into_visible_mime_output():
+    class FakeRuntimeManager:
+        backend = "docker"
+
+        async def ensure_runtime(self, notebook_id):
+            return {"notebookId": notebook_id, "status": "connected", "backend": "docker", "sessionState": "existing"}
+
+        async def execute_code(self, notebook_id, code, timeout_s):
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "hello\n",
+                    "stderr": "",
+                    "mimeData": {},
+                    "errorName": None,
+                    "errorValue": None,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+    fake_manager = FakeRuntimeManager()
+
+    original_factory = server_extension._runtime_manager
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_notebook_request(
+                {
+                    "notebookId": "nb-print",
+                    "cells": [{"id": "cell-1", "type": "code", "source": 'print("hello")'}],
+                    "targetCellId": "cell-1",
+                    "trigMode": "deg",
+                    "defaultMathRenderMode": "exact",
+                    "timeoutMs": 5000,
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = None
+        server_extension._runtime_manager = original_factory
+
+    assert response["status"] == "ok"
+    assert response["output"] == {"type": "mime", "data": {"text/plain": "hello\n"}}
+
+
 def test_execute_notebook_request_replays_preceding_cells_for_fresh_runtime():
     class FakeRuntimeManager:
         def __init__(self):
