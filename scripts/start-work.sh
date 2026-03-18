@@ -21,18 +21,36 @@ if [[ -z "${SLUG}" ]]; then
 fi
 
 BRANCH="codex/${SLUG}"
+TARGET_BRANCH="${TARGET_BRANCH:-master}"
 
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Working tree is not clean. Commit or stash current changes before creating a new work branch."
   exit 1
 fi
 
-git fetch origin master
-git switch master
-git pull --ff-only origin master
+git fetch origin "${TARGET_BRANCH}"
+git switch "${TARGET_BRANCH}"
+git pull --ff-only origin "${TARGET_BRANCH}"
 
 if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
-  git switch "${BRANCH}"
+  if git merge-base --is-ancestor "${BRANCH}" "${TARGET_BRANCH}"; then
+    git branch -D "${BRANCH}"
+    git push origin --delete "${BRANCH}" >/dev/null 2>&1 || true
+    git switch -c "${BRANCH}"
+    echo "Recreated merged work branch from ${TARGET_BRANCH}: ${BRANCH}"
+  else
+    git switch "${BRANCH}"
+  fi
+elif git ls-remote --exit-code --heads origin "${BRANCH}" >/dev/null 2>&1; then
+  git fetch origin "${BRANCH}:${BRANCH}"
+  if git merge-base --is-ancestor "${BRANCH}" "${TARGET_BRANCH}"; then
+    git branch -D "${BRANCH}"
+    git push origin --delete "${BRANCH}" >/dev/null 2>&1 || true
+    git switch -c "${BRANCH}"
+    echo "Recreated merged remote work branch from ${TARGET_BRANCH}: ${BRANCH}"
+  else
+    git switch "${BRANCH}"
+  fi
 else
   git switch -c "${BRANCH}"
 fi

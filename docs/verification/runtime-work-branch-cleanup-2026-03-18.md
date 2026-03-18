@@ -1,0 +1,24 @@
+# Runtime Work Branch Cleanup Verification
+
+- Change class: runtime-critical local workflow / launch-path guard / touch drag timing
+- Impacted runtime or execution paths:
+  - `scripts/start-work.sh` branch creation and stale-branch recreation
+  - `scripts/release.sh` post-release checkout and merged-branch cleanup
+  - `scripts/run-all.sh` stale work-branch warning before local dev launch
+  - touch long-press drag activation timing in the notebook UI
+- Verification mapping:
+  - `scripts/start-work.sh` / `scripts/release.sh` / `scripts/run-all.sh` shell syntax -> `bash -n scripts/start-work.sh scripts/release.sh scripts/run-all.sh`
+  - touch notebook regression coverage -> `web/e2e/notebook.spec.ts`
+  - browser smoke coverage -> `./scripts/ui-check.sh`
+- Regression tests added or updated:
+  - `web/e2e/notebook.spec.ts`
+  - `docs/RUNBOOK.md`
+  - `AGENTS.md`
+  - `docs/PROJECT_MAP.md`
+- Browser verification:
+  - `./scripts/ui-check.sh`
+- Recovery paths covered:
+  - restarting work from a stale merged `codex/*` branch
+  - staying on an outdated work branch after release
+  - launching `./scripts/run-all.sh` from a branch that is behind `master`
+  - slower-than-intended touch long-press cell drag activation

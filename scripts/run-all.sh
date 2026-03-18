@@ -3,6 +3,35 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+warn_if_stale_work_branch() {
+  local current_branch
+  current_branch=$(git -C "$ROOT_DIR" branch --show-current 2>/dev/null || true)
+  if [ -z "$current_branch" ] || [ "$current_branch" = "master" ]; then
+    return
+  fi
+  if ! git -C "$ROOT_DIR" show-ref --verify --quiet refs/heads/master; then
+    return
+  fi
+  if ! git -C "$ROOT_DIR" merge-base --is-ancestor "$current_branch" master; then
+    return
+  fi
+
+  local current_head master_head
+  current_head=$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)
+  master_head=$(git -C "$ROOT_DIR" rev-parse master 2>/dev/null || true)
+  if [ -z "$current_head" ] || [ -z "$master_head" ] || [ "$current_head" = "$master_head" ]; then
+    return
+  fi
+
+  cat <<EOF
+Warning: current branch $current_branch is already merged into master and is behind the latest master commit.
+You may be running an old work branch that misses newer UI/runtime changes.
+Recommended fix:
+  git switch master
+  ./scripts/start-work.sh <new-task-name>
+EOF
+}
+
 stop_port_listener() {
   local port="$1"
   local pids
@@ -32,6 +61,8 @@ if ! command -v uv >/dev/null 2>&1; then
   echo "uv is required but not installed. Install from https://astral.sh/uv"
   exit 1
 fi
+
+warn_if_stale_work_branch
 
 # Ensure ports are free by stopping stale processes.
 stop_port_listener 8888

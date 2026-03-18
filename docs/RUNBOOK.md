@@ -28,6 +28,7 @@ Helpful targeted commands:
 ```
 
 What it does:
+- Warns if the current checkout is an old merged work branch that is behind `master`.
 - Syncs Python deps with `uv` into `.venv`.
 - Syncs user functions.
 - Starts the restricted SugarPy backend on `http://localhost:8888`.
@@ -157,6 +158,7 @@ Assistant regression checks:
 - On desktop, each cell exposes a left-side `+` insert rail with searchable block insertion; it inserts below by default and supports `Alt`/`Option` for above insertion.
 - On desktop, the same left rail also exposes a drag handle for reordering. The drag preview shows a ghost card plus a blue insertion bar.
 - On touch devices, a long press on the cell shell starts the same reorder flow.
+- On wide touch layouts such as iPad, the left drag handle also starts reorder directly on touch/pen input without triggering text selection, while active editors still allow normal text selection/copy.
 - Press `Esc` while dragging to cancel and keep the cell in place.
 - New cells are inserted below the currently selected cell when created from the header `+` control.
 - If focus leaves the notebook, SugarPy keeps the last clicked cell as the insertion anchor with a soft highlight until the user clicks outside again to clear it.
@@ -191,6 +193,8 @@ See `docs/DEPLOY_STATE.md` for the current working deployment snapshot on server
   ```bash
   ./scripts/start-work.sh short-task-name
   ```
+  - The script now always refreshes from the latest `master` first.
+  - If a matching `codex/*` branch was already merged earlier, the script deletes that stale branch and recreates it from fresh `master` instead of switching back to old branch state.
 - Save progress often and push checkpoints to GitHub:
   ```bash
   ./scripts/checkpoint.sh "Describe the completed slice"
@@ -206,6 +210,8 @@ What the release command does:
 - Pushes the current work branch to GitHub.
 - Merges the branch into `master`.
 - Pushes `master`, which triggers the deployment workflow.
+- Leaves the repo checked out on updated `master` after the merge.
+- By default, deletes the merged local/remote `codex/*` work branch so the next task starts clean. Set `KEEP_WORK_BRANCH=1` if you intentionally want to keep it.
 - The deployment workflow now expects a self-hosted runner on `seggver` with label `sugarpy-prod`.
 
 ## Update code on the demo server

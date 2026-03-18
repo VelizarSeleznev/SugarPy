@@ -32,6 +32,11 @@ git switch "${TARGET_BRANCH}"
 git pull --ff-only origin "${TARGET_BRANCH}"
 git merge --no-ff "${SOURCE_BRANCH}" -m "release: ${SOURCE_BRANCH}"
 git push origin "${TARGET_BRANCH}"
-git switch "${SOURCE_BRANCH}"
 
-echo "Release pushed via ${TARGET_BRANCH}. GitHub Actions will handle deployment."
+if [[ "${KEEP_WORK_BRANCH:-0}" != "1" && "${SOURCE_BRANCH}" == codex/* ]]; then
+  git branch -d "${SOURCE_BRANCH}"
+  git push origin --delete "${SOURCE_BRANCH}" >/dev/null 2>&1 || true
+  echo "Release pushed via ${TARGET_BRANCH}. Cleaned up ${SOURCE_BRANCH} and left repo on ${TARGET_BRANCH}."
+else
+  echo "Release pushed via ${TARGET_BRANCH}. Left repo on ${TARGET_BRANCH}."
+fi
