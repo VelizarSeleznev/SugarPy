@@ -74,6 +74,9 @@ const assistantNotebookFixtures = {
         source: 'x^2 = 2',
         mathRenderMode: 'exact',
         mathTrigMode: 'deg',
+        ui: {
+          mathView: 'rendered'
+        },
         mathOutput: {
           kind: 'equation',
           steps: ['x^{2} = 2'],
@@ -834,6 +837,7 @@ test.describe('Notebook CAS outputs', () => {
     await seedNotebookFixture(page, assistantNotebookFixtures.math_equation_rendered);
     await page.goto('/');
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
     await expect(mathCell.getByTestId('math-latex')).toBeVisible();
     await expectNoPageCrashes(page, guards);
   });
