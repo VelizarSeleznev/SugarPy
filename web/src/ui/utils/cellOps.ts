@@ -32,6 +32,18 @@ export function moveCellDown(cells: CellModel[], id: string) {
   return next;
 }
 
+export function moveCellToIndex(cells: CellModel[], id: string, index: number) {
+  const currentIndex = cells.findIndex((cell) => cell.id === id);
+  if (currentIndex === -1) return cells;
+
+  const next = [...cells];
+  const [movedCell] = next.splice(currentIndex, 1);
+  const targetIndex = currentIndex < index ? index - 1 : index;
+  const boundedIndex = Math.max(0, Math.min(targetIndex, next.length));
+  next.splice(boundedIndex, 0, movedCell);
+  return next;
+}
+
 export function deleteCell(cells: CellModel[], id: string) {
   return cells.filter((c) => c.id !== id);
 }

@@ -468,3 +468,11 @@ export const readFileAsText = (file: File) =>
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read file.'));
     reader.readAsText(file);
   });
+
+export const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file.'));
+    reader.readAsDataURL(file);
+  });

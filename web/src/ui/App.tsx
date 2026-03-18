@@ -6,10 +6,11 @@ import { AssistantDrawer } from './components/AssistantDrawer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
-import { moveCellDown, moveCellUp, deleteCell } from './utils/cellOps';
+import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import {
   AssistantActivity,
+  AssistantCellKind,
   AssistantConversationEntry,
   AssistantDraftRun,
   AssistantDraftStep,
@@ -52,6 +53,7 @@ import {
   loadLastOpenId,
   pruneLocalNotebookSnapshots,
   removeStorageItem,
+  readFileAsDataUrl,
   readFileAsText,
   saveToLocalStorage,
   serializeIpynb,
@@ -121,6 +123,46 @@ export type CellOutput =
       evalue: string;
     };
 
+type InsertCellType = 'code' | 'markdown' | 'math';
+
+type InsertCellOption = {
+  type: InsertCellType;
+  label: string;
+  searchTerms: string;
+};
+
+const INSERT_CELL_OPTIONS: InsertCellOption[] = [
+  { type: 'code', label: 'Code', searchTerms: 'code python script' },
+  { type: 'markdown', label: 'Text', searchTerms: 'text markdown note' },
+  { type: 'math', label: 'Math', searchTerms: 'math formula cas' }
+];
+
+const matchesInsertCellQuery = (option: InsertCellOption, query: string) => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return (
+    option.label.toLowerCase().includes(normalizedQuery) ||
+    option.searchTerms.includes(normalizedQuery)
+  );
+};
+
+const CELL_DRAG_LONG_PRESS_MS = 1000;
+const CELL_DRAG_MOVE_THRESHOLD = 14;
+
+type CellDragStartDetail = {
+  cellId: string;
+  pointerId: number;
+  pointerType: string;
+  clientX: number;
+  clientY: number;
+  origin: 'handle' | 'touch';
+};
+
+type DragState = CellDragStartDetail & {
+  insertionIndex: number;
+  sourceIndex: number;
+};
+
 const createStoichState = (reaction = ''): StoichState => ({
   reaction,
   inputs: {}
@@ -173,6 +215,18 @@ type AssistantRuntimeConfig = {
     groq?: boolean;
   };
 };
+
+type AssistantPhotoImport = {
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  instructions: string;
+};
+
+const MAX_ASSISTANT_IMPORT_IMAGE_BYTES = 10 * 1024 * 1024;
+const ASSISTANT_PHOTO_IMPORT_MODEL = 'gpt-5.4-mini';
 
 const getNotebookExecCounter = (cells: CellModel[]) =>
   cells.reduce((max, cell) => {
@@ -290,6 +344,14 @@ const readOptionalStorageItem = (key: string) => {
   }
 };
 
+const readImageDimensions = (dataUrl: string) =>
+  new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height });
+    image.onerror = () => reject(new Error('Failed to load image preview.'));
+    image.src = dataUrl;
+  });
+
 function App() {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
@@ -309,8 +371,14 @@ function App() {
   const [lastActiveCellId, setLastActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
+  const [cellInsertMenu, setCellInsertMenu] = useState<{
+    cellId: string;
+    placement: 'above' | 'below';
+  } | null>(null);
+  const [cellInsertMenuQuery, setCellInsertMenuQuery] = useState('');
   const [isRunningAll, setIsRunningAll] = useState(false);
   const [touchUiEnabled, setTouchUiEnabled] = useState(false);
+  const [wideTouchRailEnabled, setWideTouchRailEnabled] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantApiKey, setAssistantApiKey] = useState('');
   const [assistantModel, setAssistantModel] = useState(
@@ -318,12 +386,14 @@ function App() {
   );
   const [assistantThinkingLevel, setAssistantThinkingLevel] = useState<AssistantThinkingLevel>('dynamic');
   const [assistantDraft, setAssistantDraft] = useState('');
+  const [assistantPhotoImport, setAssistantPhotoImport] = useState<AssistantPhotoImport | null>(null);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState('');
   const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
   const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<SugarPyRuntimeConfig | null>(null);
+  const [dragState, setDragState] = useState<DragState | null>(null);
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -355,6 +425,8 @@ function App() {
   const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const addCellMenuRef = useRef<HTMLDivElement | null>(null);
+  const cellInsertMenuRef = useRef<HTMLDivElement | null>(null);
+  const cellInsertMenuShellRef = useRef<HTMLDivElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
   const assistantToggleRef = useRef<HTMLButtonElement | null>(null);
   const assistantRuntimeConfigAttemptedRef = useRef(false);
@@ -370,6 +442,19 @@ function App() {
   const renderModeRef = useRef<'exact' | 'decimal'>('exact');
   const activeCellIdRef = useRef<string | null>(null);
   const lastActiveCellIdRef = useRef<string | null>(null);
+  const dragStateRef = useRef<DragState | null>(null);
+  const dragScrollFrameRef = useRef<number | null>(null);
+  const dragClickSuppressedCellIdRef = useRef<string | null>(null);
+  const dragTouchPendingRef = useRef<{
+    pointerId: number;
+    timerId: number;
+    startX: number;
+    startY: number;
+    cellId: string;
+    target: HTMLElement;
+    onMove: (event: PointerEvent) => void;
+    onEnd: (event: PointerEvent) => void;
+  } | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
     const list: { label: string; detail?: string }[] = [];
@@ -398,6 +483,10 @@ function App() {
     activeCellIdRef.current = activeCellId;
     lastActiveCellIdRef.current = lastActiveCellId;
   }, [cells, trigMode, defaultMathRenderMode, activeCellId, lastActiveCellId]);
+
+  useEffect(() => {
+    dragStateRef.current = dragState;
+  }, [dragState]);
 
   const activateCell = (cellId: string | null, options?: { preserveLast?: boolean }) => {
     setActiveCellId(cellId);
@@ -430,6 +519,7 @@ function App() {
 
   const activeKernel = status === 'connected';
   const hasRunningCells = cells.some((cell) => !!cell.isRunning);
+  const isDraggingCells = !!dragState;
 
   const clearRunningState = (message: string) => {
     setCells((prev) =>
@@ -463,6 +553,158 @@ function App() {
       })
     );
     setIsRunningAll(false);
+  };
+
+  const getDragInsertionIndex = (clientY: number) => {
+    const stack = notebookStackRef.current;
+    if (!stack) return 0;
+    const rows = Array.from(stack.querySelectorAll<HTMLElement>('.notebook-item[data-cell-id]'));
+    if (!rows.length) return 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const rect = row.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        return index;
+      }
+    }
+    return rows.length;
+  };
+
+  const clearDragTouchPending = () => {
+    const pending = dragTouchPendingRef.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timerId);
+    window.removeEventListener('pointermove', pending.onMove, true);
+    window.removeEventListener('pointerup', pending.onEnd, true);
+    window.removeEventListener('pointercancel', pending.onEnd, true);
+    if (typeof pending.target.releasePointerCapture === 'function') {
+      try {
+        pending.target.releasePointerCapture(pending.pointerId);
+      } catch (_err) {
+        // ignore pointer capture failures
+      }
+    }
+    dragTouchPendingRef.current = null;
+  };
+
+  const finishDrag = (cancel = false) => {
+    const current = dragStateRef.current;
+    if (!current) return;
+    if (!cancel) {
+      setCells((prev) => moveCellToIndex(prev, current.cellId, current.insertionIndex));
+      activateCell(current.cellId);
+    }
+    dragStateRef.current = null;
+    setDragState(null);
+    window.setTimeout(() => {
+      if (dragClickSuppressedCellIdRef.current === current.cellId) {
+        dragClickSuppressedCellIdRef.current = null;
+      }
+    }, 0);
+    if (dragScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(dragScrollFrameRef.current);
+      dragScrollFrameRef.current = null;
+    }
+  };
+
+  const beginDrag = (detail: CellDragStartDetail) => {
+    if (dragStateRef.current) return;
+    const sourceIndex = cellsRef.current.findIndex((cell) => cell.id === detail.cellId);
+    if (sourceIndex < 0) return;
+    const nextState: DragState = {
+      ...detail,
+      sourceIndex,
+      insertionIndex: getDragInsertionIndex(detail.clientY)
+    };
+    dragClickSuppressedCellIdRef.current = detail.cellId;
+    dragStateRef.current = nextState;
+    setDragState(nextState);
+  };
+
+  const beginTouchDragPending = (cellId: string, event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'touch') return;
+    if (!canStartTouchDragFromTarget(event.currentTarget, event.target)) return;
+    if (dragStateRef.current || dragTouchPendingRef.current) return;
+    const target = event.currentTarget;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const pointerId = event.pointerId;
+    const pointerType = event.pointerType;
+
+    const pending: NonNullable<typeof dragTouchPendingRef.current> = {
+      pointerId,
+      timerId: window.setTimeout(() => {
+        clearDragTouchPending();
+        window.getSelection?.()?.removeAllRanges?.();
+        beginDrag({
+          cellId,
+          pointerId,
+          pointerType,
+          clientX: startX,
+          clientY: startY,
+          origin: 'touch'
+        });
+        if (typeof target.setPointerCapture === 'function') {
+          try {
+            target.setPointerCapture(pointerId);
+          } catch (_err) {
+            // ignore pointer capture failures
+          }
+        }
+      }, CELL_DRAG_LONG_PRESS_MS),
+      startX,
+      startY,
+      cellId,
+      target,
+      onMove: (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) > CELL_DRAG_MOVE_THRESHOLD) {
+          clearDragTouchPending();
+        }
+      },
+      onEnd: (endEvent: PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
+        clearDragTouchPending();
+      }
+    };
+    dragTouchPendingRef.current = pending;
+    window.addEventListener('pointermove', pending.onMove, true);
+    window.addEventListener('pointerup', pending.onEnd, true);
+    window.addEventListener('pointercancel', pending.onEnd, true);
+  };
+
+  const beginHandleDrag = (cellId: string, event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === 'touch') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch (_err) {
+        // ignore pointer capture failures
+      }
+    }
+    beginDrag({
+      cellId,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      origin: 'handle'
+    });
+  };
+
+  const isInteractiveDragTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    return !!target.closest(
+      'button, input, textarea, select, a, [contenteditable="true"], .cm-editor, .cm-content, .cell-action-bar, .cell-overflow-menu, .cell-insert-menu'
+    );
+  };
+
+  const canStartTouchDragFromTarget = (currentTarget: HTMLElement, target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    if (isInteractiveDragTarget(target)) return false;
+    return !!target.closest('.cell-row-shell, .cell-shell, .cell-gutter, .cell-main');
   };
 
   const invalidateActiveExecutions = () => {
@@ -650,6 +892,7 @@ function App() {
       const noHover = window.matchMedia('(hover: none)').matches;
       const touchCapable = navigator.maxTouchPoints > 0 || coarse || noHover;
       setTouchUiEnabled(touchCapable);
+      setWideTouchRailEnabled(touchCapable && window.innerWidth >= 900);
     };
     updateEligibility();
     window.addEventListener('resize', updateEligibility);
@@ -670,11 +913,22 @@ function App() {
         setAddCellMenuOpen(false);
       }
       if (
+        cellInsertMenu &&
+        target &&
+        !cellInsertMenuRef.current?.contains(target) &&
+        !cellInsertMenuShellRef.current?.contains(target)
+      ) {
+        setCellInsertMenu(null);
+        setCellInsertMenuQuery('');
+      }
+      if (
         target &&
         notebookStackRef.current &&
         !notebookStackRef.current.contains(target) &&
         !headerMenuRef.current?.contains(target) &&
-        !addCellMenuRef.current?.contains(target)
+        !addCellMenuRef.current?.contains(target) &&
+        !cellInsertMenuRef.current?.contains(target) &&
+        !cellInsertMenuShellRef.current?.contains(target)
       ) {
         if (activeCellIdRef.current !== null) {
           setActiveCellId(null);
@@ -695,8 +949,17 @@ function App() {
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (dragStateRef.current) {
+        event.preventDefault();
+        finishDrag(true);
+        return;
+      }
       if (headerMenuOpen) setHeaderMenuOpen(false);
       if (addCellMenuOpen) setAddCellMenuOpen(false);
+      if (cellInsertMenu) {
+        setCellInsertMenu(null);
+        setCellInsertMenuQuery('');
+      }
       if (assistantOpen) setAssistantOpen(false);
     };
 
@@ -706,7 +969,92 @@ function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [addCellMenuOpen, assistantOpen, headerMenuOpen]);
+  }, [addCellMenuOpen, assistantOpen, cellInsertMenu, headerMenuOpen]);
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const current = dragStateRef.current;
+      if (!current || event.pointerId !== current.pointerId) return;
+      const insertionIndex = getDragInsertionIndex(event.clientY);
+      const nextState: DragState = {
+        ...current,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        insertionIndex
+      };
+      dragStateRef.current = nextState;
+      setDragState(nextState);
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      const current = dragStateRef.current;
+      if (!current || event.pointerId !== current.pointerId) return;
+      finishDrag();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (!dragStateRef.current) return;
+      event.preventDefault();
+      finishDrag(true);
+    };
+
+    const autoScroll = () => {
+      const current = dragStateRef.current;
+      if (!current) return;
+      const edge = 90;
+      const viewportHeight = window.innerHeight;
+      const y = current.clientY;
+      let delta = 0;
+      if (y < edge) {
+        delta = -Math.max(4, (edge - y) / 7);
+      } else if (y > viewportHeight - edge) {
+        delta = Math.max(4, (y - (viewportHeight - edge)) / 7);
+      }
+      if (delta !== 0) {
+        window.scrollBy({ top: delta, behavior: 'auto' });
+      }
+      const next = dragStateRef.current;
+      if (next) {
+        const insertionIndex = getDragInsertionIndex(next.clientY);
+        if (insertionIndex !== next.insertionIndex) {
+          const updated: DragState = { ...next, insertionIndex };
+          dragStateRef.current = updated;
+          setDragState(updated);
+        }
+      }
+      dragScrollFrameRef.current = window.requestAnimationFrame(autoScroll);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handlePointerEnd, true);
+    window.addEventListener('pointercancel', handlePointerEnd, true);
+    window.addEventListener('keydown', handleKeyDown);
+    dragScrollFrameRef.current = window.requestAnimationFrame(autoScroll);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handlePointerEnd, true);
+      window.removeEventListener('pointercancel', handlePointerEnd, true);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (dragScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(dragScrollFrameRef.current);
+        dragScrollFrameRef.current = null;
+      }
+    };
+  }, [dragState?.pointerId]);
+
+  useEffect(() => {
+    return () => {
+      clearDragTouchPending();
+      if (dragScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(dragScrollFrameRef.current);
+        dragScrollFrameRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1508,7 +1856,7 @@ function App() {
 
   const insertCellAt = (
     index: number,
-    type: 'code' | 'markdown' | 'math',
+    type: InsertCellType,
     source = ''
   ) => {
     const bounded = Math.max(0, Math.min(index, cells.length));
@@ -1518,18 +1866,37 @@ function App() {
     setAddCellMenuOpen(false);
   };
 
-  const insertCellBelowActive = (type: 'code' | 'markdown' | 'math') => {
+  const insertCellBelowActive = (type: InsertCellType) => {
     const insertionAnchorId = getInsertionAnchorId();
     const activeIndex = insertionAnchorId ? cells.findIndex((cell) => cell.id === insertionAnchorId) : -1;
     const targetIndex = activeIndex >= 0 ? activeIndex + 1 : cells.length;
     insertCellAt(targetIndex, type);
   };
 
+  const openCellInsertMenu = (cellId: string, placement: 'above' | 'below') => {
+    setCellInsertMenu({ cellId, placement });
+    setCellInsertMenuQuery('');
+  };
+
+  const closeCellInsertMenu = () => {
+    setCellInsertMenu(null);
+    setCellInsertMenuQuery('');
+  };
+
+  const insertCellFromMenu = (cellId: string, type: InsertCellType) => {
+    const sourceIndex = cells.findIndex((cell) => cell.id === cellId);
+    if (sourceIndex < 0) return;
+    const placement = cellInsertMenu?.placement ?? 'below';
+    const targetIndex = placement === 'above' ? sourceIndex : sourceIndex + 1;
+    insertCellAt(targetIndex, type);
+    closeCellInsertMenu();
+  };
+
   const insertSiblingCell = (cellId: string, position: 'above' | 'below') => {
     const sourceIndex = cells.findIndex((cell) => cell.id === cellId);
     if (sourceIndex < 0) return;
     const sourceCell = cells[sourceIndex];
-    const nextType: 'code' | 'markdown' | 'math' =
+    const nextType: InsertCellType =
       sourceCell.type === 'markdown' || sourceCell.type === 'math' ? sourceCell.type : 'code';
     const targetIndex = position === 'above' ? sourceIndex : sourceIndex + 1;
     insertCellAt(targetIndex, nextType);
@@ -1589,6 +1956,27 @@ function App() {
     assistantChats.find((chat) => chat.id === assistantActiveChatId) ??
     assistantChats[0] ??
     null;
+  const assistantDefaultProviderAvailable = useMemo(() => {
+    const configuredModel = (
+      runtimeConfig?.model?.trim() ||
+      assistantModel.trim() ||
+      readOptionalStorageItem(ASSISTANT_MODEL_STORAGE) ||
+      readOptionalStorageItem('sugarpy:assistant:gemini:model') ||
+      DEFAULT_ASSISTANT_MODEL
+    ).trim();
+    const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
+    const provider = detectAssistantProvider(configuredModel, overrideApiKey);
+    return (
+      (provider === 'openai' && !!runtimeConfig?.providers?.openai) ||
+      (provider === 'gemini' && !!runtimeConfig?.providers?.gemini) ||
+      (provider === 'groq' && !!runtimeConfig?.providers?.groq)
+    );
+  }, [assistantApiKey, assistantModel, runtimeConfig]);
+
+  const filteredCellInsertOptions = useMemo(
+    () => INSERT_CELL_OPTIONS.filter((option) => matchesInsertCellQuery(option, cellInsertMenuQuery)),
+    [cellInsertMenuQuery]
+  );
 
   const handleSlashCommand = (cellId: string, command: string) => {
     const entry = slashCommandMap.get(command);
@@ -1682,6 +2070,7 @@ function App() {
     assistantHistoryNotebookRef.current = null;
     setAssistantDraft('');
     setAssistantError('');
+    setAssistantPhotoImport(null);
     const storageKey = `${ASSISTANT_HISTORY_STORAGE_PREFIX}${notebookId}`;
     const raw = readOptionalStorageItem(storageKey);
     if (!raw) {
@@ -1761,6 +2150,272 @@ function App() {
       setAssistantModel(nextRuntimeConfig.model);
     }
     return nextRuntimeConfig;
+  };
+
+  const resolvePhotoImportApiKey = (config: AssistantRuntimeConfig | null) => {
+    const overrideApiKey = (assistantApiKey.trim() || readOptionalStorageItem(ASSISTANT_API_KEY_STORAGE) || '').trim();
+    if (overrideApiKey.startsWith('sk-')) {
+      return overrideApiKey;
+    }
+    if (config?.providers?.openai) {
+      return 'server-proxy:openai';
+    }
+    return '';
+  };
+
+  const handleSelectAssistantPhoto = async (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setAssistantError('Choose an image file for photo import.');
+      return;
+    }
+    if (file.size > MAX_ASSISTANT_IMPORT_IMAGE_BYTES) {
+      setAssistantError('Photo import currently supports images up to 10 MB.');
+      return;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const dimensions = await readImageDimensions(dataUrl);
+      setAssistantPhotoImport({
+        fileName: file.name || 'photo',
+        mimeType: file.type || 'image/*',
+        dataUrl,
+        width: dimensions.width,
+        height: dimensions.height,
+        instructions: assistantPhotoImport?.instructions ?? ''
+      });
+      setAssistantError('');
+    } catch (error) {
+      setAssistantError(error instanceof Error ? error.message : 'Failed to read image file.');
+    }
+  };
+
+  const runAssistantPhotoImport = async (options?: { chatId?: string }) => {
+    const photoImport = assistantPhotoImport;
+    if (!photoImport) {
+      setAssistantError('Choose a photo before extracting a draft.');
+      return;
+    }
+    const runtimeConfig = await hydrateAssistantRuntimeConfig();
+    const effectiveApiKey = resolvePhotoImportApiKey(runtimeConfig);
+    if (!effectiveApiKey) {
+      setAssistantError('No OpenAI API key is available for photo import. Add an OpenAI key or configure the server proxy key.');
+      return;
+    }
+
+    const chatId = options?.chatId ?? ensureAssistantChat();
+    const traceId = `assistant-trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = new Date().toISOString();
+    const instructionSuffix = photoImport.instructions.trim() ? `\nInstruction: ${photoImport.instructions.trim()}` : '';
+    const messageLabel = `Import photo: ${photoImport.fileName}${instructionSuffix}`;
+    const userMessageId = `assistant-user-${Date.now()}`;
+    const assistantMessageId = `assistant-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const userMessage: AssistantChatMessage = {
+      id: userMessageId,
+      role: 'user',
+      content: messageLabel,
+      createdAt: timestamp,
+      status: 'ready'
+    };
+    const assistantMessage: AssistantChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      createdAt: timestamp,
+      status: 'loading',
+      activity: []
+    };
+
+    updateAssistantChat(chatId, (chat) => ({
+      ...chat,
+      title: chat.messages.length > 0 ? chat.title : previewAssistantLabel(`Photo import ${photoImport.fileName}`, 'Photo import'),
+      messages: [...chat.messages, userMessage, assistantMessage]
+    }));
+
+    const baseTrace: AssistantRunTrace = {
+      id: traceId,
+      chatId,
+      messageId: assistantMessageId,
+      notebookId,
+      notebookName,
+      prompt: messageLabel,
+      model: ASSISTANT_PHOTO_IMPORT_MODEL,
+      thinkingLevel: assistantThinkingLevel,
+      startedAt: timestamp,
+      status: 'running',
+      context: {
+        cellCount: cells.length,
+        activeCellId,
+        defaults: {
+          trigMode,
+          renderMode: defaultMathRenderMode
+        }
+      },
+      conversationHistory: [{ role: 'user', content: messageLabel }],
+      activity: [],
+      network: [],
+      responses: [],
+      sandboxExecutions: [],
+      draftValidations: []
+    };
+    const collectedActivity: AssistantActivity[] = [];
+    const collectedNetwork: AssistantNetworkEvent[] = [];
+    const collectedResponses: AssistantResponseTrace[] = [];
+    const collectedSandboxExecutions: AssistantSandboxExecutionTrace[] = [];
+    const collectedDraftValidations: AssistantRunTrace['draftValidations'] = [];
+    void persistAssistantTrace(baseTrace);
+
+    setAssistantLoading(true);
+    setAssistantError('');
+    const controller = new AbortController();
+    assistantAbortRef.current = controller;
+
+    try {
+      const requestText = [
+        'Import the uploaded handwritten math page into SugarPy notebook cells.',
+        'Append imported content as new cells only.',
+        photoImport.instructions.trim() ? `User import goal: ${photoImport.instructions.trim()}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const plan = await planNotebookChanges({
+        apiKey: effectiveApiKey,
+        model: ASSISTANT_PHOTO_IMPORT_MODEL,
+        request: requestText,
+        scope: ASSISTANT_SCOPE,
+        preference: ASSISTANT_PREFERENCE,
+        context: buildAssistantContext(),
+        photoImport: {
+          imageDataUrl: photoImport.dataUrl,
+          fileName: photoImport.fileName,
+          instructions: photoImport.instructions
+        },
+        signal: controller.signal,
+        conversationHistory: [{ role: 'user', content: requestText }],
+        thinkingLevel: assistantThinkingLevel,
+        sandboxRunner: runAssistantSandbox,
+        onActivity: (item) => {
+          collectedActivity.push(item);
+          updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+            ...message,
+            activity: [...(message.activity ?? []), item]
+          }));
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        },
+        onNetworkEvent: (event) => {
+          collectedNetwork.push(event);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        },
+        onResponseTrace: (trace) => {
+          collectedResponses.push(trace);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        },
+        onSandboxExecution: (trace) => {
+          collectedSandboxExecutions.push(trace);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        }
+      });
+      const draftRun = await buildDraftFromPlan(
+        plan,
+        (item) => {
+          collectedActivity.push(item);
+          updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+            ...message,
+            activity: [...(message.activity ?? []), item]
+          }));
+        },
+        (validation) => {
+          collectedDraftValidations.push(validation);
+          void persistAssistantTrace({
+            ...baseTrace,
+            activity: [...collectedActivity],
+            network: [...collectedNetwork],
+            responses: [...collectedResponses],
+            sandboxExecutions: [...collectedSandboxExecutions],
+            draftValidations: [...collectedDraftValidations]
+          });
+        }
+      );
+
+      updateAssistantMessage(chatId, assistantMessageId, (message) => ({
+        ...message,
+        status: 'ready',
+        content: plan.userMessage || `Prepared ${plan.operations.length} imported cell${plan.operations.length === 1 ? '' : 's'}.`,
+        plan,
+        draftRun
+      }));
+      setAssistantPhotoImport(null);
+      void persistAssistantTrace({
+        ...baseTrace,
+        status: 'completed',
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(timestamp).getTime(),
+        activity: [...collectedActivity],
+        network: [...collectedNetwork],
+        responses: [...collectedResponses],
+        sandboxExecutions: [...collectedSandboxExecutions],
+        draftValidations: [...collectedDraftValidations],
+        result: {
+          summary: plan.summary,
+          warningCount: plan.warnings.length,
+          operationCount: plan.operations.length
+        }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Photo import failed.';
+      updateAssistantMessage(chatId, assistantMessageId, (entry) => ({
+        ...entry,
+        status: controller.signal.aborted ? 'stopped' : 'error',
+        error: message,
+        content: controller.signal.aborted ? 'Photo import stopped.' : ''
+      }));
+      setAssistantError(message);
+      void persistAssistantTrace({
+        ...baseTrace,
+        status: controller.signal.aborted ? 'stopped' : 'error',
+        error: message,
+        finishedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(timestamp).getTime(),
+        activity: [...collectedActivity],
+        network: [...collectedNetwork],
+        responses: [...collectedResponses],
+        sandboxExecutions: [...collectedSandboxExecutions],
+        draftValidations: [...collectedDraftValidations]
+      });
+    } finally {
+      if (assistantAbortRef.current === controller) {
+        assistantAbortRef.current = null;
+      }
+      setAssistantLoading(false);
+    }
   };
 
   const runAssistant = async (promptOverride?: string, options?: { chatId?: string; reviseFromMessageId?: string }) => {
@@ -2517,9 +3172,28 @@ function App() {
     }, 50);
   };
 
+  const draggedCell = dragState ? cells.find((cell) => cell.id === dragState.cellId) ?? null : null;
+  const draggedCellLabel = draggedCell
+    ? draggedCell.type === 'markdown'
+      ? 'Text'
+      : draggedCell.type.charAt(0).toUpperCase() + draggedCell.type.slice(1)
+    : 'Code';
+  const draggedCellSummary = (() => {
+    if (!draggedCell) return '';
+    const raw =
+      draggedCell.type === 'stoich'
+        ? draggedCell.stoichState?.reaction ?? draggedCell.source
+        : draggedCell.source;
+    return raw.replace(/\s+/g, ' ').trim();
+  })();
+
   return (
     <ErrorBoundary>
-      <div className={`app${touchUiEnabled ? ' touch-ui' : ''}`}>
+      <div
+        className={`app${touchUiEnabled ? ' touch-ui' : ''}${wideTouchRailEnabled ? ' touch-rail-enabled' : ''}${
+          isDraggingCells ? ' is-dragging' : ''
+        }`}
+      >
         <header className="app-header">
           <div className="header-main">
             <div className="header-left">
@@ -2552,9 +3226,15 @@ function App() {
               {addCellMenuOpen ? (
                 <div className="header-menu add-cell-menu">
                   <div className="menu-section-label">Add below selected</div>
-                  <button className="menu-item" onClick={() => insertCellBelowActive('code')}>Code cell</button>
-                  <button className="menu-item" onClick={() => insertCellBelowActive('markdown')}>Text cell</button>
-                  <button className="menu-item" onClick={() => insertCellBelowActive('math')}>Math cell</button>
+                  {INSERT_CELL_OPTIONS.map((option) => (
+                    <button
+                      key={option.type}
+                      className="menu-item"
+                      onClick={() => insertCellBelowActive(option.type)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
               ) : null}
             </div>
@@ -2647,87 +3327,214 @@ function App() {
             {cells.length === 0 ? (
               <div className="cell-empty">
                 <div className="cell-empty-title">Start with a cell.</div>
-                <button className="button" onClick={() => insertCellAt(0, 'code')}>Add code cell</button>
+                <div className="cell-empty-actions">
+                  {INSERT_CELL_OPTIONS.map((option) => (
+                    <button key={option.type} className="button secondary" onClick={() => insertCellAt(0, option.type)}>
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : null}
             {cells.length > 0 ? (
               <>
-                {Array.from({ length: cells.length + 1 }).map((_, index) => (
-                  <React.Fragment key={`cell-slot-${index}`}>
-                    {!touchUiEnabled && cells.length > 0 ? (
+                {cells.map((cell, index) => (
+                  <React.Fragment key={cell.id}>
+                    {dragState?.insertionIndex === index ? (
+                      <div className="cell-drop-indicator" data-testid="cell-drop-indicator" />
+                    ) : null}
+                    {!touchUiEnabled ? (
                       <div className="cell-divider" data-testid={`cell-divider-${index}`}>
                         <div className="cell-divider-line" />
                         <div className="divider-menu" role="menu" aria-label="Insert cell type">
-                          <button className="divider-btn" onClick={() => insertCellAt(index, 'code')}>Code</button>
-                          <button className="divider-btn" onClick={() => insertCellAt(index, 'markdown')}>Text</button>
-                          <button className="divider-btn" onClick={() => insertCellAt(index, 'math')}>Math</button>
+                          {INSERT_CELL_OPTIONS.map((option) => (
+                            <button
+                              key={option.type}
+                              className="divider-btn"
+                              onClick={() => insertCellAt(index, option.type)}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     ) : null}
-                    {index < cells.length ? (
+                    <div
+                      className={`cell-row-shell${
+                        cell.id === activeCellId ? ' is-active' : ''
+                      }${cell.id === lastActiveCellId && cell.id !== activeCellId ? ' is-last-active' : ''}${
+                        cellInsertMenu?.cellId === cell.id ? ' is-insertion-menu-open' : ''
+                      }${dragState?.cellId === cell.id ? ' is-drag-source' : ''}`}
+                      ref={cellInsertMenu?.cellId === cell.id ? cellInsertMenuShellRef : null}
+                      data-cell-id={cell.id}
+                      onClickCapture={(event) => {
+                        if (dragClickSuppressedCellIdRef.current !== cell.id) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                      onPointerDownCapture={(event) => {
+                        if (event.pointerType !== 'touch') return;
+                        if (isInteractiveDragTarget(event.target)) return;
+                        beginTouchDragPending(cell.id, event);
+                      }}
+                    >
+                      {!touchUiEnabled || wideTouchRailEnabled ? (
+                        <div className="cell-row-rail">
+                          <button
+                            type="button"
+                            className="cell-row-add-btn"
+                            aria-label="Insert block"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const placement = event.altKey ? 'above' : 'below';
+                              if (cellInsertMenu?.cellId === cell.id && cellInsertMenu.placement === placement) {
+                                closeCellInsertMenu();
+                              } else {
+                                openCellInsertMenu(cell.id, placement);
+                              }
+                            }}
+                          >
+                            +
+                          </button>
+                          <button
+                            type="button"
+                            className="cell-row-drag-btn"
+                            aria-label="Drag to reorder"
+                            onPointerDown={(event) => beginHandleDrag(cell.id, event)}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                          >
+                            ⋮⋮
+                          </button>
+                        </div>
+                      ) : null}
                       <NotebookCell
-                        key={cells[index].id}
-                        cell={cells[index]}
-                        isActive={cells[index].id === activeCellId}
-                        isLastActive={cells[index].id === lastActiveCellId}
-                        onActivate={() => activateCell(cells[index].id)}
-                        onAddAbove={() => insertSiblingCell(cells[index].id, 'above')}
-                        onAddBelow={() => insertSiblingCell(cells[index].id, 'below')}
-                        onChange={(value) => updateCell(cells[index].id, value)}
-                        onRun={(value) => runCell(cells[index].id, value)}
+                        cell={cell}
+                        isActive={cell.id === activeCellId}
+                        isLastActive={cell.id === lastActiveCellId}
+                        onActivate={() => activateCell(cell.id)}
+                        onAddAbove={() => insertSiblingCell(cell.id, 'above')}
+                        onAddBelow={() => insertSiblingCell(cell.id, 'below')}
+                        onChange={(value) => updateCell(cell.id, value)}
+                        onRun={(value) => runCell(cell.id, value)}
                         onRunMath={(value) =>
                           runMathCell(
-                            cells[index].id,
+                            cell.id,
                             value,
-                            cells[index].mathRenderMode ?? defaultMathRenderMode,
-                            cells[index].mathTrigMode ?? trigMode
+                            cell.mathRenderMode ?? defaultMathRenderMode,
+                            cell.mathTrigMode ?? trigMode
                           )
                         }
-                        onRunStoich={(state) => runStoichCell(cells[index].id, state)}
-                        onChangeStoich={(state) => updateStoichState(cells[index].id, state)}
-                        onMoveUp={() => setCells((prev) => moveCellUp(prev, cells[index].id))}
-                        onMoveDown={() => setCells((prev) => moveCellDown(prev, cells[index].id))}
-                        onDelete={() => setCells((prev) => deleteCell(prev, cells[index].id))}
-                        onToggleOutput={() => toggleCellOutputCollapsed(cells[index].id)}
-                        onClearOutput={() => clearCellOutput(cells[index].id)}
-                        onToggleMathView={() => toggleMathView(cells[index].id)}
-                        onShowMathRendered={() => showMathRenderedView(cells[index].id)}
+                        onRunStoich={(state) => runStoichCell(cell.id, state)}
+                        onChangeStoich={(state) => updateStoichState(cell.id, state)}
+                        onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
+                        onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
+                        onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}
+                        onToggleOutput={() => toggleCellOutputCollapsed(cell.id)}
+                        onClearOutput={() => clearCellOutput(cell.id)}
+                        onToggleMathView={() => toggleMathView(cell.id)}
+                        onShowMathRendered={() => showMathRenderedView(cell.id)}
                         suggestions={codeSuggestions}
                         slashCommands={slashCommands}
-                        onSlashCommand={(command) => handleSlashCommand(cells[index].id, command)}
+                        onSlashCommand={(command) => handleSlashCommand(cell.id, command)}
                         mathSuggestions={mathSuggestions}
                         trigMode={trigMode}
                         kernelReady={!!activeKernel}
                         onSetMathRenderMode={(mode) => {
                           setCells((prev) =>
-                            prev.map((entry) =>
-                              entry.id === cells[index].id ? { ...entry, mathRenderMode: mode } : entry
-                            )
+                            prev.map((entry) => (entry.id === cell.id ? { ...entry, mathRenderMode: mode } : entry))
                           );
                         }}
                         onSetMathTrigMode={(mode) => {
                           setCells((prev) =>
-                            prev.map((entry) =>
-                              entry.id === cells[index].id ? { ...entry, mathTrigMode: mode } : entry
-                            )
+                            prev.map((entry) => (entry.id === cell.id ? { ...entry, mathTrigMode: mode } : entry))
                           );
-                          if (cells[index].source.trim()) {
+                          if (cell.source.trim()) {
                             void runMathCell(
-                              cells[index].id,
-                              cells[index].source,
-                              cells[index].mathRenderMode ?? defaultMathRenderMode,
+                              cell.id,
+                              cell.source,
+                              cell.mathRenderMode ?? defaultMathRenderMode,
                               mode,
                               true
                             );
                           }
                         }}
                       />
-                    ) : null}
+                      {cellInsertMenu?.cellId === cell.id ? (
+                        <div className="cell-insert-menu" ref={cellInsertMenuRef}>
+                          <input
+                            className="input slim cell-insert-search"
+                            value={cellInsertMenuQuery}
+                            onChange={(event) => setCellInsertMenuQuery(event.target.value)}
+                            placeholder="Search blocks"
+                            aria-label="Search blocks"
+                            autoFocus
+                            onClick={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                          />
+                          <div className="cell-insert-menu-list" role="menu" aria-label="Insert block type">
+                            {filteredCellInsertOptions.map((option) => (
+                              <button
+                                key={option.type}
+                                type="button"
+                                className="cell-insert-menu-item"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  insertCellFromMenu(cell.id, option.type);
+                                }}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                            {filteredCellInsertOptions.length === 0 ? (
+                              <div className="cell-insert-menu-empty">No matching blocks.</div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </React.Fragment>
                 ))}
+                {dragState?.insertionIndex === cells.length ? (
+                  <div className="cell-drop-indicator" data-testid="cell-drop-indicator" />
+                ) : null}
+                {!touchUiEnabled ? (
+                  <div className="cell-divider" data-testid={`cell-divider-${cells.length}`}>
+                    <div className="cell-divider-line" />
+                    <div className="divider-menu" role="menu" aria-label="Insert cell type">
+                      {INSERT_CELL_OPTIONS.map((option) => (
+                        <button
+                          key={option.type}
+                          className="divider-btn"
+                          onClick={() => insertCellAt(cells.length, option.type)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : null}
           </div>
+          {dragState && draggedCell ? (
+            <div
+              className="cell-drag-ghost"
+              data-testid="cell-drag-ghost"
+              style={{
+                left: `${dragState.clientX}px`,
+                top: `${dragState.clientY}px`
+              }}
+            >
+              <div className="cell-drag-ghost-head">
+                <span className="cell-drag-ghost-type">{draggedCellLabel}</span>
+                <span className="cell-drag-ghost-index">{dragState.insertionIndex + 1}</span>
+              </div>
+              {draggedCellSummary ? <div className="cell-drag-ghost-text">{draggedCellSummary}</div> : null}
+            </div>
+          ) : null}
           <input
             ref={fileInputRef}
             type="file"
@@ -2740,7 +3547,7 @@ function App() {
           <AssistantDrawer
             open={assistantOpen}
             apiKey={assistantApiKey}
-            hasDefaultApiKey={false}
+            hasDefaultApiKey={assistantDefaultProviderAvailable}
             model={assistantModel}
             thinkingLevel={assistantThinkingLevel}
             draft={assistantDraft}
@@ -2749,12 +3556,36 @@ function App() {
             chats={assistantChats}
             activeChatId={assistantActiveChatId}
             settingsOpen={assistantSettingsOpen}
+            photoImport={
+              assistantPhotoImport
+                ? {
+                    fileName: assistantPhotoImport.fileName,
+                    mimeType: assistantPhotoImport.mimeType,
+                    previewUrl: assistantPhotoImport.dataUrl,
+                    width: assistantPhotoImport.width,
+                    height: assistantPhotoImport.height,
+                    instructions: assistantPhotoImport.instructions
+                  }
+                : null
+            }
             onClose={() => setAssistantOpen(false)}
             onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
             onChangeApiKey={setAssistantApiKey}
             onChangeModel={setAssistantModel}
             onChangeThinkingLevel={setAssistantThinkingLevel}
             onChangeDraft={setAssistantDraft}
+            onSelectPhoto={(file) => {
+              void handleSelectAssistantPhoto(file);
+            }}
+            onChangePhotoInstructions={(value) => {
+              setAssistantPhotoImport((prev) => (prev ? { ...prev, instructions: value } : prev));
+            }}
+            onExtractPhoto={() => {
+              void runAssistantPhotoImport();
+            }}
+            onCancelPhotoImport={() => {
+              setAssistantPhotoImport(null);
+            }}
             onSend={() => {
               void runAssistant();
             }}

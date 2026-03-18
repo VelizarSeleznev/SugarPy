@@ -55,6 +55,9 @@ Assistant UX notes:
   - The main preview is human-readable: `Plan`, `Draft`, `Validation`, and `Changes`.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
+- The drawer footer includes `Import from photo` for handwritten-image imports.
+  - The preview card lets the user replace/cancel the image and add an optional import instruction before extraction.
+  - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
 - The available `Thinking level` values are filtered by model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
   - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`
@@ -150,7 +153,12 @@ Assistant regression checks:
 - If a notebook runtime gets stuck, the header exposes `Stop Runtime` while cells are running plus menu actions for `Restart Notebook Runtime` and `Delete Notebook Runtime`.
 - A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace or use `Run All`.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
-- New cells are created from the header `+` control and are inserted below the currently selected cell.
+- The same `Code | Text | Math` choices also appear in the header `+` menu and the divider insert menu.
+- On desktop, each cell exposes a left-side `+` insert rail with searchable block insertion; it inserts below by default and supports `Alt`/`Option` for above insertion.
+- On desktop, the same left rail also exposes a drag handle for reordering. The drag preview shows a ghost card plus a blue insertion bar.
+- On touch devices, a long press on the cell shell starts the same reorder flow.
+- Press `Esc` while dragging to cancel and keep the cell in place.
+- New cells are inserted below the currently selected cell when created from the header `+` control.
 - If focus leaves the notebook, SugarPy keeps the last clicked cell as the insertion anchor with a soft highlight until the user clicks outside again to clear it.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).

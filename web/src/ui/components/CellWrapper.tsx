@@ -42,15 +42,7 @@ export function CellWrapper({
   const [floatingStyle, setFloatingStyle] = useState<React.CSSProperties | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const shellRef = useRef<HTMLElement | null>(null);
-  const combinedMenuActions: CellMenuAction[] = [
-    ...quickActions.map((action) => ({
-      label: action.label,
-      icon: typeof action.icon === 'string' ? action.icon : undefined,
-      onSelect: action.onClick,
-      disabled: action.disabled
-    })),
-    ...menuActions
-  ].filter((action, index, items) => items.findIndex((entry) => entry.label === action.label) === index);
+  const combinedMenuActions: CellMenuAction[] = [...menuActions];
 
   useEffect(() => {
     if (!menuOpen) return;

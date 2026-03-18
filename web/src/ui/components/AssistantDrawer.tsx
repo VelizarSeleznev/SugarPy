@@ -28,6 +28,15 @@ type AssistantChat = {
   messages: AssistantMessage[];
 };
 
+type AssistantPhotoImportPreview = {
+  fileName: string;
+  mimeType: string;
+  previewUrl: string;
+  width: number;
+  height: number;
+  instructions: string;
+};
+
 type Props = {
   open: boolean;
   apiKey: string;
@@ -40,6 +49,7 @@ type Props = {
   chats: AssistantChat[];
   activeChatId: string | null;
   settingsOpen: boolean;
+  photoImport: AssistantPhotoImportPreview | null;
   onClose: () => void;
   onToggleSettings: () => void;
   onChangeApiKey: (value: string) => void;
@@ -54,6 +64,10 @@ type Props = {
   onRevise: (messageId: string) => void;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
+  onSelectPhoto: (file: File | null) => void;
+  onChangePhotoInstructions: (value: string) => void;
+  onExtractPhoto: () => void;
+  onCancelPhotoImport: () => void;
 };
 
 const CUSTOM_MODEL_VALUE = '__custom__';
@@ -70,6 +84,7 @@ export function AssistantDrawer({
   chats,
   activeChatId,
   settingsOpen,
+  photoImport,
   onClose,
   onToggleSettings,
   onChangeApiKey,
@@ -83,7 +98,11 @@ export function AssistantDrawer({
   onReject,
   onRevise,
   onSelectChat,
-  onNewChat
+  onNewChat,
+  onSelectPhoto,
+  onChangePhotoInstructions,
+  onExtractPhoto,
+  onCancelPhotoImport
 }: Props) {
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0] ?? null;
   const isPresetModel = ASSISTANT_MODEL_PRESETS.some((entry) => entry.value === model);
@@ -91,6 +110,7 @@ export function AssistantDrawer({
   const supportedThinkingLevels = useMemo(() => getSupportedThinkingLevels(model), [model]);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [timeTick, setTimeTick] = useState(Date.now());
 
   useEffect(() => {
@@ -408,6 +428,83 @@ export function AssistantDrawer({
         {error && !visibleMessages.some((message) => message.error === error) ? <div className="assistant-error">{error}</div> : null}
 
         <div className="assistant-chat-footer">
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            className="file-input"
+            data-testid="assistant-photo-input"
+            onChange={(event) => {
+              onSelectPhoto(event.target.files?.[0] ?? null);
+              event.target.value = '';
+            }}
+          />
+          <div className="assistant-footer-actions">
+            <button
+              type="button"
+              className="button secondary"
+              data-testid="assistant-import-photo"
+              onClick={() => photoInputRef.current?.click()}
+              disabled={loading}
+            >
+              Import from photo
+            </button>
+          </div>
+          {photoImport ? (
+            <div className="assistant-photo-import" data-testid="assistant-photo-import">
+              <div className="assistant-photo-preview-wrap">
+                <img
+                  src={photoImport.previewUrl}
+                  alt={photoImport.fileName}
+                  className="assistant-photo-preview"
+                  data-testid="assistant-photo-preview"
+                />
+              </div>
+              <div className="assistant-photo-meta">
+                <strong>{photoImport.fileName}</strong>
+                <span>{photoImport.width} × {photoImport.height} · {photoImport.mimeType}</span>
+              </div>
+              <label className="assistant-field">
+                <span>Optional instruction</span>
+                <input
+                  className="input"
+                  data-testid="assistant-photo-instructions"
+                  value={photoImport.instructions}
+                  onChange={(event) => onChangePhotoInstructions(event.target.value)}
+                  placeholder="For example: keep only the clean derivation"
+                />
+              </label>
+              <div className="assistant-preview-actions">
+                <button
+                  type="button"
+                  className="button"
+                  data-testid="assistant-photo-extract"
+                  onClick={onExtractPhoto}
+                  disabled={loading}
+                >
+                  Extract draft
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  data-testid="assistant-photo-cancel"
+                  onClick={onCancelPhotoImport}
+                  disabled={loading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button ghost"
+                  data-testid="assistant-photo-replace"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={loading}
+                >
+                  Replace photo
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="assistant-compose">
             <textarea
               ref={textareaRef}

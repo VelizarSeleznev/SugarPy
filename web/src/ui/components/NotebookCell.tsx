@@ -120,18 +120,23 @@ export function NotebookCell({
     ...(cellType === 'math'
       ? [
           {
-            label: mathRenderMode === 'decimal' ? 'Show exact values' : 'Show decimal values',
-            icon: mathRenderMode === 'decimal' ? '=' : '≈',
-            onSelect: () => onSetMathRenderMode(mathRenderMode === 'exact' ? 'decimal' : 'exact')
+            label: cell.ui?.mathView === 'rendered' ? 'Show math source' : 'Show rendered math',
+            icon: cell.ui?.mathView === 'rendered' ? '</>' : '∑',
+            onSelect: onToggleMathView
           },
           {
-            label: mathTrigMode === 'deg' ? 'Switch to radians' : 'Switch to degrees',
-            icon: mathTrigMode === 'deg' ? 'rad' : '°',
-            onSelect: () => onSetMathTrigMode(mathTrigMode === 'deg' ? 'rad' : 'deg')
+            label: outputHidden ? 'Show output' : 'Hide output',
+            icon: outputHidden ? '+' : '-',
+            onSelect: onToggleOutput
+          },
+          {
+            label: 'Clear output',
+            icon: '×',
+            onSelect: onClearOutput
           }
         ]
       : []),
-    ...(outputAvailable
+    ...(cellType !== 'math' && outputAvailable
       ? [
           {
             label: outputHidden ? 'Show output' : 'Hide output',
@@ -160,21 +165,26 @@ export function NotebookCell({
         onRun={runHandler}
         onActivate={onActivate}
         quickActions={[
-          ...(cellType === 'math'
-            ? [
-                {
-                  label: cell.ui?.mathView === 'rendered' ? 'Show math source' : 'Show rendered math',
-                  icon: cell.ui?.mathView === 'rendered' ? '</>' : '∑',
-                  onClick: onToggleMathView
-                }
-              ]
-            : []),
-          ...(outputAvailable
+          ...(cellType !== 'math' && outputAvailable
             ? [
                 {
                   label: outputHidden ? 'Show output' : 'Hide output',
                   icon: outputHidden ? '⊞' : '⊟',
                   onClick: onToggleOutput
+                }
+              ]
+            : []),
+          ...(cellType === 'math'
+            ? [
+                {
+                  label: mathRenderMode === 'decimal' ? 'Show exact values' : 'Show decimal values',
+                  icon: mathRenderMode === 'decimal' ? '=' : '≈',
+                  onClick: () => onSetMathRenderMode(mathRenderMode === 'exact' ? 'decimal' : 'exact')
+                },
+                {
+                  label: mathTrigMode === 'deg' ? 'Switch to radians' : 'Switch to degrees',
+                  icon: mathTrigMode === 'deg' ? 'rad' : '°',
+                  onClick: () => onSetMathTrigMode(mathTrigMode === 'deg' ? 'rad' : 'deg')
                 }
               ]
             : []),
