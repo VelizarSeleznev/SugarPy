@@ -84,7 +84,12 @@ const installRuntimeApiMocks = async (page: any, runtimeAction: 'interrupt' | 'r
 
 const startCodeExecution = async (page: any) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Add code cell' }).click();
+  const emptyState = page.locator('.cell-empty');
+  if (await emptyState.isVisible()) {
+    await emptyState.getByRole('button', { name: /^Code$/ }).click();
+  } else {
+    await page.getByRole('button', { name: 'Add code cell' }).click();
+  }
   const codeCell = page.locator('[data-testid="cell-row-code"]').first();
   await codeCell.locator('.cm-content').first().click();
   await page.keyboard.type('while True: pass');
