@@ -26,7 +26,7 @@ This file is a table of contents for contributors and agents.
 
 ## Git workflow rules
 - Do not do ongoing work directly on `master`.
-- Start each task on a work branch with `./scripts/start-work.sh <name>` (branches use the `codex/` prefix).
+- Start each task on a work branch with `./scripts/start-work.sh <name>` (branches use the `codex/` prefix and always start from refreshed `master`; already-merged stale branches are recreated automatically).
 - Create checkpoints frequently for each completed logical slice with `./scripts/checkpoint.sh "message"`.
 - Checkpoints must be pushed to GitHub, not kept only in local history.
-- Release only from a work branch with `./scripts/release.sh`; this is the step that runs full checks, merges into `master`, and triggers deployment.
+- Release only from a work branch with `./scripts/release.sh`; this is the step that runs full checks, merges into `master`, triggers deployment, returns the repo to `master`, and cleans up the merged `codex/*` branch by default.

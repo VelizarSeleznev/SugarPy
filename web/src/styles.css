@@ -1057,6 +1057,10 @@ body {
   line-height: 1;
   cursor: grab;
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .cell-row-drag-btn:hover {
@@ -1157,6 +1161,10 @@ body {
 }
 
 .touch-ui [data-block-cell-swipe="true"],
+.touch-ui .cell-row-shell,
+.touch-ui .cell-row-shell *,
+.touch-ui .cell-row-rail,
+.touch-ui .cell-row-rail *,
 .touch-ui .markdown,
 .touch-ui .math-card,
 .touch-ui .math-card *,
@@ -1166,6 +1174,22 @@ body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+.touch-ui .editor-shell,
+.touch-ui .editor-shell *,
+.touch-ui .markdown-editor,
+.touch-ui .markdown-editor *,
+.touch-ui .cm-editor,
+.touch-ui .cm-editor *,
+.touch-ui .cm-content,
+.touch-ui .cm-content *,
+.touch-ui input,
+.touch-ui textarea,
+.touch-ui [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
 }
 
 .touch-ui:not(.touch-rail-enabled) .cell-row-rail,

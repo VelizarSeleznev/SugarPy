@@ -146,7 +146,7 @@ const matchesInsertCellQuery = (option: InsertCellOption, query: string) => {
   );
 };
 
-const CELL_DRAG_LONG_PRESS_MS = 1000;
+const CELL_DRAG_LONG_PRESS_MS = 400;
 const CELL_DRAG_MOVE_THRESHOLD = 14;
 
 type CellDragStartDetail = {
@@ -674,9 +674,9 @@ function App() {
   };
 
   const beginHandleDrag = (cellId: string, event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.pointerType === 'touch') return;
     event.preventDefault();
     event.stopPropagation();
+    window.getSelection?.()?.removeAllRanges?.();
     if (typeof event.currentTarget.setPointerCapture === 'function') {
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -1001,6 +1001,12 @@ function App() {
       finishDrag(true);
     };
 
+    const handleTouchMove = (event: TouchEvent) => {
+      const current = dragStateRef.current;
+      if (!current || current.pointerType !== 'touch') return;
+      event.preventDefault();
+    };
+
     const autoScroll = () => {
       const current = dragStateRef.current;
       if (!current) return;
@@ -1032,6 +1038,7 @@ function App() {
     window.addEventListener('pointerup', handlePointerEnd, true);
     window.addEventListener('pointercancel', handlePointerEnd, true);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('touchmove', handleTouchMove, { capture: true, passive: false });
     dragScrollFrameRef.current = window.requestAnimationFrame(autoScroll);
 
     return () => {
@@ -1039,6 +1046,7 @@ function App() {
       window.removeEventListener('pointerup', handlePointerEnd, true);
       window.removeEventListener('pointercancel', handlePointerEnd, true);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('touchmove', handleTouchMove, true);
       if (dragScrollFrameRef.current !== null) {
         window.cancelAnimationFrame(dragScrollFrameRef.current);
         dragScrollFrameRef.current = null;

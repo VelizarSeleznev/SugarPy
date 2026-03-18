@@ -31,9 +31,9 @@ SugarPy is a local notebook toolkit:
 - `scripts/ui-check.sh`: Playwright smoke UI checks (`@smoke`).
 - `web/e2e/notebook.spec.ts`: browser E2E, including assistant regression coverage.
 - `scripts/sync-functions.sh`: syncs user function file (`~/.sugarpy/user_functions.py`) into runtime location.
-- `scripts/start-work.sh`: creates or switches to a `codex/*` work branch from updated `master`.
+- `scripts/start-work.sh`: refreshes `master`, then creates or resumes a `codex/*` work branch; stale branches already merged into `master` are recreated from fresh `master`.
 - `scripts/checkpoint.sh`: commits and pushes the current work branch to GitHub.
-- `scripts/release.sh`: runs checks, merges the current work branch into `master`, and pushes the release.
+- `scripts/release.sh`: runs checks, merges the current work branch into `master`, pushes the release, leaves the repo on `master`, and cleans up merged `codex/*` branches by default.
 
 ## Specs
 - Product-level feature inventory and AI assistant proposal: `docs/PRODUCT_GUIDE.md`.

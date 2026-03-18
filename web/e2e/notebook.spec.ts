@@ -621,6 +621,111 @@ test.describe('Notebook CAS outputs', () => {
     await expect(rowsAfterCancel.nth(1)).toHaveAttribute('data-testid', 'cell-row-markdown');
   });
 
+  test('Notebook chrome: touch long-press on a cell can reorder without leaving the page scrollable', async ({
+    page
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
+
+    const rowsBefore = page.locator('.notebook-item');
+    const codeShell = rowsBefore.nth(0).locator('xpath=..');
+    const shellBox = await codeShell.boundingBox();
+    const mathBox = await rowsBefore.nth(2).boundingBox();
+    expect(shellBox).not.toBeNull();
+    expect(mathBox).not.toBeNull();
+    if (!shellBox || !mathBox) return;
+
+    const startScrollY = await page.evaluate(() => window.scrollY);
+
+    await codeShell.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      pointerId: 31,
+      clientX: shellBox.x + 24,
+      clientY: shellBox.y + 24,
+      buttons: 1
+    });
+    await page.waitForTimeout(1100);
+    await expect(page.getByTestId('cell-drag-ghost')).toBeVisible();
+
+    await page.dispatchEvent('body', 'pointermove', {
+      pointerType: 'touch',
+      pointerId: 31,
+      clientX: shellBox.x + 24,
+      clientY: mathBox.y + mathBox.height + 40,
+      buttons: 1
+    });
+    await page.dispatchEvent('body', 'pointerup', {
+      pointerType: 'touch',
+      pointerId: 31,
+      clientX: shellBox.x + 24,
+      clientY: mathBox.y + mathBox.height + 40,
+      buttons: 0
+    });
+
+    const endScrollY = await page.evaluate(() => window.scrollY);
+    expect(endScrollY).toBe(startScrollY);
+
+    const rowsAfterDrag = page.locator('.notebook-item');
+    await expect(rowsAfterDrag.nth(0)).toHaveAttribute('data-testid', 'cell-row-markdown');
+    await expect(rowsAfterDrag.nth(1)).toHaveAttribute('data-testid', 'cell-row-math');
+    await expect(rowsAfterDrag.nth(2)).toHaveAttribute('data-testid', 'cell-row-code');
+  });
+
+  test('Notebook chrome: touch editors still allow text selection', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
+
+    const markdownStyles = await page.locator('[data-testid="cell-row-markdown"] .cm-content').evaluate((node) => {
+      const styles = window.getComputedStyle(node);
+      return {
+        userSelect: styles.userSelect,
+        webkitUserSelect: styles.webkitUserSelect
+      };
+    });
+    expect(markdownStyles.userSelect).toBe('text');
+
+    const mathStyles = await page.locator('[data-testid="cell-row-math"] .cm-content').evaluate((node) => {
+      const styles = window.getComputedStyle(node);
+      return {
+        userSelect: styles.userSelect,
+        webkitUserSelect: styles.webkitUserSelect
+      };
+    });
+    expect(mathStyles.userSelect).toBe('text');
+  });
+
   test('Notebook chrome: markdown exits into formatted preview with a compact done action', async ({ page }) => {
     await page.goto('/');
     await addCodeCellToEmptyNotebook(page);
@@ -666,6 +771,71 @@ test.describe('Notebook CAS outputs', () => {
     const codeShell = codeCell.locator('xpath=..');
     await expect(codeShell.getByRole('button', { name: 'Insert block' })).toBeVisible();
     await expect(codeShell.getByRole('button', { name: 'Drag to reorder' })).toBeVisible();
+  });
+
+  test('Notebook chrome: iPad drag handle starts reorder on touch without text selection', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 1024, height: 1366 });
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
+
+    const rowsBefore = page.locator('.notebook-item');
+    const codeShell = rowsBefore.nth(0).locator('xpath=..');
+    const dragHandle = codeShell.getByRole('button', { name: 'Drag to reorder' });
+    const handleBox = await dragHandle.boundingBox();
+    const mathBox = await rowsBefore.nth(2).boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(mathBox).not.toBeNull();
+    if (!handleBox || !mathBox) return;
+
+    await dragHandle.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      pointerId: 21,
+      clientX: handleBox.x + handleBox.width / 2,
+      clientY: handleBox.y + handleBox.height / 2,
+      buttons: 1
+    });
+
+    await page.dispatchEvent('body', 'pointermove', {
+      pointerType: 'touch',
+      pointerId: 21,
+      clientX: handleBox.x + handleBox.width / 2,
+      clientY: mathBox.y + mathBox.height + 40,
+      buttons: 1
+    });
+
+    await expect(page.getByTestId('cell-drag-ghost')).toBeVisible();
+    await expect(page.getByTestId('cell-drop-indicator').first()).toBeVisible();
+
+    const selectionText = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+    expect(selectionText).toBe('');
+
+    await page.dispatchEvent('body', 'pointerup', {
+      pointerType: 'touch',
+      pointerId: 21,
+      clientX: handleBox.x + handleBox.width / 2,
+      clientY: mathBox.y + mathBox.height + 40,
+      buttons: 0
+    });
+
+    const rowsAfterDrag = page.locator('.notebook-item');
+    await expect(rowsAfterDrag.nth(0)).toHaveAttribute('data-testid', 'cell-row-markdown');
+    await expect(rowsAfterDrag.nth(1)).toHaveAttribute('data-testid', 'cell-row-math');
+    await expect(rowsAfterDrag.nth(2)).toHaveAttribute('data-testid', 'cell-row-code');
   });
 
   test('Notebook chrome: iPhone header stacks cleanly and add menu stays onscreen', async ({ page }) => {
