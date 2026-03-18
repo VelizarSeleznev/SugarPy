@@ -652,6 +652,38 @@ body {
   gap: 8px;
 }
 
+.assistant-photo-import {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: #fff;
+}
+
+.assistant-photo-preview-wrap {
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #f3f4f6;
+}
+
+.assistant-photo-preview {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+}
+
+.assistant-photo-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .assistant-compose {
   display: flex;
   gap: 10px;
@@ -960,6 +992,246 @@ body {
   min-width: 0;
 }
 
+.cell-row-shell {
+  position: relative;
+  margin-left: -72px;
+  padding-left: 72px;
+  width: calc(100% + 72px);
+}
+
+.cell-row-shell.is-insertion-menu-open {
+  z-index: 24;
+}
+
+.cell-row-rail {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  transform: translateY(0) translateX(-4px);
+  z-index: 22;
+}
+
+.cell-row-shell:hover .cell-row-rail,
+.cell-row-shell:focus-within .cell-row-rail,
+.cell-row-shell.is-insertion-menu-open .cell-row-rail,
+.cell-row-shell.is-active .cell-row-rail,
+.cell-row-shell.is-last-active .cell-row-rail,
+.cell-row-shell.is-drag-source .cell-row-rail {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) translateX(0);
+}
+
+.cell-row-add-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(191, 219, 254, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.98);
+  color: var(--primary-accent);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08);
+}
+
+.cell-row-add-btn:hover {
+  background: #eff6ff;
+}
+
+.cell-row-drag-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(191, 219, 254, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.98);
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.cell-row-drag-btn:hover {
+  background: #eff6ff;
+  color: var(--primary-accent);
+}
+
+.cell-row-drag-btn:active {
+  cursor: grabbing;
+}
+
+.cell-insert-menu {
+  position: absolute;
+  top: 44px;
+  left: 10px;
+  min-width: 220px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.99);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 30;
+}
+
+.cell-insert-search {
+  width: 100%;
+}
+
+.cell-insert-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.cell-insert-menu-item {
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cell-insert-menu-item:hover {
+  background: #eff6ff;
+  color: var(--primary-accent);
+}
+
+.cell-insert-menu-empty {
+  padding: 4px 10px 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.cell-drop-indicator {
+  position: relative;
+  height: 12px;
+  margin: -3px 0;
+}
+
+.cell-drop-indicator::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 14px;
+  top: 50%;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0),
+    rgba(59, 130, 246, 0.95) 20%,
+    rgba(59, 130, 246, 0.95) 80%,
+    rgba(59, 130, 246, 0)
+  );
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.1), 0 0 22px rgba(59, 130, 246, 0.18);
+  transform: translateY(-50%);
+}
+
+.touch-ui .cell-row-shell {
+  margin-left: 0;
+  padding-left: 0;
+  width: 100%;
+}
+
+.touch-ui.touch-rail-enabled .cell-row-shell {
+  margin-left: -72px;
+  padding-left: 72px;
+  width: calc(100% + 72px);
+}
+
+.touch-ui [data-block-cell-swipe="true"],
+.touch-ui .markdown,
+.touch-ui .math-card,
+.touch-ui .math-card *,
+.touch-ui .output,
+.touch-ui .output *,
+.touch-ui .markdown * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.touch-ui:not(.touch-rail-enabled) .cell-row-rail,
+.touch-ui:not(.touch-rail-enabled) .cell-insert-menu {
+  display: none !important;
+}
+
+.cell-drag-ghost {
+  position: fixed;
+  z-index: 240;
+  min-width: 220px;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid rgba(191, 219, 254, 0.96);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 22px 44px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
+  transform: translate3d(14px, 14px, 0);
+  backdrop-filter: blur(8px);
+}
+
+.cell-drag-ghost-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cell-drag-ghost-type {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary-accent);
+}
+
+.cell-drag-ghost-index {
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: var(--primary-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.cell-drag-ghost-text {
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.35;
+  max-height: 3.15em;
+  overflow: hidden;
+}
+
+.app.is-dragging,
+.app.is-dragging * {
+  cursor: grabbing !important;
+}
+
+.app.is-dragging .cell-content,
+.app.is-dragging .cell-row-shell {
+  user-select: none;
+}
+
 .cell-divider {
   position: relative;
   height: 4px;
@@ -1046,6 +1318,13 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 14px;
+}
+
+.cell-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
 }
 
 .cell-empty-title {
@@ -1828,6 +2107,17 @@ html.ios-compact-inputs select {
   .cell-gutter,
   .cell-action-bar,
   .cell-divider {
+    display: none !important;
+  }
+
+  .cell-row-shell {
+    margin-left: 0;
+    padding-left: 0;
+    width: 100%;
+  }
+
+  .cell-row-rail,
+  .cell-insert-menu {
     display: none !important;
   }
 

@@ -74,6 +74,9 @@ const assistantNotebookFixtures = {
         source: 'x^2 = 2',
         mathRenderMode: 'exact',
         mathTrigMode: 'deg',
+        ui: {
+          mathView: 'rendered'
+        },
         mathOutput: {
           kind: 'equation',
           steps: ['x^{2} = 2'],
@@ -102,6 +105,58 @@ const assistantNotebookFixtures = {
             exact: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' },
             decimal: { steps: ['x^{2} = 2'], value: 'x^{2} = 2' }
           }
+        }
+      }
+    ]
+  },
+  math_source_rendering_examples: {
+    version: 1,
+    id: 'nb-math-source-rendering',
+    name: 'Math Source Rendering Examples',
+    trigMode: 'deg',
+    defaultMathRenderMode: 'exact',
+    updatedAt: '2026-03-09T00:00:00.000Z',
+    cells: [
+      {
+        id: 'cell-math-inner-circle',
+        type: 'math',
+        source: 'InnerCircle_centered := u^2 + v^2 = rin^2',
+        mathRenderMode: 'exact',
+        mathTrigMode: 'deg',
+        mathOutput: {
+          kind: 'assignment',
+          steps: ['InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}'],
+          value: 'InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}',
+          assigned: 'InnerCircle_centered',
+          mode: 'deg',
+          error: null,
+          warnings: [],
+          normalized_source: 'InnerCircle_centered := u**2 + v**2 = rin**2',
+          equation_latex: null,
+          trace: [],
+          render_cache: {
+            exact: {
+              steps: ['InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}'],
+              value: 'InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}'
+            },
+            decimal: {
+              steps: ['InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}'],
+              value: 'InnerCircle_{centered} = u^{2} + v^{2} - rin^{2}'
+            }
+          }
+        },
+        ui: {
+          mathView: 'rendered'
+        }
+      },
+      {
+        id: 'cell-math-angle-tangent',
+        type: 'math',
+        source: 'angle_tangent_AC := x^2 + y^2 = 1',
+        mathRenderMode: 'exact',
+        mathTrigMode: 'deg',
+        ui: {
+          mathView: 'rendered'
         }
       }
     ]
@@ -140,7 +195,22 @@ const seedNotebookFixture = async (page: any, notebook: (typeof assistantNoteboo
 const addCodeCellToEmptyNotebook = async (page: any) => {
   const emptyState = page.locator('.cell-empty');
   if (await emptyState.isVisible()) {
-    await emptyState.getByRole('button', { name: 'Code' }).click();
+    const emptyStateCodeButton = emptyState.locator('.cell-empty-actions').getByRole('button', { name: /^Code$/ });
+    if (await emptyStateCodeButton.count()) {
+      await emptyStateCodeButton.first().click();
+      return;
+    }
+    const legacyEmptyStateButton = emptyState.getByRole('button', { name: 'Add code cell' });
+    if (await legacyEmptyStateButton.count()) {
+      await legacyEmptyStateButton.first().click();
+      return;
+    }
+  }
+
+  const headerAddButton = page.getByTestId('add-cell-button');
+  if (await headerAddButton.count()) {
+    await headerAddButton.click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Code$/ }).click();
   }
 };
 
@@ -211,7 +281,7 @@ const installExecutionCounterApiMocks = async (page: any) => {
 const addMathCellAfterFirstCode = async (page: any) => {
   await addCodeCellToEmptyNotebook(page);
   await page.getByTestId('add-cell-button').click();
-  await page.getByRole('button', { name: 'Math cell' }).click();
+  await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
@@ -283,11 +353,17 @@ const expectNoPageCrashes = async (
 test.describe('Notebook CAS outputs', () => {
   test('Notebook chrome: empty code, text, and math cells stay compact and add below the active cell', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await expect(page.locator('.cell-empty')).toBeVisible();
+    const emptyActions = page.locator('.cell-empty-actions');
+    await expect(emptyActions.getByRole('button', { name: /^Code$/ })).toBeVisible();
+    await expect(emptyActions.getByRole('button', { name: /^Text$/ })).toBeVisible();
+    await expect(emptyActions.getByRole('button', { name: /^Math$/ })).toBeVisible();
+
+    await emptyActions.getByRole('button', { name: /^Code$/ }).click();
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Text cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Math cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
 
     await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
     await expect(page.locator('[data-testid="cell-row-markdown"]')).toHaveCount(1);
@@ -304,7 +380,7 @@ test.describe('Notebook CAS outputs', () => {
     await page.goto('/');
     await addCodeCellToEmptyNotebook(page);
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Text cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
     await addMathCellAfterFirstCode(page);
 
     for (const selector of ['[data-testid="cell-row-code"]', '[data-testid="cell-row-markdown"]', '[data-testid="cell-row-math"]']) {
@@ -338,14 +414,14 @@ test.describe('Notebook CAS outputs', () => {
     await page.goto('/');
     await addCodeCellToEmptyNotebook(page);
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Text cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
 
     const codeCell = page.locator('[data-testid="cell-row-code"]').first();
     await codeCell.click();
     await page.locator('.app-header').click();
 
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Math cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
 
     const rows = page.locator('.notebook-item');
     await expect(rows).toHaveCount(3);
@@ -369,6 +445,7 @@ test.describe('Notebook CAS outputs', () => {
     await setMathInLastCell(page, 'x^2 = 2');
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
     await expect(mathCell.getByTestId('math-output')).toBeVisible();
+    await mathCell.getByRole('button', { name: 'More cell actions' }).click();
     await mathCell.getByRole('button', { name: 'Show math source' }).click();
     await expect(mathCell.getByTestId('math-output')).toHaveCount(0);
     await page.locator('[data-testid="cell-row-code"]').first().click();
@@ -376,11 +453,179 @@ test.describe('Notebook CAS outputs', () => {
     await expectNoGlobalErrors(page, guards);
   });
 
+  test('Notebook chrome: cell rail insert menu supports search and above/below placement', async ({ page }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    const codeShell = codeCell.locator('xpath=..');
+    await codeShell.hover();
+    await codeCell.click();
+    const insertButton = codeShell.getByRole('button', { name: 'Insert block' });
+    await expect(insertButton).toBeVisible();
+
+    await insertButton.click();
+    const insertMenu = page.locator('.cell-insert-menu');
+    await expect(insertMenu).toBeVisible();
+    const search = insertMenu.getByRole('textbox', { name: 'Search blocks' });
+    await expect(search).toBeVisible();
+    await search.fill('math');
+    await expect(insertMenu.getByRole('button', { name: /^Math$/ })).toBeVisible();
+    await insertMenu.getByRole('button', { name: /^Math$/ }).click();
+
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(1);
+
+    await codeCell.click();
+    const codeShellAfterMath = page.locator('[data-testid="cell-row-code"]').first().locator('xpath=..');
+    await codeShellAfterMath.hover();
+    const aboveInsertButton = codeShellAfterMath.getByRole('button', { name: 'Insert block' });
+    await expect(aboveInsertButton).toBeVisible();
+    await page.keyboard.down('Alt');
+    await aboveInsertButton.click();
+    await page.keyboard.up('Alt');
+    const secondMenu = page.locator('.cell-insert-menu');
+    await expect(secondMenu).toBeVisible();
+    await secondMenu.getByRole('textbox', { name: 'Search blocks' }).fill('text');
+    await secondMenu.getByRole('button', { name: /^Text$/ }).click();
+
+    const rows = page.locator('.notebook-item');
+    await expect(rows.first()).toHaveAttribute('data-testid', 'cell-row-markdown');
+  });
+
+  test('Notebook chrome: math quick actions stay in the toolbar while rendered math and output move into overflow', async ({
+    page
+  }) => {
+    await seedNotebookFixture(page, assistantNotebookFixtures.math_equation_rendered);
+    await page.goto('/');
+
+    const mathCell = page.locator('[data-testid="cell-row-math"]').first();
+    await mathCell.click();
+
+    await expect(mathCell.getByRole('button', { name: 'Show decimal values' })).toBeVisible();
+    await expect(mathCell.getByRole('button', { name: 'Switch to radians' })).toBeVisible();
+    await expect(mathCell.getByRole('button', { name: 'Show rendered math' })).toHaveCount(0);
+    await expect(mathCell.getByRole('button', { name: 'Show output' })).toHaveCount(0);
+
+    await mathCell.getByRole('button', { name: 'More cell actions' }).click();
+    const overflowMenu = mathCell.locator('.cell-overflow-menu');
+    await expect(overflowMenu).toBeVisible();
+    await expect(overflowMenu.getByRole('button', { name: /Show (rendered math|math source)$/ })).toBeVisible();
+    await expect(overflowMenu.getByRole('button', { name: 'Hide output' })).toBeVisible();
+  });
+
+  test('Notebook chrome: rendered Math source keeps powers and underscores readable', async ({ page }) => {
+    await seedNotebookFixture(page, assistantNotebookFixtures.math_source_rendering_examples);
+    await page.goto('/');
+
+    const mathCards = page.locator('[data-testid="math-output"]');
+    await expect(mathCards).toHaveCount(2);
+
+    const firstSourceHtml = await mathCards.nth(0).locator('.math-card-source').evaluate((node) => node.innerHTML);
+    expect(firstSourceHtml).toContain('msup');
+    expect(firstSourceHtml).toContain('msub');
+    expect(firstSourceHtml).not.toContain('**');
+    expect(firstSourceHtml).toContain('InnerCircle');
+    expect(firstSourceHtml).toContain('centered');
+
+    const secondSourceHtml = await mathCards.nth(1).locator('.math-card-source').evaluate((node) => node.innerHTML);
+    expect(secondSourceHtml).toContain('msup');
+    expect(secondSourceHtml).toContain('msub');
+    expect(secondSourceHtml).not.toContain('**');
+    expect(secondSourceHtml).toContain('angle');
+    expect(secondSourceHtml).toContain('tangent');
+    expect(secondSourceHtml).toContain('AC');
+  });
+
+  test('Notebook chrome: drag handle reorders cells and shows a drop indicator', async ({
+    page
+  }) => {
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
+
+    const rowsBefore = page.locator('.notebook-item');
+    await expect(rowsBefore.nth(0)).toHaveAttribute('data-testid', 'cell-row-code');
+    await expect(rowsBefore.nth(1)).toHaveAttribute('data-testid', 'cell-row-markdown');
+    await expect(rowsBefore.nth(2)).toHaveAttribute('data-testid', 'cell-row-math');
+
+    const codeCell = rowsBefore.nth(0);
+    const codeShell = codeCell.locator('xpath=..');
+    const dragHandle = codeShell.locator('.cell-row-drag-btn');
+    await codeShell.hover();
+    await expect(dragHandle).toBeVisible();
+
+    const handleBox = await dragHandle.boundingBox();
+    const mathBox = await rowsBefore.nth(2).boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(mathBox).not.toBeNull();
+    if (!handleBox || !mathBox) return;
+
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handleBox.x + handleBox.width / 2, mathBox.y + mathBox.height + 40, {
+      steps: 8
+    });
+
+    await expect(page.getByTestId('cell-drag-ghost')).toBeVisible();
+    await expect(page.getByTestId('cell-drop-indicator').first()).toBeVisible();
+
+    await page.mouse.up();
+
+    const rowsAfterDrag = page.locator('.notebook-item');
+    await expect(rowsAfterDrag.nth(0)).toHaveAttribute('data-testid', 'cell-row-markdown');
+    await expect(rowsAfterDrag.nth(1)).toHaveAttribute('data-testid', 'cell-row-math');
+    await expect(rowsAfterDrag.nth(2)).toHaveAttribute('data-testid', 'cell-row-code');
+  });
+
+  test('Notebook chrome: touch long-press drag can be cancelled with Escape', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
+
+    const codeShell = page.locator('[data-testid="cell-row-code"]').first().locator('xpath=..');
+    const shellBox = await codeShell.boundingBox();
+    expect(shellBox).not.toBeNull();
+    if (!shellBox) return;
+
+    await codeShell.dispatchEvent('pointerdown', {
+      pointerType: 'touch',
+      pointerId: 11,
+      clientX: shellBox.x + 24,
+      clientY: shellBox.y + 24,
+      buttons: 1
+    });
+    await page.waitForTimeout(1100);
+    await expect(page.getByTestId('cell-drag-ghost')).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('cell-drag-ghost')).toHaveCount(0);
+
+    const rowsAfterCancel = page.locator('.notebook-item');
+    await expect(rowsAfterCancel.nth(0)).toHaveAttribute('data-testid', 'cell-row-code');
+    await expect(rowsAfterCancel.nth(1)).toHaveAttribute('data-testid', 'cell-row-markdown');
+  });
+
   test('Notebook chrome: markdown exits into formatted preview with a compact done action', async ({ page }) => {
     await page.goto('/');
-    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await addCodeCellToEmptyNotebook(page);
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Text cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Text$/ }).click();
 
     const markdownCell = page.locator('[data-testid="cell-row-markdown"]').last();
     await markdownCell.locator('.cm-content').click();
@@ -393,11 +638,34 @@ test.describe('Notebook CAS outputs', () => {
   test('Notebook chrome: iPad-sized viewport uses the same compact add flow', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 1366 });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await addCodeCellToEmptyNotebook(page);
     await page.getByTestId('add-cell-button').click();
-    await page.getByRole('button', { name: 'Math cell' }).click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Math$/ }).click();
     await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
     await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(1);
+  });
+
+  test('Notebook chrome: wide touch layouts keep the left rail available on iPad-sized screens', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 1024, height: 1366 });
+    await page.goto('/');
+    await addCodeCellToEmptyNotebook(page);
+
+    const codeCell = page.locator('[data-testid="cell-row-code"]').first();
+    await codeCell.click();
+    const codeShell = codeCell.locator('xpath=..');
+    await expect(codeShell.getByRole('button', { name: 'Insert block' })).toBeVisible();
+    await expect(codeShell.getByRole('button', { name: 'Drag to reorder' })).toBeVisible();
   });
 
   test('Notebook chrome: iPhone header stacks cleanly and add menu stays onscreen', async ({ page }) => {
@@ -569,6 +837,7 @@ test.describe('Notebook CAS outputs', () => {
     await seedNotebookFixture(page, assistantNotebookFixtures.math_equation_rendered);
     await page.goto('/');
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
     await expect(mathCell.getByTestId('math-latex')).toBeVisible();
     await expectNoPageCrashes(page, guards);
   });
@@ -585,7 +854,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.getByRole('button', { name: 'More actions' }).click();
     await page.getByRole('button', { name: 'New Notebook' }).click();
-    await page.getByRole('button', { name: 'Add code cell' }).click();
+    await addCodeCellToEmptyNotebook(page);
 
     const freshCell = page.locator('[data-testid="cell-row-code"]').first();
     await freshCell.locator('.cm-content').click();
@@ -778,6 +1047,49 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-reject-draft').click();
     await expect(page.getByTestId('assistant-preview')).toHaveCount(0);
     await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: shared-key mode still exposes Import from photo and preview selection', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.route('**/api/config', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          mode: 'restricted-demo',
+          providers: { openai: true }
+        })
+      });
+    });
+    await page.route('**/api/autosave/**', async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'not found' })
+      });
+    });
+
+    await page.goto('/');
+    await page.getByTestId('assistant-toggle').click();
+    await page.getByTestId('assistant-settings-toggle').click();
+    await expect(page.getByTestId('assistant-api-key')).toHaveAttribute('placeholder', 'Using shared key by default');
+    await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
+    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
+
+    await page.getByTestId('assistant-photo-input').setInputFiles({
+      name: 'photo.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W4l8AAAAASUVORK5CYII=',
+        'base64'
+      )
+    });
+
+    await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-preview')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
+    await expect(page.locator('.assistant-photo-meta')).toContainText('photo.png');
     await expectNoGlobalErrors(page, guards);
   });
 

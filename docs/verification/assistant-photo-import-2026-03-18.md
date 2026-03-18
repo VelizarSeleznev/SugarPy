@@ -1,0 +1,24 @@
+# Assistant Photo Import Verification
+
+- Change class: runtime-critical assistant drawer / multimodal planning path
+- Impacted runtime or execution paths:
+  - assistant shared-key detection in the browser drawer
+  - assistant OpenAI photo-import entrypoint
+  - browser-side image file loading and preview generation
+  - assistant planning payloads that include uploaded image input
+- Verification mapping:
+  - drawer visibility and shared-key placeholder -> `web/e2e/notebook.spec.ts`
+  - browser photo selection preview -> `web/e2e/notebook.spec.ts`
+  - UI smoke coverage -> `./scripts/ui-check.sh`
+  - frontend compile gate -> `cd web && npm run build`
+- Regression tests added or updated:
+  - `web/e2e/notebook.spec.ts`
+  - `docs/RUNBOOK.md`
+- Browser verification:
+  - targeted Playwright drawer regression for `Import from photo`
+  - `./scripts/ui-check.sh`
+- Recovery paths covered:
+  - missing shared-key placeholder regression
+  - missing `Import from photo` button regression
+  - missing browser data-url file reader regression
+  - preview-card rendering after image selection

@@ -165,6 +165,7 @@ export function MarkdownEditor({ value, onChange, active = false }: Props) {
     return (
       <div
         className="markdown"
+        data-block-cell-swipe="true"
         onClick={() => setEditing(true)}
         dangerouslySetInnerHTML={{ __html: rendered }}
       />

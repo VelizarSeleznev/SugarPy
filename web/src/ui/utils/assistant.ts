@@ -119,6 +119,23 @@ export type AssistantDraftRun = {
   steps: AssistantDraftStep[];
 };
 
+export type AssistantPhotoImportCell = {
+  type: 'markdown' | 'math';
+  source: string;
+};
+
+export type AssistantPhotoImportResult = {
+  summary: string;
+  warnings: string[];
+  cells: AssistantPhotoImportCell[];
+};
+
+export type AssistantPhotoImportInput = {
+  imageDataUrl: string;
+  fileName?: string;
+  instructions?: string;
+};
+
 export type AssistantActivity = {
   kind: 'phase' | 'tool' | 'reference';
   label: string;
@@ -138,7 +155,7 @@ const SERVER_PROXY_KEY_PREFIX = 'server-proxy:';
 export type AssistantNetworkEvent = {
   phase: 'request_start' | 'response' | 'retry' | 'error' | 'aborted' | 'timeout' | 'stream';
   attempt: number;
-  stage?: 'inspection' | 'planning' | 'validation';
+  stage?: 'inspection' | 'planning' | 'validation' | 'extraction';
   status?: number;
   detail?: string;
 };
@@ -146,7 +163,7 @@ export type AssistantNetworkEvent = {
 export type AssistantResponseTrace = {
   attempt: number;
   provider?: AssistantProvider;
-  stage: 'inspection' | 'planning' | 'validation';
+  stage: 'inspection' | 'planning' | 'validation' | 'extraction';
   text?: string;
   toolCalls?: Array<{
     name: string;
@@ -182,6 +199,14 @@ export type AssistantSandboxRunner = (
 export const DEFAULT_ASSISTANT_MODEL = 'gpt-5-mini';
 
 export const ASSISTANT_MODEL_PRESETS = [
+  {
+    value: 'gpt-5.4-mini',
+    label: 'GPT-5.4 mini'
+  },
+  {
+    value: 'gpt-5.4-nano',
+    label: 'GPT-5.4 nano'
+  },
   {
     value: DEFAULT_ASSISTANT_MODEL,
     label: 'GPT-5 mini'
@@ -262,6 +287,34 @@ type OpenAIResponsesResponse = {
     type?: string;
   };
 };
+
+const PHOTO_IMPORT_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    cells: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            enum: ['markdown', 'math']
+          },
+          source: { type: 'string' }
+        },
+        required: ['type', 'source'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['summary', 'warnings', 'cells'],
+  additionalProperties: false
+} as const;
 
 type ToolCall = {
   name: string;
@@ -1465,7 +1518,7 @@ const callGemini = async (
   signal?: AbortSignal,
   thinkingLevel: AssistantThinkingLevel = 'dynamic',
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
-  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  stage: 'inspection' | 'planning' | 'validation' | 'extraction' = 'inspection',
   onResponseTrace?: (trace: AssistantResponseTrace) => void
 ): Promise<GeminiResponse> => {
   let lastError: Error | null = null;
@@ -1622,7 +1675,7 @@ const callOpenAIResponses = async (
   signal?: AbortSignal,
   thinkingLevel: AssistantThinkingLevel = 'dynamic',
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
-  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  stage: 'inspection' | 'planning' | 'validation' | 'extraction' = 'inspection',
   onResponseTrace?: (trace: AssistantResponseTrace) => void,
   requestTimeoutMs = OPENAI_DEFAULT_REQUEST_TIMEOUT_MS
 ): Promise<OpenAIResponsesResponse> => {
@@ -1887,7 +1940,7 @@ const callGroqChatCompletions = async (
   retries = 3,
   signal?: AbortSignal,
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
-  stage: 'inspection' | 'planning' | 'validation' = 'inspection',
+  stage: 'inspection' | 'planning' | 'validation' | 'extraction' = 'inspection',
   onResponseTrace?: (trace: AssistantResponseTrace) => void,
   requestTimeoutMs = OPENAI_DEFAULT_REQUEST_TIMEOUT_MS
 ): Promise<OpenAICompatibleResponse> => {
@@ -2102,7 +2155,8 @@ const callGroqChatCompletions = async (
 const buildInspectionPrompt = (
   request: string,
   scope: AssistantScope,
-  conversationHistory: AssistantConversationEntry[]
+  conversationHistory: AssistantConversationEntry[],
+  photoImport?: AssistantPhotoImportInput
 ) => {
   const recentConversation = conversationHistory
     .slice(-6)
@@ -2121,13 +2175,40 @@ const buildInspectionPrompt = (
           'Do not assume Python is needed before checking whether SugarPy Math cells already support the workflow.'
         ]
       : []),
+    ...(photoImport
+      ? [
+          'An uploaded handwritten photo is attached to this request.',
+          'Inspect the readable content of the photo and use it as source material for new notebook cells.',
+          'Treat scratched-out or unreadable parts as uncertain instead of inventing content.',
+          'Keep import behavior additive: append new cells rather than rewriting existing notebook cells.',
+          "For imported math content, consult get_reference('math_cells') before planning."
+        ]
+      : []),
     `Scope preference: ${scope}.`,
     `User request: ${request}`,
+    photoImport?.fileName ? `Attached photo: ${photoImport.fileName}` : '',
+    photoImport?.instructions?.trim() ? `Photo import instruction: ${photoImport.instructions.trim()}` : '',
     recentConversation ? `Recent conversation:\n${recentConversation}` : ''
   ]
     .filter(Boolean)
     .join('\n');
 };
+
+export const buildOpenAIPhotoImportInput = (text: string, photoImport: AssistantPhotoImportInput) => [
+  {
+    role: 'user' as const,
+    content: [
+      {
+        type: 'input_text' as const,
+        text
+      },
+      {
+        type: 'input_image' as const,
+        image_url: photoImport.imageDataUrl
+      }
+    ]
+  }
+];
 
 const runGeminiToolLoop = async (
   apiKey: string,
@@ -2275,14 +2356,16 @@ const runOpenAIToolLoop = async (
   conversationHistory: AssistantConversationEntry[] = [],
   thinkingLevel: AssistantThinkingLevel = 'dynamic',
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
-  onResponseTrace?: (trace: AssistantResponseTrace) => void
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  photoImport?: AssistantPhotoImportInput
 ): Promise<ToolLoopResult> => {
   onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
   const transcript: string[] = [];
   const seenCalls = new Set<string>();
   const inspectedCells = new Map<string, ReturnType<typeof renderCellDetail>>();
   let previousResponseId: string | undefined;
-  let nextInput: unknown = buildInspectionPrompt(request, scope, conversationHistory);
+  const inspectionPrompt = buildInspectionPrompt(request, scope, conversationHistory, photoImport);
+  let nextInput: unknown = photoImport ? buildOpenAIPhotoImportInput(inspectionPrompt, photoImport) : inspectionPrompt;
   const instructions = [
     'Inspect the notebook with function calls, then respond with short planning notes once you have enough context.',
     'Use get_reference when platform behavior matters.',
@@ -2417,11 +2500,11 @@ const runGroqToolLoop = async (
           : [])
       ].join('\n')
     },
-    {
-      role: 'user',
-      content: buildInspectionPrompt(request, scope, conversationHistory)
-    }
-  ];
+      {
+        role: 'user',
+        content: buildInspectionPrompt(request, scope, conversationHistory)
+      }
+    ];
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
     onActivity?.({
@@ -2523,9 +2606,10 @@ const runToolLoop = async (
   conversationHistory: AssistantConversationEntry[] = [],
   thinkingLevel: AssistantThinkingLevel = 'dynamic',
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
-  onResponseTrace?: (trace: AssistantResponseTrace) => void
+  onResponseTrace?: (trace: AssistantResponseTrace) => void,
+  photoImport?: AssistantPhotoImportInput
 ): Promise<ToolLoopResult> => {
-  if (requestLooksMathLike(request) && context.cells.length === 0) {
+  if (!photoImport && requestLooksMathLike(request) && context.cells.length === 0) {
     onActivity?.({ kind: 'phase', label: 'Starting notebook inspection' });
     onActivity?.({ kind: 'reference', label: 'get_reference', detail: 'math_cells' });
     onActivity?.({ kind: 'reference', label: 'get_reference', detail: 'plotting' });
@@ -2542,6 +2626,9 @@ const runToolLoop = async (
   }
   const provider = detectAssistantProvider(model, apiKey);
   if (provider === 'gemini') {
+    if (photoImport) {
+      throw new Error('Photo import tool-loop inspection currently requires an OpenAI model.');
+    }
     return runGeminiToolLoop(
       apiKey,
       model,
@@ -2557,6 +2644,9 @@ const runToolLoop = async (
     );
   }
   if (provider === 'groq') {
+    if (photoImport) {
+      throw new Error('Photo import tool-loop inspection currently requires an OpenAI model.');
+    }
     return runGroqToolLoop(
       apiKey,
       model,
@@ -2582,7 +2672,8 @@ const runToolLoop = async (
     conversationHistory,
     thinkingLevel,
     onNetworkEvent,
-    onResponseTrace
+    onResponseTrace,
+    photoImport
   );
 };
 
@@ -2900,14 +2991,14 @@ const runOpenAIPlanningLoop = async (
   apiKey: string,
   model: string,
   planningSystemPrompt: string,
-  planningPayload: string,
+  planningInput: unknown,
   signal?: AbortSignal,
   thinkingLevel: AssistantThinkingLevel = 'dynamic',
   onNetworkEvent?: (event: AssistantNetworkEvent) => void,
   onResponseTrace?: (trace: AssistantResponseTrace) => void
 ): Promise<AssistantPlan> => {
   let previousResponseId: string | undefined;
-  let nextInput: unknown = planningPayload;
+  let nextInput: unknown = planningInput;
   let metadata: { summary: string; userMessage: string; warnings: string[] } | null = null;
   const operations: AssistantOperation[] = [];
 
@@ -3216,6 +3307,7 @@ export async function planNotebookChanges(params: {
   scope: AssistantScope;
   preference: AssistantPreference;
   context: NotebookAssistantContext;
+  photoImport?: AssistantPhotoImportInput;
   onActivity?: (item: AssistantActivity) => void;
   signal?: AbortSignal;
   conversationHistory?: AssistantConversationEntry[];
@@ -3232,6 +3324,7 @@ export async function planNotebookChanges(params: {
     scope,
     preference,
     context,
+    photoImport,
     onActivity,
     signal,
     conversationHistory = [],
@@ -3253,7 +3346,8 @@ export async function planNotebookChanges(params: {
     conversationHistory,
     thinkingLevel,
     onNetworkEvent,
-    onResponseTrace
+    onResponseTrace,
+    photoImport
   );
   const notebookManifest =
     scope === 'active'
@@ -3359,6 +3453,21 @@ export async function planNotebookChanges(params: {
           'Prefer step-by-step symbolic cells that a student can read from top to bottom.'
         ]
       : []),
+    ...(photoImport
+      ? [
+          'This request is importing a handwritten photo into the notebook.',
+          'Treat the uploaded photo as source material for new notebook cells.',
+          'Photo import is additive: append imported cells after the current notebook content and do not update, move, or delete existing cells.',
+          'Prefer Math cells for formulas and derivations from the photo.',
+          'Use a Markdown cell only for a short heading or brief readable note that is clearly present on the page.',
+          'If a handwritten part is unreadable or ambiguous, omit it and record a warning instead of guessing.',
+          'For photo-import Math cells, prefer plain equations as standalone cells and use := only for pure assignments such as x := 3 or point := (3, 2).',
+          'Do not write labels like Intersection = (3, 2); use point := (3, 2) or leave the tuple unlabelled.',
+          'If a final object depends on solved values, substitute the concrete values before writing the final assignment. Do not leave placeholders such as (x, y).',
+          'Do not use textbook notation such as sum_{k=1}^n, display-style chained equalities, or mixed assignment-plus-equation lines when a direct SugarPy form exists.',
+          'Each imported Math cell should be either one equation or a block of simple assignments, not both at once.'
+        ]
+      : []),
     ...preferenceRules
   ].join('\n');
   const planningPayload = JSON.stringify({
@@ -3375,17 +3484,29 @@ export async function planNotebookChanges(params: {
     notebookManifest,
     inspectedCells: inspection.inspectedCells,
     inspectionNotes: inspection.notes,
-    inspectionSummary: inspection.transcript
+    inspectionSummary: inspection.transcript,
+    photoImport: photoImport
+      ? {
+          enabled: true,
+          fileName: photoImport.fileName ?? '',
+          instructions: photoImport.instructions?.trim() ?? '',
+          insertStartIndex: notebookManifest.length
+        }
+      : undefined
   });
 
   const provider = detectAssistantProvider(model, apiKey);
+  if (photoImport && provider !== 'openai') {
+    throw new Error('Photo import currently requires an OpenAI model path.');
+  }
+  const planningInput = photoImport ? buildOpenAIPhotoImportInput(planningPayload, photoImport) : planningPayload;
   const runPlanning = async (systemPrompt: string) => {
     if (provider === 'openai') {
       return runOpenAIPlanningLoop(
         apiKey,
         model,
         systemPrompt,
-        planningPayload,
+        planningInput,
         signal,
         thinkingLevel,
         onNetworkEvent,

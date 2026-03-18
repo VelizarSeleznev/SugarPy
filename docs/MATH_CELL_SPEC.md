@@ -131,13 +131,18 @@ CAS text permanently visible above a separate result area.
 
 Expected behavior:
 - The normalized source is shown as rendered math (KaTeX-style), preserving the written structure
-  of the CAS input rather than showing a raw text blob.
+  of the CAS input rather than showing a raw text blob. The preview now uses a deterministic
+  source formatter so `^` always renders as exponent markup and `_` follows a consistent
+  last-segment subscript rule.
 - The result or trace is shown inside the same card.
 - Tapping/clicking the card reopens the raw CAS editor.
 - The editor provides a compact shortcut bar for common CAS inserts
   (`^2`, `sqrt(...)`, `solve(...)`, `expand(...)`, `N(...)`, `plot(...)`).
 - When the rendered source would duplicate the result verbatim (for example simple assignments
   like `A := [1, 2]`), the source preview is omitted and only the useful result remains visible.
+- `Exact` / `Decimal` and `Deg` / `Rad` are first-class Math quick actions on the cell toolbar.
+  Their corresponding overflow actions are reserved for `Show rendered math` / `Show math source`
+  and output visibility.
 - `Exact` / `Decimal` is a cell-level setting and updates the rendered output immediately from a
   cached exact/decimal render payload, without rerunning the Math cell.
 - `Deg` / `Rad` is also stored per Math cell, so a notebook can mix degree-based and radian-based
