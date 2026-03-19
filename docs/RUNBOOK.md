@@ -47,17 +47,18 @@ If those env vars are not set, the assistant can still be configured from the in
 assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
-- The assistant uses a chat-style drawer with a bottom composer.
+- The assistant uses a photo-first drawer with a secondary typed-chat section.
 - The default assistant flow is now staged and teaching-first.
   - The assistant first inspects the notebook and builds a structured plan.
   - It then generates a draft preview with per-step validation results in the drawer.
   - The live notebook, autosave state, and export payload stay unchanged until `Accept all` or `Accept step`.
   - `Reject draft` discards the staged draft without resetting the chat.
-  - The main preview is human-readable: `Plan`, `Draft`, `Validation`, and `Changes`.
+  - Failed validation keeps the proposed draft visible and marks the affected step as blocked instead of hiding what the model tried to do.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
-- The drawer footer includes `Import from photo` for handwritten-image imports.
-  - The preview card lets the user replace/cancel the image and add an optional import instruction before extraction.
+- The header primary assistant entry is `Import from photo`.
+  - The drawer lets the user replace/cancel the image and add an optional import instruction before extraction.
+  - The typed assistant is still available inside the drawer as a secondary flow.
   - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
 - The available `Thinking level` values are filtered by model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
@@ -147,12 +148,19 @@ Assistant regression checks:
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
 - Manual **Save to Server** now writes the normalized SugarPy notebook document through the backend API and refreshes server autosave.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
+- The `⋮` menu now closes immediately after actions fire and scrolls internally on smaller screens instead of extending off-screen.
+- On narrow layouts, the header action row collapses to compact square icon buttons instead of stretching full-width labels.
+- On desktop, `Run All` and `Import from photo` keep both icon + text; on narrower layouts they collapse to icon-only square buttons.
 - The `⋮` menu also includes `Clear Outputs`, which removes current code/math/stoich runtime results without deleting cells or notebook content.
-- The optional AI assistant is opened from the `Assistant` button in the header.
+- The optional AI assistant is opened from the `Import from photo` button in the header, with typed chat inside the drawer.
 - The `⋮` menu stores notebook defaults for new Math cells: `Degrees/Radians` and `Exact/Decimal`.
-- A `Run All` button in the fixed header executes all runnable cells top-to-bottom.
-- If a notebook runtime gets stuck, the header exposes `Stop Runtime` while cells are running plus menu actions for `Restart Notebook Runtime` and `Delete Notebook Runtime`.
+- The header `Run All` control becomes a `Stop Runtime` toggle while cells are running.
+- A running code or math cell also swaps its left gutter `Run cell` button to `Stop cell`, using the same runtime interrupt path as the header control.
+- The `⋮` menu still exposes `Stop Runtime`, `Restart Notebook Runtime`, and `Delete Notebook Runtime` for explicit runtime control.
+- If an interrupt cannot bring the Docker-backed kernel back to a responsive state, SugarPy escalates to a runtime restart and shows a warning banner that previous outputs may be stale.
+- The “fresh runtime started” notice is suppressed for the very first execution in a brand new notebook; it is reserved for recovery/reset cases where older outputs could be stale.
 - A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace or use `Run All`.
+- Idle live runtimes are culled in the background by the Jupyter extension, so abandoned tabs do not need a follow-up runtime request before their containers are removed. The default idle timeout is 30 minutes unless `SUGARPY_RUNTIME_IDLE_TIMEOUT_S` is overridden.
 - New notebooks open empty and show centered `Code | Text | Math` creation controls.
 - The same `Code | Text | Math` choices also appear in the header `+` menu and the divider insert menu.
 - On desktop, each cell exposes a left-side `+` insert rail with searchable block insertion; it inserts below by default and supports `Alt`/`Option` for above insertion.

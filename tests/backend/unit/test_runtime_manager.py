@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from IPython.core.interactiveshell import InteractiveShell
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
 
@@ -18,6 +19,7 @@ class FakeRuntime:
         self.stop_calls: list[bool] = []
         self.execute_calls: list[tuple[str, float]] = []
         self.interrupt_calls = 0
+        self.last_interrupt_recovered = True
 
     async def start(self):
         self.start_calls += 1
@@ -118,7 +120,46 @@ def test_runtime_manager_interrupt_marks_runtime_connected(tmp_path: Path):
 
     assert interrupted["status"] == "connected"
     assert interrupted["interrupted"] is True
+    assert interrupted["sessionState"] == "existing"
     assert manager.created[0].interrupt_calls == 1
+    assert manager.created[0].restart_calls == 0
+
+
+def test_runtime_manager_interrupt_restarts_when_kernel_does_not_recover(tmp_path: Path):
+    manager = FakeRuntimeManager(tmp_path)
+
+    asyncio.run(manager.ensure_runtime("nb-int-restart"))
+    manager.created[0].last_interrupt_recovered = False
+    interrupted = asyncio.run(manager.interrupt_runtime("nb-int-restart"))
+
+    assert interrupted["status"] == "connected"
+    assert interrupted["interrupted"] is True
+    assert interrupted["sessionState"] == "restarted-after-interrupt"
+    assert manager.created[0].interrupt_calls == 1
+    assert manager.created[0].restart_calls == 1
+
+
+def test_runtime_manager_interrupt_before_runtime_exists_marks_pending_interrupt(tmp_path: Path):
+    manager = FakeRuntimeManager(tmp_path)
+
+    interrupted = asyncio.run(manager.interrupt_runtime("nb-pending"))
+
+    assert interrupted["interrupted"] is True
+    assert interrupted["status"] == "disconnected"
+    assert "nb-pending" in manager._pending_interrupts
+
+
+def test_runtime_manager_pending_interrupt_blocks_execute_before_code_runs(tmp_path: Path):
+    manager = FakeRuntimeManager(tmp_path)
+
+    asyncio.run(manager.ensure_runtime("nb-pending-exec"))
+    manager._pending_interrupts.add("nb-pending-exec")
+
+    with pytest.raises(RuntimeError, match="Execution interrupted by runtime control."):
+        asyncio.run(manager.execute_code("nb-pending-exec", "2 + 2", 5.0))
+
+    assert manager.created[0].execute_calls == []
+    assert "nb-pending-exec" not in manager._pending_interrupts
 
 
 def test_runtime_manager_execute_updates_runtime_status(tmp_path: Path):
@@ -175,6 +216,31 @@ def test_runtime_manager_cleans_up_idle_metadata_backed_runtime(tmp_path: Path):
     assert "nb-stale" not in manager._sessions
     assert manager._load_record("nb-stale") is None
     assert runtime.stop_calls == [True]
+
+
+def test_runtime_manager_cleanup_idle_runtimes_reports_removed_notebooks(tmp_path: Path):
+    manager = FakeRuntimeManager(tmp_path)
+    runtime = manager._create_runtime("nb-stale-report")
+    runtime.running = True
+    manager._persist_record(
+        RuntimeRecord(
+            notebook_id="nb-stale-report",
+            status="connected",
+            backend="docker",
+            container_name="fake-nb-stale-report",
+            workspace_path=str((manager.workspace_root / "nb-stale-report").resolve()),
+            connection_file_path=str((manager.workspace_root / "nb-stale-report" / "kernel.json").resolve()),
+            created_at="2026-03-13T00:00:00Z",
+            last_activity_at="2026-03-13T00:00:00Z",
+            image="fake-image",
+        )
+    )
+    manager._sessions["nb-stale-report"] = runtime
+    manager.idle_timeout_s = 1.0
+
+    result = asyncio.run(manager.cleanup_idle_runtimes())
+
+    assert result == {"removedNotebookIds": ["nb-stale-report"]}
 
 
 def test_runtime_manager_inprocess_backend_persists_namespace_between_executes(tmp_path: Path, monkeypatch):

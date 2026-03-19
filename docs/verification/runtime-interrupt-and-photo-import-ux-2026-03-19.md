@@ -1,0 +1,34 @@
+# Runtime Interrupt And Photo Import UX Verification
+
+- Change class: runtime-critical notebook execution controls and assistant entry UX
+- Impacted runtime or execution paths:
+  - live notebook Docker interrupt and timeout recovery
+  - runtime restart/delete control flow while execution is active
+  - first-run versus recovery runtime notices
+  - cell-level run/stop controls and header runtime controls
+  - photo-first assistant entry and staged preview UI
+- Verification mapping:
+  - timeout normalization and runtime recovery -> `tests/backend/unit/test_server_extension.py`
+  - interrupt, pending-stop, and restart fallback behavior -> `tests/backend/unit/test_runtime_manager.py`
+  - active execution preemption and runtime recovery regressions -> `tests/backend/integration/test_runtime_reliability.py`
+  - runtime control UI regressions -> `web/e2e/runtime-controls.spec.ts`
+  - notebook smoke coverage -> `web/e2e/notebook.spec.ts`
+- Regression tests added or updated:
+  - `tests/backend/unit/test_server_extension.py`
+  - `tests/backend/unit/test_runtime_manager.py`
+  - `tests/backend/integration/test_runtime_reliability.py`
+  - `web/e2e/runtime-controls.spec.ts`
+  - `web/e2e/notebook.spec.ts`
+- Commands run:
+  - `uv run pytest tests/backend/unit/test_server_extension.py tests/backend/unit/test_runtime_manager.py tests/backend/integration/test_runtime_reliability.py`
+  - `PLAYWRIGHT_REUSE_EXISTING=1 ./scripts/ui-check.sh`
+  - `cd web && npm ci >/dev/null && PLAYWRIGHT_REUSE_EXISTING=1 npx playwright test e2e/runtime-controls.spec.ts`
+- Browser verification:
+  - live local browser run against `./scripts/run-all.sh`
+  - verified immediate stop on `while True: pass` followed by successful rerun in the same cell
+  - verified 20s execution timeout returns a timeout error and restarts the runtime instead of leaving the container busy
+- Recovery paths covered:
+  - early stop before runtime attach
+  - interrupt with responsive kernel
+  - interrupt with unresponsive kernel fallback restart
+  - execution timeout forcing runtime recreation

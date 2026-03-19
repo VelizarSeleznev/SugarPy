@@ -39,11 +39,13 @@
   - Restricted profiles (`restricted-demo`, `school-secure`) require Docker-backed isolation; they do not fall back to an in-process runtime when Docker is unavailable.
   - Docker-backed runtimes are started with the same uid/gid as the host Jupyter service so workspace artifacts such as `kernel-connection.json` remain readable and removable by the backend.
   - Notebook Code/Math/Stoich execution reuses the same live kernel namespace until the runtime is restarted, deleted, or cleaned up for idleness.
+  - Live runtime metadata is also swept by a backend-owned periodic cleanup loop, so abandoned notebooks do not need a new browser action before idle containers are removed.
   - Notebook execution timeouts are expressed in milliseconds at the API boundary and converted to seconds inside the backend executor.
   - If a live notebook execution times out, SugarPy treats that runtime as unsafe, restarts it, and returns an explicit timeout-recovery error so the next run starts from a clean kernel.
   - When a notebook gets a brand-new runtime after a cold start/crash/idle cleanup, SugarPy does not replay earlier cells automatically; users must rerun setup cells or use `Run All`, matching standard Jupyter restart behavior.
   - If runtime recovery finds a live container but cannot attach to its connection file, SugarPy treats that runtime as broken and recreates it instead of surfacing a generic backend error.
   - Runtime control is exposed through SugarPy-owned API routes for status, interrupt, restart, and delete; the UI uses those routes instead of talking to kernels directly.
+  - Docker-backed interrupt tries the Jupyter kernel `interrupt_request` first and only falls back to a container-level signal/restart if the kernel does not become responsive again.
   - Docker-backed live runtimes isolate notebook execution from the server process and filesystem.
 - The assistant sandbox remains a separate backend-owned ephemeral execution path backed by the same runtime manager and Docker isolation model as live notebook execution.
 - Math cell evaluation pipeline:

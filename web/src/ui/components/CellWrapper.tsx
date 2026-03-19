@@ -20,7 +20,9 @@ type Props = {
   isActive: boolean;
   isLastActive?: boolean;
   status: string;
+  isRunning?: boolean;
   onRun?: () => void;
+  onStop?: () => void;
   onActivate?: () => void;
   quickActions?: QuickAction[];
   menuActions?: CellMenuAction[];
@@ -32,7 +34,9 @@ export function CellWrapper({
   isActive,
   isLastActive = false,
   status,
+  isRunning = false,
   onRun,
+  onStop,
   onActivate,
   quickActions = [],
   menuActions = [],
@@ -108,15 +112,19 @@ export function CellWrapper({
           <button
             type="button"
             data-testid="run-cell"
-            className="cell-gutter-run"
+            className={`cell-gutter-run${isRunning ? ' is-stop' : ''}`}
             onClick={(event) => {
               event.stopPropagation();
+              if (isRunning && onStop) {
+                onStop();
+                return;
+              }
               onRun();
             }}
-            title="Run cell"
-            aria-label="Run cell"
+            title={isRunning && onStop ? 'Stop cell' : 'Run cell'}
+            aria-label={isRunning && onStop ? 'Stop cell' : 'Run cell'}
           >
-            ▶
+            <span className={`cell-gutter-run-icon${isRunning ? ' is-stop' : ' is-run'}`} aria-hidden="true" />
           </button>
         ) : (
           <span className="cell-gutter-spacer" aria-hidden="true" />

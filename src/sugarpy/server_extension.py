@@ -3,7 +3,9 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+import logging
 import os
+import queue
 import re
 import time
 import uuid
@@ -14,6 +16,7 @@ from urllib.parse import urlencode, urlparse
 from jupyter_server.base.handlers import APIHandler
 from tornado import web
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
+from tornado.ioloop import IOLoop, PeriodicCallback
 
 from sugarpy.runtime_manager import RuntimeManager
 
@@ -85,6 +88,8 @@ BLOCKED_ATTR_CALLS = {
     "pathlib.Path.open",
 }
 _RUNTIME_MANAGER: RuntimeManager | None = None
+_RUNTIME_CLEANUP_CALLBACK: PeriodicCallback | None = None
+_LOGGER = logging.getLogger(__name__)
 
 
 def _assistant_secret_file_path() -> str:
@@ -337,6 +342,7 @@ def _is_execution_timeout(exc: Exception) -> bool:
 
 async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict[str, Any]:
     started_at = time.perf_counter()
+    deadline = time.monotonic() + timeout_s
     stdout = ""
     stderr = ""
     mime_data: dict[str, Any] = {}
@@ -346,7 +352,13 @@ async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict
     idle = False
 
     while not idle:
-        msg = await client.get_iopub_msg(timeout=timeout_s)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Notebook execution timed out after {timeout_s:.1f}s.")
+        try:
+            msg = await client.get_iopub_msg(timeout=remaining)
+        except queue.Empty as exc:
+            raise TimeoutError(f"Notebook execution timed out after {timeout_s:.1f}s.") from exc
         if msg.get("parent_header", {}).get("msg_id") != msg_id:
             continue
         msg_type = msg.get("msg_type")
@@ -377,7 +389,13 @@ async def _execute_kernel_code(client: Any, code: str, timeout_s: float) -> dict
             if isinstance(traceback, list):
                 stderr = stderr or "\n".join(str(line) for line in traceback)
 
-    shell_reply = await client.get_shell_msg(timeout=timeout_s)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"Notebook execution timed out after {timeout_s:.1f}s.")
+    try:
+        shell_reply = await client.get_shell_msg(timeout=remaining)
+    except queue.Empty as exc:
+        raise TimeoutError(f"Notebook execution timed out after {timeout_s:.1f}s.") from exc
     if shell_reply.get("parent_header", {}).get("msg_id") != msg_id:
         raise RuntimeError("Kernel shell reply did not match the execution request.")
 
@@ -499,6 +517,26 @@ def _runtime_manager() -> RuntimeManager:
             executor=_execute_kernel_code,
         )
     return _RUNTIME_MANAGER
+
+
+def _runtime_cleanup_interval_ms() -> int:
+    raw = os.environ.get("SUGARPY_RUNTIME_CLEANUP_INTERVAL_MS", "").strip()
+    if not raw:
+        return 60_000
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return 60_000
+    return max(1_000, parsed)
+
+
+async def _background_runtime_cleanup() -> None:
+    manager = _runtime_manager()
+    try:
+        await manager.cleanup_orphans()
+        await manager.cleanup_idle_runtimes()
+    except Exception:
+        _LOGGER.exception("Background runtime cleanup failed.")
 
 
 async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1192,6 +1230,7 @@ def _jupyter_server_extension_points() -> list[dict[str, str]]:
 
 
 def _load_jupyter_server_extension(server_app: Any) -> None:
+    global _RUNTIME_CLEANUP_CALLBACK
     base_url = server_app.web_app.settings.get("base_url", "/")
     handlers = [
         (r"/sugarpy/api/config", SecurityConfigHandler),
@@ -1212,6 +1251,16 @@ def _load_jupyter_server_extension(server_app: Any) -> None:
         (r"/sugarpy/api/assistant/groq/chat/completions", AssistantGroqProxyHandler),
     ]
     server_app.web_app.add_handlers(".*$", [(f"{base_url.rstrip('/')}{route}", handler) for route, handler in handlers])
+    if _RUNTIME_CLEANUP_CALLBACK is not None:
+        _RUNTIME_CLEANUP_CALLBACK.stop()
+    io_loop = getattr(server_app, "io_loop", None) or IOLoop.current()
+
+    def _schedule_runtime_cleanup() -> None:
+        io_loop.spawn_callback(_background_runtime_cleanup)
+
+    _RUNTIME_CLEANUP_CALLBACK = PeriodicCallback(_schedule_runtime_cleanup, _runtime_cleanup_interval_ms())
+    _RUNTIME_CLEANUP_CALLBACK.start()
+    _schedule_runtime_cleanup()
 
 
 load_jupyter_server_extension = _load_jupyter_server_extension

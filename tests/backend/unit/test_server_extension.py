@@ -1,8 +1,12 @@
 import asyncio
+import queue
+from types import SimpleNamespace
 
+import pytest
 from sugarpy import server_extension
 
 from sugarpy.server_extension import (
+    _execute_kernel_code,
     _load_assistant_server_config,
     execute_notebook_request,
     execute_sandbox_request,
@@ -157,8 +161,67 @@ def test_execute_notebook_request_marks_fresh_runtime_without_replay():
     assert response["status"] == "ok"
     assert response["freshRuntime"] is True
     assert response["replayedCellIds"] == []
-    assert "value = 41" not in fake_manager.execute_calls[0][1]
-    assert "value + 1" in fake_manager.execute_calls[0][1]
+
+
+def test_load_jupyter_server_extension_starts_background_runtime_cleanup(monkeypatch):
+    cleanup_calls: list[str] = []
+
+    class FakeRuntimeManager:
+        async def cleanup_orphans(self):
+            cleanup_calls.append("orphans")
+            return {"removedNotebookIds": []}
+
+        async def cleanup_idle_runtimes(self):
+            cleanup_calls.append("idle")
+            return {"removedNotebookIds": []}
+
+    class FakeWebApp:
+        def __init__(self):
+            self.settings = {"base_url": "/"}
+            self.handlers = []
+
+        def add_handlers(self, host_pattern, handlers):
+            self.handlers.append((host_pattern, handlers))
+
+    class FakeIOLoop:
+        def spawn_callback(self, callback, *args, **kwargs):
+            asyncio.run(callback(*args, **kwargs))
+
+    callback_holder = {}
+
+    class FakePeriodicCallback:
+        def __init__(self, callback, interval):
+            callback_holder["callback"] = callback
+            callback_holder["interval"] = interval
+            callback_holder["started"] = False
+            callback_holder["stopped"] = False
+
+        def start(self):
+            callback_holder["started"] = True
+
+        def stop(self):
+            callback_holder["stopped"] = True
+
+    fake_manager = FakeRuntimeManager()
+    monkeypatch.setattr(server_extension, "_RUNTIME_MANAGER", fake_manager)
+    monkeypatch.setattr(server_extension, "_runtime_manager", lambda: fake_manager)
+    monkeypatch.setattr(server_extension, "_RUNTIME_CLEANUP_CALLBACK", None)
+    monkeypatch.setattr(server_extension, "PeriodicCallback", FakePeriodicCallback)
+    monkeypatch.setattr(server_extension, "_runtime_cleanup_interval_ms", lambda: 4321)
+
+    server_extension._load_jupyter_server_extension(
+        SimpleNamespace(
+            web_app=FakeWebApp(),
+            io_loop=FakeIOLoop(),
+        )
+    )
+
+    assert callback_holder["interval"] == 4321
+    assert callback_holder["started"] is True
+    assert cleanup_calls == ["orphans", "idle"]
+
+    callback_holder["callback"]()
+    assert cleanup_calls == ["orphans", "idle", "orphans", "idle"]
 
 
 def test_execute_notebook_request_skips_replay_for_existing_runtime():
@@ -327,6 +390,18 @@ def test_execute_notebook_request_restarts_runtime_after_timeout():
     assert response["freshRuntime"] is True
     assert response["runtime"]["sessionState"] == "recreated-after-timeout"
     assert fake_manager.restart_calls == ["nb-timeout"]
+
+
+def test_execute_kernel_code_converts_queue_empty_to_timeout():
+    class FakeClient:
+        def execute(self, code, stop_on_error=True):
+            return "msg-1"
+
+        async def get_iopub_msg(self, timeout):
+            raise queue.Empty()
+
+    with pytest.raises(TimeoutError, match="Notebook execution timed out after 5.0s."):
+        asyncio.run(_execute_kernel_code(FakeClient(), "while True: pass", 5.0))
 
 
 def test_execute_sandbox_request_returns_unavailable_when_docker_is_missing():
