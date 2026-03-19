@@ -181,6 +181,7 @@ class DockerKernelRuntime:
         self.connection_file = Path(record.connection_file_path)
         self.client: AsyncKernelClient | None = None
         self.connection_ports: dict[str, int] = {}
+        self.last_interrupt_recovered = False
 
     async def start(self) -> None:
         self.workspace_path.mkdir(parents=True, exist_ok=True)
@@ -208,8 +209,18 @@ class DockerKernelRuntime:
         return await self.executor(self.client, code, timeout_s)
 
     async def interrupt(self) -> bool:
+        self.last_interrupt_recovered = False
+        if self.client is not None:
+            with contextlib.suppress(Exception):
+                msg = self.client.session.msg("interrupt_request", content={})
+                self.client.control_channel.send(msg)
+                self.last_interrupt_recovered = await self._wait_for_kernel_responsive()
+                return True
         code, _stdout, _stderr = await _run_command(["docker", "kill", "--signal=SIGINT", self.record.container_name])
-        return code == 0
+        if code != 0:
+            return False
+        self.last_interrupt_recovered = await self._wait_for_kernel_responsive()
+        return True
 
     async def restart(self) -> None:
         await self.stop(remove_workspace=False)
@@ -315,6 +326,16 @@ class DockerKernelRuntime:
                 client.stop_channels()
             raise
         self.client = client
+
+    async def _wait_for_kernel_responsive(self, timeout_s: float = 2.0) -> bool:
+        if self.client is None:
+            return False
+        await asyncio.sleep(0.15)
+        try:
+            await self.client.kernel_info(reply=True, timeout=timeout_s)
+            return True
+        except Exception:
+            return False
 
 
 class InProcessKernelRuntime:
@@ -514,6 +535,8 @@ class RuntimeManager:
         self._sessions: dict[str, RuntimeSession] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._execution_locks: dict[str, asyncio.Lock] = {}
+        self._execution_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._pending_interrupts: set[str] = set()
 
     async def ensure_runtime(self, notebook_id: str) -> dict[str, Any]:
         self._require_available_backend()
@@ -555,7 +578,21 @@ class RuntimeManager:
             self._persist_record(runtime.record)
         async with self._execution_lock_for(notebook_id):
             try:
-                result = await runtime.execute(code, timeout_s)
+                if notebook_id in self._pending_interrupts:
+                    self._pending_interrupts.discard(notebook_id)
+                    raise RuntimeError("Execution interrupted by runtime control.")
+                execution_task = asyncio.create_task(runtime.execute(code, timeout_s))
+                self._execution_tasks[notebook_id] = execution_task
+                result = await execution_task
+            except asyncio.CancelledError as exc:
+                async with self._lock_for(notebook_id):
+                    current_runtime = self._sessions.get(notebook_id)
+                    if current_runtime is runtime:
+                        runtime.record.status = "connected"
+                        runtime.record.error = "Execution interrupted by runtime control."
+                        runtime.record.last_activity_at = _utc_now()
+                        self._persist_record(runtime.record)
+                raise RuntimeError("Execution interrupted by runtime control.") from exc
             except Exception as exc:
                 async with self._lock_for(notebook_id):
                     current_runtime = self._sessions.get(notebook_id)
@@ -565,6 +602,8 @@ class RuntimeManager:
                         runtime.record.last_activity_at = _utc_now()
                         self._persist_record(runtime.record)
                 raise
+            finally:
+                self._execution_tasks.pop(notebook_id, None)
         async with self._lock_for(notebook_id):
             current_runtime = self._sessions.get(notebook_id)
             if current_runtime is runtime:
@@ -610,6 +649,11 @@ class RuntimeManager:
             runtime.record.error = None
             self._persist_record(runtime.record)
             try:
+                active_task = self._execution_tasks.get(notebook_id)
+                if active_task is not None and not active_task.done():
+                    active_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                        await active_task
                 await runtime.restart()
             except Exception as exc:
                 runtime.record.status = "error"
@@ -628,12 +672,28 @@ class RuntimeManager:
         async with self._lock_for(notebook_id):
             runtime = await self._load_or_recover_runtime(notebook_id)
             if runtime is None:
-                return {**self._disconnected_payload(notebook_id), "interrupted": False}
+                deadline = time.monotonic() + 1.5
+                while runtime is None and time.monotonic() < deadline:
+                    await asyncio.sleep(0.1)
+                    runtime = await self._load_or_recover_runtime(notebook_id)
+            if runtime is None:
+                self._pending_interrupts.add(notebook_id)
+                return {**self._disconnected_payload(notebook_id), "interrupted": True}
             runtime.record.status = "interrupting"
             runtime.record.error = None
             self._persist_record(runtime.record)
+            session_state = "existing"
             try:
+                active_task = self._execution_tasks.get(notebook_id)
                 interrupted = await runtime.interrupt()
+                self._pending_interrupts.discard(notebook_id)
+                if active_task is not None and not active_task.done():
+                    active_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                        await active_task
+                if interrupted and self.backend == "docker" and not getattr(runtime, "last_interrupt_recovered", False):
+                    await runtime.restart()
+                    session_state = "restarted-after-interrupt"
             except Exception as exc:
                 runtime.record.status = "error"
                 runtime.record.error = str(exc)
@@ -646,10 +706,10 @@ class RuntimeManager:
             if is_running:
                 self._sessions[notebook_id] = runtime
                 self._persist_record(runtime.record)
-                return {**runtime.record.to_dict(), "interrupted": interrupted}
+                return {**runtime.record.to_dict(), "interrupted": interrupted, "sessionState": session_state}
             self._sessions.pop(notebook_id, None)
             self._delete_record(notebook_id)
-            return {**self._disconnected_payload(notebook_id), "interrupted": interrupted}
+            return {**self._disconnected_payload(notebook_id), "interrupted": interrupted, "sessionState": session_state}
 
     async def delete_runtime(self, notebook_id: str) -> dict[str, Any]:
         if self.backend == "unavailable":
@@ -660,6 +720,11 @@ class RuntimeManager:
                 runtime.record.status = "deleting"
                 self._persist_record(runtime.record)
                 try:
+                    active_task = self._execution_tasks.get(notebook_id)
+                    if active_task is not None and not active_task.done():
+                        active_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, RuntimeError):
+                            await active_task
                     await runtime.stop(remove_workspace=True)
                 finally:
                     self._sessions.pop(notebook_id, None)
@@ -684,11 +749,12 @@ class RuntimeManager:
             removed_notebooks.append(record.notebook_id)
         return {"removedNotebookIds": removed_notebooks}
 
-    async def _cleanup_idle_runtimes(self) -> None:
+    async def cleanup_idle_runtimes(self) -> dict[str, Any]:
+        removed_notebooks: list[str] = []
         if self.backend == "unavailable":
-            return
+            return {"removedNotebookIds": removed_notebooks}
         if self.idle_timeout_s <= 0:
-            return
+            return {"removedNotebookIds": removed_notebooks}
         now = time.time()
         for metadata_path in self.metadata_root.glob("*.json"):
             payload = self._load_record_file(metadata_path)
@@ -703,6 +769,11 @@ class RuntimeManager:
             await runtime.stop(remove_workspace=True)
             self._sessions.pop(record.notebook_id, None)
             self._delete_record(record.notebook_id)
+            removed_notebooks.append(record.notebook_id)
+        return {"removedNotebookIds": removed_notebooks}
+
+    async def _cleanup_idle_runtimes(self) -> None:
+        await self.cleanup_idle_runtimes()
 
     def _create_runtime(self, notebook_id: str, existing_record: RuntimeRecord | None = None) -> RuntimeSession:
         record = existing_record or RuntimeRecord(

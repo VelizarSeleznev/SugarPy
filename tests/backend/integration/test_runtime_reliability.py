@@ -17,6 +17,7 @@ class ControllableRuntime:
         self.stopped: list[bool] = []
         self.execute_calls: list[str] = []
         self.attachable = True
+        self.last_interrupt_recovered = True
         self.interrupt_event = asyncio.Event()
         self.execution_started = asyncio.Event()
         self.hold_execution = False
@@ -193,11 +194,37 @@ def test_runtime_reliability_interrupt_restart_and_delete_can_preempt_active_exe
     interrupted, restarted, deleted = asyncio.run(exercise_controls())
 
     assert interrupted["interrupted"] is True
+    assert interrupted["sessionState"] == "existing"
     assert runtime.interrupted == 1
-    assert restarted["status"] == "connected"
     assert runtime.restarted == 1
+    assert restarted["status"] == "connected"
     assert deleted["status"] == "disconnected"
     assert runtime.stopped[-1] is True
+
+
+def test_runtime_reliability_interrupt_restarts_busy_runtime_when_kernel_does_not_recover(tmp_path: Path):
+    manager = ControllableRuntimeManager(tmp_path)
+    runtime = manager._create_runtime("nb-control-restart")
+    runtime.hold_execution = True
+    runtime.running = True
+    runtime.last_interrupt_recovered = False
+    manager._sessions["nb-control-restart"] = runtime
+    manager._persist_record(runtime.record)
+
+    async def exercise_interrupt():
+        execute_task = asyncio.create_task(manager.execute_code("nb-control-restart", "block_forever()", 20.0))
+        await runtime.execution_started.wait()
+        interrupted = await manager.interrupt_runtime("nb-control-restart")
+        with contextlib.suppress(Exception):
+            await execute_task
+        return interrupted
+
+    interrupted = asyncio.run(exercise_interrupt())
+
+    assert interrupted["interrupted"] is True
+    assert interrupted["sessionState"] == "restarted-after-interrupt"
+    assert runtime.interrupted == 1
+    assert runtime.restarted == 1
 
 
 def test_runtime_reliability_large_stdout_is_bounded(tmp_path: Path, monkeypatch):

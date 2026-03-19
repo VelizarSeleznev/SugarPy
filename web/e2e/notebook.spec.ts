@@ -285,6 +285,12 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const openTypedAssistant = async (page: any) => {
+  await page.getByTestId('assistant-photo-entry').click();
+  await page.getByTestId('assistant-open-chat').click();
+  await expect(page.getByTestId('assistant-prompt')).toBeVisible();
+};
+
 const setMathInLastCell = async (page: any, source: string) => {
   const mathCell = page.locator('[data-testid="cell-row-math"]').last();
   const editor = mathCell.locator('.cm-content').first();
@@ -877,6 +883,33 @@ test.describe('Notebook CAS outputs', () => {
     expect(metrics.overflowX).toBe(false);
   });
 
+  test('Notebook chrome: iPhone more menu stays onscreen and scrolls internally', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'More actions' }).click();
+    const metrics = await page.locator('.header-menu').evaluate((menu) => {
+      const rect = menu.getBoundingClientRect();
+      const styles = getComputedStyle(menu);
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        right: rect.right,
+        left: rect.left,
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+        overflowY: styles.overflowY,
+        scrollHeight: menu.scrollHeight,
+        clientHeight: menu.clientHeight
+      };
+    });
+    expect(metrics.left).toBeGreaterThanOrEqual(0);
+    expect(metrics.right).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.top).toBeGreaterThanOrEqual(0);
+    expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight);
+    expect(['auto', 'scroll']).toContain(metrics.overflowY);
+    expect(metrics.scrollHeight).toBeGreaterThanOrEqual(metrics.clientHeight);
+  });
+
   test('@smoke Math Test: renders SymPy formula via KaTeX', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
@@ -992,6 +1025,7 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByRole('button', { name: 'More actions' }).click();
     await page.getByRole('button', { name: 'Clear Outputs' }).click();
 
+    await expect(page.locator('.header-menu')).toBeHidden();
     await expect(page.getByTestId('cell-row-code').first().getByTestId('cell-error')).toHaveCount(0);
     const mathCell = page.locator('[data-testid="cell-row-math"]').last();
     await expect(mathCell.getByTestId('math-latex')).toHaveCount(0);
@@ -1000,6 +1034,18 @@ test.describe('Notebook CAS outputs', () => {
     await mathCell.getByTestId('math-output').click();
     await expect(mathCell.locator('.cm-content')).toContainText('x^2 = 2');
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Notebook menu: Import notebook closes the menu before opening the file chooser', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await expect(page.locator('.header-menu')).toBeVisible();
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.getByRole('button', { name: 'Import notebook' }).click()
+    ]);
+    expect(chooser.isMultiple()).toBe(false);
+    await expect(page.locator('.header-menu')).toBeHidden();
   });
 
   test('Math equation: x^2 = 2 renders in Math cell', async ({ page }) => {
@@ -1024,6 +1070,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.getByRole('button', { name: 'More actions' }).click();
     await page.getByRole('button', { name: 'New Notebook' }).click();
+    await expect(page.locator('.header-menu')).toBeHidden();
     await addCodeCellToEmptyNotebook(page);
 
     const freshCell = page.locator('[data-testid="cell-row-code"]').first();
@@ -1201,7 +1248,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('test-key');
     await page.getByTestId('assistant-prompt').fill('Add a code cell that computes 2 + 2 and run it.');
@@ -1214,7 +1261,7 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
     await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
     await expect(page.getByText('Add code cell at 2')).toBeVisible();
-    await page.getByTestId('assistant-reject-draft').click();
+    await page.getByTestId('assistant-reject-draft').evaluate((element: HTMLElement) => element.click());
     await expect(page.getByTestId('assistant-preview')).toHaveCount(0);
     await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
     await expectNoGlobalErrors(page, guards);
@@ -1241,7 +1288,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await page.getByTestId('assistant-photo-entry').click();
     await page.getByTestId('assistant-settings-toggle').click();
     await expect(page.getByTestId('assistant-api-key')).toHaveAttribute('placeholder', 'Using shared key by default');
     await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
@@ -1261,6 +1308,187 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
     await expect(page.locator('.assistant-photo-meta')).toContainText('photo.png');
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: photo-first entry opens the drawer and typed chat stays secondary', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+    await expect(page.locator('.assistant-drawer.open')).toBeVisible();
+    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
+    await expect(page.getByTestId('assistant-prompt')).toHaveCount(0);
+    await page.getByTestId('assistant-open-chat').click();
+    await expect(page.getByTestId('assistant-prompt')).toBeVisible();
+  });
+
+  test('Assistant preview: failed validation keeps the proposed draft visible and blocks acceptance', async ({ page }) => {
+    let requestCount = 0;
+    await page.route('**/api/sandbox', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          target: 'code',
+          status: 'error',
+          stdout: '',
+          stderr: '',
+          mimeData: {},
+          errorName: 'ZeroDivisionError',
+          errorValue: 'division by zero',
+          durationMs: 12,
+          contextPresetUsed: 'bootstrap-only',
+          selectedCellIds: [],
+          executedBootstrap: true,
+          replayedCellIds: [],
+          contextSourcesUsed: ['bootstrap'],
+          attempts: [
+            {
+              status: 'error',
+              contextPresetUsed: 'bootstrap-only',
+              selectedCellIds: [],
+              replayedCellIds: [],
+              contextSourcesUsed: ['bootstrap'],
+              executedBootstrap: true,
+              durationMs: 12,
+              errorName: 'ZeroDivisionError',
+              errorValue: 'division by zero'
+            }
+          ]
+        })
+      });
+    });
+    await page.route('https://api.openai.com/**', async (route) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_failed_1',
+            output: [
+              {
+                type: 'message',
+                content: [{ type: 'output_text', text: 'Inspection complete.' }]
+              }
+            ]
+          })
+        });
+        return;
+      }
+      if (requestCount === 2) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_failed_2',
+            output: [
+              {
+                type: 'function_call',
+                name: 'set_plan_metadata',
+                arguments: JSON.stringify({
+                  summary: 'Add a code cell that computes a value.',
+                  userMessage: 'Preview ready.',
+                  warnings: []
+                }),
+                call_id: 'set-plan-failed-1'
+              },
+              {
+                type: 'function_call',
+                name: 'add_plan_operation',
+                arguments: JSON.stringify({
+                  type: 'insert_cell',
+                  index: 1,
+                  cellType: 'code',
+                  source: 'value = 1 / 0\nvalue',
+                  cellId: null,
+                  trigMode: null,
+                  renderMode: null,
+                  reason: 'Try the requested computation.'
+                }),
+                call_id: 'add-plan-failed-1'
+              },
+              {
+                type: 'function_call',
+                name: 'finalize_plan',
+                arguments: '{}',
+                call_id: 'finalize-plan-failed-1'
+              }
+            ]
+          })
+        });
+        return;
+      }
+      if (requestCount === 3) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            id: 'resp_failed_3',
+            output: [
+              {
+                type: 'function_call',
+                name: 'run_code_in_sandbox',
+                arguments: JSON.stringify({
+                  code: 'value = 1 / 0\nvalue',
+                  contextPreset: 'bootstrap-only',
+                  selectedCellIds: [],
+                  timeoutMs: 5000
+                }),
+                call_id: 'sandbox-failed-call'
+              }
+            ]
+          })
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'resp_failed_4',
+          output: [
+            {
+              type: 'function_call',
+              name: 'submit_plan',
+              arguments: JSON.stringify({
+                summary: 'Add a code cell that computes a value.',
+                userMessage: 'Validation failed.',
+                warnings: [],
+                operations: [
+                  {
+                    type: 'insert_cell',
+                    index: 1,
+                    cellType: 'code',
+                    source: 'value = 1 / 0\nvalue',
+                    cellId: null,
+                    trigMode: null,
+                    renderMode: null,
+                    reason: 'Keep the failed proposal visible for review.'
+                  }
+                ]
+              }),
+              call_id: 'submit-plan-failed-2'
+            }
+          ]
+        })
+      });
+    });
+
+    await page.goto('/');
+    await openTypedAssistant(page);
+    await page.getByTestId('assistant-settings-toggle').click();
+    await page.getByTestId('assistant-api-key').fill('sk-test');
+    await page.getByTestId('assistant-prompt').fill('Add a code cell that computes a value.');
+    await page.getByTestId('assistant-generate').click();
+
+    await expect(page.getByTestId('assistant-preview')).toBeVisible();
+    await expect(page.getByTestId('assistant-draft-failure-banner')).toContainText('not changed');
+    await expect(page.getByTestId('assistant-step-status')).toContainText('Failed');
+    await expect(page.locator('.assistant-op-source code')).toContainText('value = 1 / 0');
+    await expect(page.locator('.assistant-validation-detail')).toContainText('bootstrap only');
+    await expect(page.locator('.assistant-error.inline').last()).toContainText('division by zero');
+    await expect(page.getByTestId('assistant-accept-all')).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Accept step' })).toBeDisabled();
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(0);
   });
 
   test('Assistant sandbox: validated revised draft applies only after Accept all', async ({ page }) => {
@@ -1389,7 +1617,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Add a code cell that computes a safe demo value.');
@@ -1530,7 +1758,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Draft a helper cell but do not apply it.');
@@ -1670,7 +1898,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Add a code cell that computes 2 + 2 and run it.');
@@ -1713,7 +1941,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Inspect the notebook and propose nothing.');
@@ -1767,7 +1995,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Inspect this notebook and propose nothing.');
@@ -1894,7 +2122,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Inspect this notebook and propose nothing.');
@@ -1977,7 +2205,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await expect(page.locator('.file-name-input')).toHaveValue('Assistant CAS Fixture');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Inspect this notebook and propose nothing.');
@@ -2040,7 +2268,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await expect(page.locator('.file-name-input')).toHaveValue('Assistant Degree Fixture');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Plot a circle safely for this notebook.');
@@ -2086,7 +2314,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill(
@@ -2201,7 +2429,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page
@@ -2311,7 +2539,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page
@@ -2418,7 +2646,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page
@@ -2500,7 +2728,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page
@@ -2555,7 +2783,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Find the circle equations.');
@@ -2641,7 +2869,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await expect(page.locator('.file-name-input')).toHaveValue('Assistant Error Fixture');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Check the recent error and suggest a fix.');
@@ -2783,7 +3011,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Add a statistics example.');
@@ -2930,7 +3158,7 @@ test.describe('Notebook CAS outputs', () => {
     });
 
     await page.goto('/');
-    await page.getByTestId('assistant-toggle').click();
+    await openTypedAssistant(page);
     await page.getByTestId('assistant-settings-toggle').click();
     await page.getByTestId('assistant-api-key').fill('sk-test');
     await page.getByTestId('assistant-prompt').fill('Double the helper value in a new cell.');
@@ -2953,7 +3181,7 @@ test.describe('Notebook CAS outputs', () => {
     await page.locator('.file-name-input').click();
     await expect(page.locator('.header-menu')).toBeHidden();
 
-    await page.getByTestId('assistant-toggle').click();
+    await page.getByTestId('assistant-photo-entry').click();
     await expect(page.locator('.assistant-drawer.open')).toBeVisible();
     await page.locator('.file-name-input').click();
     await expect(page.locator('.assistant-drawer.open')).toHaveCount(0);

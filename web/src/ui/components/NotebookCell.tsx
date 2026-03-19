@@ -17,6 +17,7 @@ type Props = {
   onAddBelow: () => void;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
+  onStop: () => void;
   onRunMath: (value: string) => void;
   onRunStoich: (state: StoichState) => void;
   onChangeStoich: (state: StoichState) => void;
@@ -82,6 +83,7 @@ export function NotebookCell({
   onAddBelow,
   onChange,
   onRun,
+  onStop,
   onRunMath,
   onRunStoich,
   onChangeStoich,
@@ -162,7 +164,9 @@ export function NotebookCell({
         isActive={isActive}
         isLastActive={isLastActive}
         status={statusFromCell(cell)}
+        isRunning={!!cell.isRunning}
         onRun={runHandler}
+        onStop={cell.isRunning ? onStop : undefined}
         onActivate={onActivate}
         quickActions={[
           ...(cellType !== 'math' && outputAvailable

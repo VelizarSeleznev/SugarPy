@@ -76,9 +76,15 @@ export function OutputArea({ output }: Props) {
   }, [plotFigure]);
 
   if (output.type === 'error') {
+    const errorName = asText(output.ename).trim() || 'ExecutionError';
+    const errorValue = asText(output.evalue).trim();
+    const errorText =
+      errorValue || errorName === 'Empty'
+        ? `${errorName}: ${errorValue || 'Execution timed out while waiting for kernel output.'}`
+        : errorName;
     return (
       <div className="output output-plain cell-error" data-testid="cell-error" data-block-cell-swipe="true">
-        {output.ename}: {output.evalue}
+        {errorText}
       </div>
     );
   }

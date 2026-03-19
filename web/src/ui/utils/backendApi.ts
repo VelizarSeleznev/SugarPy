@@ -64,6 +64,7 @@ export type SugarPyNotebookRuntime = {
   error?: string | null;
   interrupted?: boolean;
   freshRuntime?: boolean;
+  sessionState?: string;
 };
 
 const resolveApiRoot = () => {

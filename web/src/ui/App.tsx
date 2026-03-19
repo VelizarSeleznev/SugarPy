@@ -352,7 +352,42 @@ const readImageDimensions = (dataUrl: string) =>
     image.src = dataUrl;
   });
 
+const RunAllIcon = () => (
+  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+    <path d="M3 3.25v9.5L7.9 8 3 3.25Z" fill="currentColor" />
+    <path d="M8.1 3.25v9.5L13 8 8.1 3.25Z" fill="currentColor" opacity="0.82" />
+  </svg>
+);
+
+const StopIcon = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+    <rect x="3.25" y="3.25" width="9.5" height="9.5" rx="1.8" fill="currentColor" />
+  </svg>
+);
+
+const PhotoImportIcon = () => (
+  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+    <path
+      d="M2.5 4.25A1.75 1.75 0 0 1 4.25 2.5h2.1l.7.95h4.7A1.75 1.75 0 0 1 13.5 5.2v6.55a1.75 1.75 0 0 1-1.75 1.75h-7.5A1.75 1.75 0 0 1 2.5 11.75v-7.5Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+    />
+    <circle cx="5.35" cy="6.1" r="1.05" fill="currentColor" />
+    <path
+      d="m4.1 11 2.2-2.35 1.7 1.55 1.65-1.85L11.9 11"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 function App() {
+  const [assistantEntryMode, setAssistantEntryMode] = useState<'photo-import' | 'chat'>('photo-import');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -367,6 +402,7 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string>('');
+  const [runtimeNotice, setRuntimeNotice] = useState<string>('');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [lastActiveCellId, setLastActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
@@ -555,6 +591,10 @@ function App() {
     setIsRunningAll(false);
   };
 
+  const showRuntimeResetNotice = (message: string) => {
+    setRuntimeNotice(message);
+  };
+
   const getDragInsertionIndex = (clientY: number) => {
     const stack = notebookStackRef.current;
     if (!stack) return 0;
@@ -716,11 +756,23 @@ function App() {
     invalidateActiveExecutions();
     try {
       const runtime = await interruptNotebookRuntime(notebookId);
+      const restartedAfterInterrupt = runtime.sessionState === 'restarted-after-interrupt';
       const message = runtime.interrupted
-        ? 'Execution interrupted.'
+        ? restartedAfterInterrupt
+          ? 'Execution interrupted. Runtime restarted to clear the busy kernel.'
+          : 'Execution interrupted.'
         : runtime.error || 'Runtime interrupt was requested.';
       clearRunningState(message);
-      setSyncMessage(runtime.interrupted ? 'Runtime interrupt sent.' : message);
+      if (restartedAfterInterrupt) {
+        showRuntimeResetNotice('Runtime restarted after interrupt. Previous outputs may be stale; rerun setup cells or use Run All.');
+      }
+      setSyncMessage(
+        runtime.interrupted
+          ? restartedAfterInterrupt
+            ? 'Runtime interrupted and restarted.'
+            : 'Runtime interrupt sent.'
+          : message
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to interrupt runtime.';
       clearRunningState(message);
@@ -734,6 +786,7 @@ function App() {
     try {
       await restartNotebookRuntime(notebookId);
       clearRunningState('Runtime restarted. Rerun setup cells or use Run All.');
+      showRuntimeResetNotice('Runtime restarted. Previous outputs belong to the old kernel; rerun setup cells or use Run All.');
       setSyncMessage('Runtime restarted.');
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : 'Failed to restart runtime.');
@@ -746,6 +799,7 @@ function App() {
     try {
       await deleteNotebookRuntime(notebookId);
       clearRunningState('Runtime deleted. The next execution will start a fresh runtime.');
+      showRuntimeResetNotice('Runtime deleted. The next run will start a fresh kernel, so existing outputs may be stale.');
       setSyncMessage('Runtime deleted.');
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : 'Failed to delete runtime.');
@@ -1139,6 +1193,7 @@ function App() {
     );
 
   const applyExecutionResult = (cellId: string, response: SugarPyExecutionResponse, countExecution = true) => {
+    const shouldAnnounceFreshRuntime = response.freshRuntime && execCounter > 0;
     const updateCellState = (nextExecCount?: number) => {
       setCells((prev) =>
         prev.map((cell) => {
@@ -1182,6 +1237,7 @@ function App() {
         })
       );
     };
+    setRuntimeNotice('');
     if (countExecution && response.execCountIncrement) {
       setExecCounter((prev) => {
         const next = prev + 1;
@@ -1191,14 +1247,16 @@ function App() {
     } else {
       updateCellState();
     }
-    if (response.freshRuntime) {
+    if (shouldAnnounceFreshRuntime) {
       setSyncMessage('Fresh runtime started. Rerun setup cells or use Run All.');
+      showRuntimeResetNotice('Fresh runtime started. Kernel state was reset, so rerun setup cells or use Run All.');
     }
   };
 
   const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
     if (!activeKernel) return;
     const executionGeneration = executionGenerationRef.current;
+    setRuntimeNotice('');
     setCells((prev) =>
       prev.map((cell) =>
         cell.id === cellId
@@ -1261,6 +1319,7 @@ function App() {
   ) => {
     if (!activeKernel) return;
     const executionGeneration = executionGenerationRef.current;
+    setRuntimeNotice('');
     const cell = cells.find((entry) => entry.id === cellId);
     const renderMode =
       renderModeOverride ??
@@ -1317,6 +1376,7 @@ function App() {
   const runStoichCell = async (cellId: string, state: StoichState) => {
     if (!activeKernel) return;
     const executionGeneration = executionGenerationRef.current;
+    setRuntimeNotice('');
     setCells((prev) =>
       prev.map((c) =>
         c.id === cellId
@@ -2141,6 +2201,12 @@ function App() {
       assistantHistoryNotebookRef.current = notebookId;
     }
   }, [notebookId]);
+
+  const openAssistantDrawer = (mode: 'photo-import' | 'chat') => {
+    setAssistantEntryMode(mode);
+    setAssistantOpen(true);
+    void hydrateAssistantRuntimeConfig();
+  };
 
   useEffect(() => {
     return () => {
@@ -3025,6 +3091,7 @@ function App() {
 
   const handleNewNotebook = () => {
     if (!confirmDiscard()) return;
+    setHeaderMenuOpen(false);
     const nextId = createNotebookId();
     const nextCells: CellModel[] = [];
     setNotebookId(nextId);
@@ -3057,6 +3124,7 @@ function App() {
   };
 
   const handleDownloadSugarPy = () => {
+    setHeaderMenuOpen(false);
     const payload = serializeSugarPy({
       id: notebookId,
       name: notebookName,
@@ -3071,6 +3139,7 @@ function App() {
   };
 
   const handleDownloadIpynb = () => {
+    setHeaderMenuOpen(false);
     const payload = serializeIpynb({
       id: notebookId,
       name: notebookName,
@@ -3083,6 +3152,7 @@ function App() {
   };
 
   const handleSaveToServer = async () => {
+    setHeaderMenuOpen(false);
     const payload = serializeSugarPy({
       id: notebookId,
       name: notebookName,
@@ -3110,6 +3180,7 @@ function App() {
   };
 
   const handleImportClick = () => {
+    setHeaderMenuOpen(false);
     fileInputRef.current?.click();
   };
 
@@ -3175,6 +3246,7 @@ function App() {
   };
 
   const handleExportPdf = () => {
+    setHeaderMenuOpen(false);
     const body = document.body;
     body.classList.add('print-mode');
 
@@ -3257,29 +3329,39 @@ function App() {
                 </div>
               ) : null}
             </div>
-            <button className="button" onClick={runAllCells} disabled={isRunningAll || status === 'connecting'}>
-              {isRunningAll ? 'Running…' : 'Run All'}
-            </button>
             <button
-              className="button danger"
-              onClick={() => void stopNotebookRuntimeExecution()}
-              disabled={!hasRunningCells}
+              className={`button header-action-button${hasRunningCells ? ' danger is-stop' : ''}`}
+              data-testid="runtime-toggle-button"
+              aria-label={hasRunningCells ? 'Stop Runtime' : 'Run All'}
+              onClick={() => {
+                if (hasRunningCells) {
+                  void stopNotebookRuntimeExecution();
+                  return;
+                }
+                void runAllCells();
+              }}
+              disabled={status === 'connecting'}
             >
-              Stop Runtime
+              <span className="header-action-icon" aria-hidden="true">
+                {hasRunningCells ? <StopIcon /> : <RunAllIcon />}
+              </span>
+              <span className="header-action-label">{hasRunningCells ? 'Stop Runtime' : 'Run All'}</span>
             </button>
             <button
               ref={assistantToggleRef}
-              className="button secondary"
-              data-testid="assistant-toggle"
+              className="button assistant-entry-button header-action-button"
+              data-testid="assistant-photo-entry"
+              aria-label="Import from photo"
               onClick={() => {
-                const nextOpen = !assistantOpen;
-                setAssistantOpen(nextOpen);
-                if (nextOpen) {
-                  void hydrateAssistantRuntimeConfig();
+                if (assistantOpen && assistantEntryMode === 'photo-import') {
+                  setAssistantOpen(false);
+                  return;
                 }
+                openAssistantDrawer('photo-import');
               }}
             >
-              Assistant
+              <span className="header-action-icon" aria-hidden="true"><PhotoImportIcon /></span>
+              <span className="header-action-label">Import from photo</span>
             </button>
             <div className="header-menu-wrap" ref={headerMenuRef}>
               <button
@@ -3297,23 +3379,46 @@ function App() {
                     {dirty ? ' · editing…' : ''}
                     {syncMessage ? ` · ${syncMessage}` : ''}
                   </div>
-                  <button className="menu-item" onClick={connectBackend}>
+                  <button className="menu-item" onClick={() => {
+                    setHeaderMenuOpen(false);
+                    void connectBackend();
+                  }}>
                     {activeKernel ? 'Restricted Runtime Ready' : 'Reconnect Backend'}
                   </button>
-                  <button className="menu-item" onClick={() => void handleRestartNotebookRuntime()}>
+                  <button
+                    className="menu-item"
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
+                      void stopNotebookRuntimeExecution();
+                    }}
+                    disabled={!hasRunningCells}
+                  >
+                    Stop Runtime
+                  </button>
+                  <button className="menu-item" onClick={() => {
+                    setHeaderMenuOpen(false);
+                    void handleRestartNotebookRuntime();
+                  }}>
                     Restart Notebook Runtime
                   </button>
-                  <button className="menu-item" onClick={() => void handleDeleteNotebookRuntime()}>
+                  <button className="menu-item" onClick={() => {
+                    setHeaderMenuOpen(false);
+                    void handleDeleteNotebookRuntime();
+                  }}>
                     Delete Notebook Runtime
                   </button>
-                  <button className="menu-item" onClick={() => setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'))}>
+                  <button className="menu-item" onClick={() => {
+                    setHeaderMenuOpen(false);
+                    setTrigMode((prev) => (prev === 'deg' ? 'rad' : 'deg'));
+                  }}>
                     Default Math Angle Mode: {trigMode === 'deg' ? 'Degrees' : 'Radians'}
                   </button>
                   <button
                     className="menu-item"
-                    onClick={() =>
-                      setDefaultMathRenderMode((prev) => (prev === 'decimal' ? 'exact' : 'decimal'))
-                    }
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
+                      setDefaultMathRenderMode((prev) => (prev === 'decimal' ? 'exact' : 'decimal'));
+                    }}
                   >
                     Default Math Display: {defaultMathRenderMode === 'decimal' ? 'Decimal' : 'Exact'}
                   </button>
@@ -3323,10 +3428,10 @@ function App() {
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
                   <button className="menu-item" onClick={handleDownloadIpynb}>Download .ipynb</button>
                   <button className="menu-item" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
-                  <button className="menu-item" onClick={handleImportClick}>Import</button>
+                  <button className="menu-item" onClick={handleImportClick}>Import notebook</button>
                   <button className="menu-item" onClick={handleNewNotebook}>New Notebook</button>
                   <div className="menu-section-label">Reference</div>
-                  <a className="menu-item" href="/wiki" target="_blank" rel="noreferrer">
+                  <a className="menu-item" href="/wiki" target="_blank" rel="noreferrer" onClick={() => setHeaderMenuOpen(false)}>
                     Open Wiki
                   </a>
                 </div>
@@ -3339,6 +3444,11 @@ function App() {
           {status === 'error' ? (
             <div className="output">
               {errorMsg}
+            </div>
+          ) : null}
+          {runtimeNotice ? (
+            <div className="runtime-notice" role="status">
+              {runtimeNotice}
             </div>
           ) : null}
 
@@ -3438,6 +3548,9 @@ function App() {
                         onAddBelow={() => insertSiblingCell(cell.id, 'below')}
                         onChange={(value) => updateCell(cell.id, value)}
                         onRun={(value) => runCell(cell.id, value)}
+                        onStop={() => {
+                          void stopNotebookRuntimeExecution();
+                        }}
                         onRunMath={(value) =>
                           runMathCell(
                             cell.id,
@@ -3565,6 +3678,7 @@ function App() {
         <div ref={assistantDrawerRef}>
           <AssistantDrawer
             open={assistantOpen}
+            entryMode={assistantEntryMode}
             apiKey={assistantApiKey}
             hasDefaultApiKey={assistantDefaultProviderAvailable}
             model={assistantModel}
@@ -3588,6 +3702,7 @@ function App() {
                 : null
             }
             onClose={() => setAssistantOpen(false)}
+            onOpenChat={() => openAssistantDrawer('chat')}
             onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
             onChangeApiKey={setAssistantApiKey}
             onChangeModel={setAssistantModel}
