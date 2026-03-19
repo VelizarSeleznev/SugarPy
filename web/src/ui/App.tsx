@@ -1548,7 +1548,8 @@ function App() {
       type: cell.type ?? 'code',
       source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
       mathTrigMode: cell.mathTrigMode,
-      mathRenderMode: cell.mathRenderMode
+      mathRenderMode: cell.mathRenderMode,
+      contextSource: 'notebook'
     }));
 
   const runAssistantSandbox = async (
@@ -1604,7 +1605,8 @@ function App() {
       type: cell.type ?? 'code',
       source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
       mathTrigMode: cell.mathTrigMode,
-      mathRenderMode: cell.mathRenderMode
+      mathRenderMode: cell.mathRenderMode,
+      contextSource: 'notebook'
     }));
 
   const runAssistantSandboxForCells = async (
@@ -1671,6 +1673,13 @@ function App() {
     result: Awaited<ReturnType<typeof runAssistantSandbox>>
   ): AssistantValidationSummary => {
     const rawPreview = describeValidationPreview(result).replace(/\s+/g, ' ').trim();
+    const contextSummary =
+      result.replayedCellIds.length > 0
+        ? `${result.contextPresetUsed} using ${result.replayedCellIds.length} prior cell${result.replayedCellIds.length === 1 ? '' : 's'}`
+        : result.executedBootstrap || result.contextPresetUsed === 'bootstrap-only'
+          ? 'bootstrap only'
+          : 'isolation only';
+    const attemptSuffix = (result.attempts?.length ?? 0) > 1 ? ` after ${result.attempts?.length} attempts` : '';
     const errorSummary =
       result.status === 'error'
         ? result.mathValidation?.error || result.errorValue || result.errorName || 'Validation failed.'
@@ -1682,6 +1691,7 @@ function App() {
       outputKind: describeValidationOutputKind(source, result),
       outputPreview: rawPreview || (result.status === 'ok' ? 'No visible output.' : ''),
       errorSummary,
+      contextSummary: `${contextSummary}${attemptSuffix}`,
       replayContextUsed: result.contextPresetUsed,
       replayedCellIds: result.replayedCellIds
     };
@@ -1698,7 +1708,8 @@ function App() {
       const nextCell: AssistantSandboxNotebookCell = {
         id: nextCellId,
         type: operation.cellType,
-        source: operation.source
+        source: operation.source,
+        contextSource: 'draft'
       };
       const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
       nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];

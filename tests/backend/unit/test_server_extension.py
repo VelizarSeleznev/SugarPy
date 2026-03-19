@@ -213,10 +213,17 @@ def test_execute_notebook_request_skips_replay_for_existing_runtime():
 
 
 def test_runtime_config_keeps_live_docker_execution_unrestricted_but_sandbox_restricted(monkeypatch):
-    monkeypatch.setenv("SUGARPY_NOTEBOOK_RUNTIME_BACKEND", "docker")
     monkeypatch.setenv("SUGARPY_SECURITY_PROFILE", "restricted-demo")
-
-    config = _load_assistant_server_config()
+    original_factory = server_extension._runtime_manager
+    original_manager = server_extension._RUNTIME_MANAGER
+    fake_manager = type("FakeRuntimeManager", (), {"backend": "docker"})()
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        config = _load_assistant_server_config()
+    finally:
+        server_extension._RUNTIME_MANAGER = original_manager
+        server_extension._runtime_manager = original_factory
 
     assert config["execution"]["ephemeral"] is False
     assert config["execution"]["networkEnabled"] is True
@@ -348,3 +355,187 @@ def test_execute_sandbox_request_returns_unavailable_when_docker_is_missing():
 
     assert response["status"] == "error"
     assert response["errorName"] == "SandboxUnavailable"
+
+
+def test_execute_sandbox_request_selected_cells_replays_only_requested_cells():
+    class FakeRuntimeManager:
+        backend = "docker"
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute_in_runtime(self, notebook_id, code, timeout_s):
+            self.calls.append((notebook_id, code, timeout_s))
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "",
+                    "stderr": "",
+                    "mimeData": {"text/plain": "42"},
+                    "errorName": None,
+                    "errorValue": None,
+                    "durationMs": 12,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+        async def delete_runtime(self, notebook_id):
+            return {"notebookId": notebook_id}
+
+    fake_manager = FakeRuntimeManager()
+    original_factory = server_extension._runtime_manager
+    original_manager = server_extension._RUNTIME_MANAGER
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_sandbox_request(
+                {
+                    "request": {
+                        "target": "code",
+                        "code": "helper * 2",
+                        "contextPreset": "selected-cells",
+                        "selectedCellIds": ["cell-helper"],
+                        "timeoutMs": 5000,
+                    },
+                    "notebookCells": [
+                        {"id": "cell-helper", "type": "code", "source": "helper = 21", "contextSource": "notebook"},
+                        {"id": "cell-other", "type": "code", "source": "other = 5", "contextSource": "notebook"},
+                    ],
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = original_manager
+        server_extension._runtime_manager = original_factory
+
+    executed_code = fake_manager.calls[0][1]
+    assert "helper = 21" in executed_code
+    assert "other = 5" not in executed_code
+    assert "helper * 2" in executed_code
+    assert response["contextPresetUsed"] == "selected-cells"
+    assert response["selectedCellIds"] == ["cell-helper"]
+    assert response["replayedCellIds"] == ["cell-helper"]
+    assert response["contextSourcesUsed"] == ["notebook"]
+
+
+def test_execute_sandbox_request_imports_only_replays_only_import_cells():
+    class FakeRuntimeManager:
+        backend = "docker"
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute_in_runtime(self, notebook_id, code, timeout_s):
+            self.calls.append((notebook_id, code, timeout_s))
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "",
+                    "stderr": "",
+                    "mimeData": {"text/plain": "3"},
+                    "errorName": None,
+                    "errorValue": None,
+                    "durationMs": 12,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+        async def delete_runtime(self, notebook_id):
+            return {"notebookId": notebook_id}
+
+    fake_manager = FakeRuntimeManager()
+    original_factory = server_extension._runtime_manager
+    original_manager = server_extension._RUNTIME_MANAGER
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_sandbox_request(
+                {
+                    "request": {
+                        "target": "code",
+                        "code": "statistics.mean([2, 4])",
+                        "contextPreset": "imports-only",
+                        "timeoutMs": 5000,
+                    },
+                    "notebookCells": [
+                        {"id": "cell-imports", "type": "code", "source": "import statistics", "contextSource": "notebook"},
+                        {"id": "cell-helper", "type": "code", "source": "helper = 21", "contextSource": "notebook"},
+                    ],
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = original_manager
+        server_extension._runtime_manager = original_factory
+
+    executed_code = fake_manager.calls[0][1]
+    assert "import statistics" in executed_code
+    assert "helper = 21" not in executed_code
+    assert response["replayedCellIds"] == ["cell-imports"]
+    assert response["contextSourcesUsed"] == ["notebook"]
+
+
+def test_execute_sandbox_request_full_notebook_replay_includes_prior_math_and_draft_context():
+    class FakeRuntimeManager:
+        backend = "docker"
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute_in_runtime(self, notebook_id, code, timeout_s):
+            self.calls.append((notebook_id, code, timeout_s))
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "",
+                    "stderr": "",
+                    "mimeData": {},
+                    "errorName": None,
+                    "errorValue": None,
+                    "durationMs": 12,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+        async def delete_runtime(self, notebook_id):
+            return {"notebookId": notebook_id}
+
+    fake_manager = FakeRuntimeManager()
+    original_factory = server_extension._runtime_manager
+    original_manager = server_extension._RUNTIME_MANAGER
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_sandbox_request(
+                {
+                    "request": {
+                        "target": "math",
+                        "source": "a + b",
+                        "contextPreset": "full-notebook-replay",
+                        "trigMode": "deg",
+                        "renderMode": "exact",
+                        "timeoutMs": 5000,
+                    },
+                    "bootstrapCode": "def helper_value():\n    return 7",
+                    "notebookCells": [
+                        {"id": "cell-code", "type": "code", "source": "a = 2", "contextSource": "notebook"},
+                        {"id": "cell-math", "type": "math", "source": "b := 3", "contextSource": "draft"},
+                    ],
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = original_manager
+        server_extension._runtime_manager = original_factory
+
+    executed_code = fake_manager.calls[0][1]
+    assert "def helper_value():" in executed_code
+    assert "a = 2" in executed_code
+    assert "render_math_cell(\"b := 3\"" in executed_code
+    assert "render_math_cell(\"a + b\"" in executed_code
+    assert response["executedBootstrap"] is True
+    assert response["replayedCellIds"] == ["cell-code", "cell-math"]
+    assert response["contextSourcesUsed"] == ["bootstrap", "notebook", "draft"]

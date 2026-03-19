@@ -240,13 +240,14 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - For runnable drafts, the assistant runs an isolated self-check in a temporary kernel before the step can be accepted.
 - Math-cell drafts use the same isolated path, but validation is performed with SugarPy `render_math_cell(...)` semantics.
 - When a staged Math step depends on earlier runnable cells, the isolated validator replays those earlier Code/Math cells inside the temporary kernel first.
-- The isolated self-check never mutates the live notebook and defaults to a 5-second `bootstrap-only` sandbox run.
+- The isolated self-check never mutates the live notebook and starts with a 5-second isolated or `bootstrap-only` sandbox run before escalating to stronger replay context when needed.
 - Sandbox context is explicit rather than implicit. The supported presets are:
   - `none`
   - `bootstrap-only`
   - `imports-only`
   - `selected-cells`
   - `full-notebook-replay`
+- Validation results report the actual preset, replayed cell ids, attempt count, and whether notebook or draft context was used.
 - It returns a structured change set and validated draft artifacts before mutating notebook state.
 - The app applies accepted operations only after an explicit user action.
 - The assistant is instructed to prefer SugarPy-native, directly executable representations over mathematically equivalent but less compatible forms.

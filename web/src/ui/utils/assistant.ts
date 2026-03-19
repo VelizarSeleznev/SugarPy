@@ -88,6 +88,7 @@ export type AssistantValidationSummary = {
   outputKind: string;
   outputPreview: string;
   errorSummary?: string;
+  contextSummary: string;
   replayContextUsed: AssistantSandboxContextPreset;
   replayedCellIds: string[];
 };
@@ -186,7 +187,10 @@ export type AssistantSandboxExecutionTrace = {
     errorValue?: string;
     stdoutPreview: string;
     stderrPreview: string;
+    selectedCellIds: string[];
     replayedCellIds: string[];
+    contextSourcesUsed: Array<'bootstrap' | 'notebook' | 'draft'>;
+    attemptCount: number;
     mathError?: string;
   };
 };
@@ -1026,6 +1030,15 @@ const planHasPythonCodeOperations = (plan: AssistantPlan) =>
       (operation.type === 'update_cell' && operation.source.trim())
   );
 
+const planHasRunnableValidationOperations = (plan: AssistantPlan) =>
+  plan.operations.some(
+    (operation) =>
+      (operation.type === 'insert_cell' &&
+        (operation.cellType === 'code' || operation.cellType === 'math') &&
+        operation.source.trim()) ||
+      (operation.type === 'update_cell' && operation.source.trim())
+  );
+
 const planUsesSolveInMathCells = (plan: AssistantPlan) =>
   plan.operations.some(
     (operation) =>
@@ -1140,7 +1153,10 @@ const summarizeSandboxExecution = (
     errorValue: truncateText(result.errorValue ?? '', SANDBOX_PREVIEW_LIMIT),
     stdoutPreview: truncateText(result.stdout ?? '', SANDBOX_PREVIEW_LIMIT),
     stderrPreview: truncateText(result.stderr ?? '', SANDBOX_PREVIEW_LIMIT),
+    selectedCellIds: result.selectedCellIds ?? [],
     replayedCellIds: result.replayedCellIds,
+    contextSourcesUsed: result.contextSourcesUsed ?? [],
+    attemptCount: result.attempts?.length ?? 0,
     mathError: result.mathValidation?.error
   }
 });
@@ -2706,6 +2722,7 @@ const validationSystemPrompt = [
   'Do not claim that code execution is unavailable if sandbox validation succeeded.',
   'Default to contextPreset bootstrap-only unless the draft truly depends on notebook code state.',
   'Use imports-only, selected-cells, or full-notebook-replay only when that context is required.',
+  'Sandbox responses report how validation actually ran, including replayed cells and fallback attempts; use that metadata when revising the draft.',
   'Math validation must use the notebook or cell trig/render mode that the inserted Math cell will use.',
   'Do not use sandbox execution for Stoich cells.',
   'If the sandbox reports an error or timeout, revise the draft plan or add a warning that validation failed.',
@@ -3645,7 +3662,7 @@ export async function planNotebookChanges(params: {
     );
   }
 
-  if (sandboxRunner && planHasPythonCodeOperations(plan)) {
+  if (sandboxRunner && planHasRunnableValidationOperations(plan)) {
     onActivity?.({ kind: 'phase', label: 'Validating generated code' });
     plan =
       provider === 'openai'
