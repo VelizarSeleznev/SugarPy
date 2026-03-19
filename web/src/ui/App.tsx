@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
 import { AssistantDrawer } from './components/AssistantDrawer';
+import { OnboardingCoachmark } from './components/OnboardingCoachmark';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
@@ -60,6 +61,16 @@ import {
   serializeSugarPy,
   writeStorageItem
 } from './utils/notebookIO';
+import {
+  FIRST_RUN_NOTEBOOK_NAME,
+  getFirstRunNotebookCells,
+  hasSeenOnboarding,
+  loadCoachmarksDismissed,
+  loadTutorialNotebookId,
+  markOnboardingSeen,
+  saveCoachmarksDismissed,
+  saveTutorialNotebookId
+} from './utils/onboarding';
 
 export type CellModel = {
   id: string;
@@ -224,6 +235,8 @@ type AssistantPhotoImport = {
   height: number;
   instructions: string;
 };
+
+type CoachmarkStep = 'add' | 'menu' | 'drag' | 'math' | 'done';
 
 const MAX_ASSISTANT_IMPORT_IMAGE_BYTES = 10 * 1024 * 1024;
 const ASSISTANT_PHOTO_IMPORT_MODEL = 'gpt-5.4-mini';
@@ -430,6 +443,10 @@ function App() {
   const [assistantActiveChatId, setAssistantActiveChatId] = useState<string | null>(null);
   const [runtimeConfig, setRuntimeConfig] = useState<SugarPyRuntimeConfig | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [tutorialNotebookId, setTutorialNotebookId] = useState<string | null>(() => loadTutorialNotebookId());
+  const [coachmarkStep, setCoachmarkStep] = useState<CoachmarkStep>(() =>
+    loadCoachmarksDismissed() ? 'done' : 'add'
+  );
   const mathSuggestions = useMemo(
     () => [
       { label: 'sqrt', detail: 'square root' },
@@ -511,6 +528,19 @@ function App() {
     ],
     [allFunctions, userFunctions]
   );
+  const tutorialMathCardReady = useMemo(
+    () =>
+      cells.some(
+        (cell) => cell.type === 'math' && !!cell.mathOutput && (cell.ui?.mathView ?? 'rendered') === 'rendered'
+      ),
+    [cells]
+  );
+  const showingTutorialCoachmarks =
+    tutorialNotebookId === notebookId && coachmarkStep !== 'done' && cells.length > 0;
+  const activeCoachmarkStep =
+    showingTutorialCoachmarks && !(coachmarkStep === 'math' && !tutorialMathCardReady) ? coachmarkStep : null;
+  const dragCoachmarkUsesCellShell = touchUiEnabled && !wideTouchRailEnabled;
+  const dragCoachmarkTargetSelector = dragCoachmarkUsesCellShell ? '.cell-row-shell' : '.cell-row-drag-btn';
 
   useEffect(() => {
     cellsRef.current = cells;
@@ -1123,23 +1153,44 @@ function App() {
     const hydrate = async () => {
       const lastId = loadLastOpenId();
       pruneLocalNotebookSnapshots(lastId);
-      if (!lastId) {
-        hydrated.current = true;
-        return;
+      let selected: ReturnType<typeof loadFromLocalStorage> | Awaited<ReturnType<typeof loadServerAutosave>> = null;
+
+      if (lastId) {
+        const localStored = loadFromLocalStorage(lastId);
+        const serverStored = await loadServerAutosave(lastId);
+
+        const pickNewest = () => {
+          if (localStored && serverStored) {
+            const localTs = Date.parse(localStored.updatedAt ?? '') || 0;
+            const serverTs = Date.parse(serverStored.updatedAt ?? '') || 0;
+            return serverTs > localTs ? serverStored : localStored;
+          }
+          return serverStored ?? localStored ?? null;
+        };
+
+        selected = pickNewest();
       }
-      const localStored = loadFromLocalStorage(lastId);
-      const serverStored = await loadServerAutosave(lastId);
 
-      const pickNewest = () => {
-        if (localStored && serverStored) {
-          const localTs = Date.parse(localStored.updatedAt ?? '') || 0;
-          const serverTs = Date.parse(serverStored.updatedAt ?? '') || 0;
-          return serverTs > localTs ? serverStored : localStored;
+      if (!selected && !hasSeenOnboarding()) {
+        const nextId = createNotebookId();
+        const nextCells = getFirstRunNotebookCells().map((cell, index) => createCell(cell.type, cell.source, index + 1));
+        const seeded = serializeSugarPy({
+          id: nextId,
+          name: FIRST_RUN_NOTEBOOK_NAME,
+          trigMode: 'deg',
+          defaultMathRenderMode: 'exact',
+          cells: nextCells
+        });
+        saveToLocalStorage(seeded);
+        markOnboardingSeen();
+        saveTutorialNotebookId(nextId);
+        setTutorialNotebookId(nextId);
+        selected = seeded;
+        if (!loadCoachmarksDismissed()) {
+          setCoachmarkStep('add');
         }
-        return serverStored ?? localStored ?? null;
-      };
+      }
 
-      const selected = pickNewest();
       if (!selected || cancelled) {
         hydrated.current = true;
         return;
@@ -3106,6 +3157,20 @@ function App() {
     setDirty(false);
   };
 
+  const dismissCoachmarks = () => {
+    setCoachmarkStep('done');
+    saveCoachmarksDismissed();
+  };
+
+  const advanceCoachmark = () => {
+    setCoachmarkStep((prev) => {
+      if (prev === 'add') return 'menu';
+      if (prev === 'menu') return 'drag';
+      if (prev === 'drag') return 'math';
+      return 'done';
+    });
+  };
+
   const clearNotebookOutputs = () => {
     setCells((prev) =>
       prev.map((cell) => ({
@@ -3441,6 +3506,62 @@ function App() {
         </header>
 
         <main className="workspace">
+          {activeCoachmarkStep === 'add' ? (
+            <OnboardingCoachmark
+              testId="onboarding-coachmark-add"
+              targetSelector='[data-testid="add-cell-button"]'
+              title="Add your next block"
+              body="Use + to add a new block. Start with Math when the task is CAS-first, symbolic, or equation-based."
+              placement="bottom"
+              primaryLabel="Next"
+              secondaryLabel="Dismiss"
+              onPrimary={advanceCoachmark}
+              onSecondary={dismissCoachmarks}
+            />
+          ) : null}
+          {activeCoachmarkStep === 'menu' ? (
+            <OnboardingCoachmark
+              testId="onboarding-coachmark-menu"
+              targetSelector='button[aria-label="More actions"]'
+              title="Start a fresh notebook"
+              body="Use the ⋮ menu when you want commands like New Notebook, Import, Save, or the CAS wiki link."
+              placement="bottom"
+              primaryLabel="Next"
+              secondaryLabel="Dismiss"
+              onPrimary={advanceCoachmark}
+              onSecondary={dismissCoachmarks}
+            />
+          ) : null}
+          {activeCoachmarkStep === 'drag' ? (
+            <OnboardingCoachmark
+              testId="onboarding-coachmark-drag"
+              targetSelector={dragCoachmarkTargetSelector}
+              title="Reorder by dragging"
+              body={
+                dragCoachmarkUsesCellShell
+                  ? 'Long press a cell, then drag to reorder it on touch devices.'
+                  : 'Use the left drag handle to reorder cells. On mobile, long press a cell first and then drag.'
+              }
+              placement={dragCoachmarkUsesCellShell ? 'bottom' : 'right'}
+              primaryLabel="Next"
+              secondaryLabel="Dismiss"
+              onPrimary={advanceCoachmark}
+              onSecondary={dismissCoachmarks}
+            />
+          ) : null}
+          {activeCoachmarkStep === 'math' ? (
+            <OnboardingCoachmark
+              testId="onboarding-coachmark-math"
+              targetSelector='[data-testid="math-output"]'
+              title="Rendered Math stays editable"
+              body="Click the rendered Math card to reopen the raw CAS input and continue editing."
+              placement="bottom"
+              primaryLabel="Got it"
+              secondaryLabel="Dismiss"
+              onPrimary={dismissCoachmarks}
+              onSecondary={dismissCoachmarks}
+            />
+          ) : null}
           {status === 'error' ? (
             <div className="output">
               {errorMsg}

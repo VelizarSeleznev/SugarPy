@@ -1537,6 +1537,47 @@ body {
   font-weight: 600;
 }
 
+.onboarding-coachmark {
+  position: fixed;
+  z-index: 60;
+  border: 1px solid rgba(191, 219, 254, 0.95);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+  pointer-events: auto;
+}
+
+.onboarding-coachmark-kicker {
+  margin-bottom: 4px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.onboarding-coachmark-title {
+  color: var(--text-main);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.onboarding-coachmark-body {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.onboarding-coachmark-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .editor-inline-actions {
   display: flex;
   justify-content: flex-start;

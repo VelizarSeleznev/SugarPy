@@ -192,6 +192,19 @@ const seedNotebookFixture = async (page: any, notebook: (typeof assistantNoteboo
   }, notebook);
 };
 
+const markOnboardingSeen = async (page: any) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('sugarpy:onboarding:seen:v1', '1');
+  });
+};
+
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.titlePath.includes('Notebook first-run onboarding')) {
+    return;
+  }
+  await markOnboardingSeen(page);
+});
+
 const addCodeCellToEmptyNotebook = async (page: any) => {
   const emptyState = page.locator('.cell-empty');
   if (await emptyState.isVisible()) {
@@ -355,6 +368,79 @@ const expectNoPageCrashes = async (
   const errors = await page.evaluate(() => (window as any).__sugarpy_errors || []);
   expect(errors).toEqual([]);
 };
+
+test.describe('Notebook first-run onboarding', () => {
+  test('First launch seeds a CAS-first intro notebook and coachmarks', async ({ page }) => {
+    await page.goto('/');
+
+    await expect(page.locator('.file-name-input')).toHaveValue('SugarPy Quick Start');
+    await expect(page.locator('[data-testid="cell-row-markdown"]')).toHaveCount(4);
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(3);
+    await expect(page.locator('.cell-empty')).toHaveCount(0);
+    await expect(page.getByText('expand((x - 1)(x + 2))')).toBeVisible();
+    await expect(page.getByTestId('onboarding-coachmark-add')).toBeVisible();
+
+    await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-menu')).toBeVisible();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-drag')).toBeVisible();
+  });
+
+  test('Seen onboarding keeps later launches blank', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('sugarpy:onboarding:seen:v1', '1');
+    });
+    await page.goto('/');
+    await expect(page.locator('.cell-empty')).toBeVisible();
+    await expect(page.locator('.file-name-input')).toHaveValue('Untitled');
+  });
+
+  test('Stored notebook restores instead of being replaced by onboarding', async ({ page }) => {
+    await seedNotebookFixture(page, assistantNotebookFixtures.executed_code);
+    await page.goto('/');
+
+    await expect(page.locator('.file-name-input')).toHaveValue('Executed Code Fixture');
+    await expect(page.locator('[data-testid="cell-row-code"]')).toHaveCount(1);
+    await expect(page.getByTestId('onboarding-coachmark-add')).toHaveCount(0);
+  });
+
+  test('Rendered Math coachmark appears after running the first intro Math cell', async ({ page }) => {
+    await page.goto('/');
+
+    await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
+    await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Next' }).click();
+
+    const firstMathCell = page.locator('[data-testid="cell-row-math"]').first();
+    await firstMathCell.locator('[data-testid="run-cell"]').click();
+    await expect(firstMathCell.getByTestId('math-output')).toBeVisible();
+    await expect(page.getByTestId('onboarding-coachmark-math')).toBeVisible();
+  });
+
+  test('Touch layout onboarding stays visible and can be dismissed without blocking the notebook', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await page.goto('/');
+
+    await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-menu')).toBeVisible();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-drag')).toBeVisible();
+    await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Dismiss' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-drag')).toHaveCount(0);
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(3);
+  });
+});
 
 test.describe('Notebook CAS outputs', () => {
   test('Notebook chrome: empty code, text, and math cells stay compact and add below the active cell', async ({ page }) => {

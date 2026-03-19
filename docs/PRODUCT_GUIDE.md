@@ -42,6 +42,12 @@ Use it together with:
 ### Notebook actions
 - `Clear Outputs`: removes current code, Math, and stoichiometry results without deleting cells or cell source.
 - `Clear Outputs` is intended as a quick reset when the notebook UI is cluttered or you want to rerun cells from a visibly clean state.
+- On a brand-new browser with no restored notebook, SugarPy seeds a one-time `SugarPy Quick Start` notebook instead of dropping the user into a blank page.
+- The quick-start notebook is fully editable and behaves like a normal notebook after it is created.
+- The quick-start flow adds lightweight coachmarks for:
+  - adding a block from `+`
+  - dragging cells to reorder them
+  - clicking a rendered Math card to reopen raw CAS input
 
 ### File actions
 - `Save to Server`: writes an `.ipynb` file under `notebooks/` and refreshes server autosave.
@@ -106,6 +112,7 @@ Use it together with:
   - `factor(...)`
   - `N(...)`
   - `plot(...)`
+- The first-run quick-start notebook uses Math cells as the default teaching path and points users to the `/wiki` CAS reference instead of duplicating the full reference inside the notebook.
 
 ### Math modes
 - Each notebook has defaults for:

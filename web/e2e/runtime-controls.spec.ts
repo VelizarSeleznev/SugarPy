@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('sugarpy:onboarding:seen:v1', '1');
+  });
+});
+
 const runtimeConfig = {
   mode: 'restricted-demo',
   execution: {
