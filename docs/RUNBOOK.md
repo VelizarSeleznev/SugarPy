@@ -81,10 +81,10 @@ Assistant UX notes:
 - For code-cell drafts, the assistant may run an isolated validation step before showing the preview.
 - Runnable assistant draft steps are validated before acceptance.
   - Validation uses a fresh backend-owned temporary runtime, not a browser-managed live kernel.
-  - Python code uses the existing sandbox presets.
+  - Python code uses explicit sandbox context presets and may retry with stronger replay context when isolated validation fails.
   - Math cells now also run through isolated validation using SugarPy `render_math_cell(...)` semantics before they are accepted.
   - Restricted deployments require Docker-backed sandbox isolation; if Docker is unavailable, assistant validation returns an explicit unavailable error instead of falling back to host execution.
-  - Assistant validation no longer replays earlier notebook cells automatically. If a draft depends on prior notebook state, rerun setup cells or use `Run All` after applying the accepted draft.
+  - Validation may replay notebook cells and earlier draft cells inside the sandbox only; the live notebook runtime is still untouched until apply/run.
   - A sandbox timeout or runtime error is surfaced in the preview and blocks acceptance for that step.
 
 Runtime server config for restricted deployments:

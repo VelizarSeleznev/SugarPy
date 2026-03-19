@@ -349,7 +349,7 @@ export function AssistantDrawer({
                                 {step.validations.length > 0 ? (
                                   step.validations.map((validation, index) => (
                                     <div key={`${message.id}-validation-row-${step.id}-${index}`} className="assistant-op-reason">
-                                      {validation.summary.status} · {validation.summary.outputKind} · {validation.summary.outputPreview || 'No preview'}
+                                      {validation.summary.status} · {validation.summary.outputKind} · {validation.summary.contextSummary} · {validation.summary.outputPreview || 'No preview'}
                                       {validation.summary.errorSummary ? ` · ${validation.summary.errorSummary}` : ''}
                                     </div>
                                   ))

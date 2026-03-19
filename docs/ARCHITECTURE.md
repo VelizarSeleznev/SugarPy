@@ -71,8 +71,8 @@
 - Assistant sandbox invariants:
   - `run_code_in_sandbox` may execute Python or Math-cell validation only through backend-owned Docker-isolated runtimes, never through host-side kernels or shell access in restricted profiles.
   - Restricted profiles fail closed when Docker-backed sandbox isolation is unavailable.
-  - Default sandbox mode is `none` with a hard 5-second timeout.
-  - Assistant validation does not replay client-provided notebook cells on cold start; it validates only the submitted target code/math source.
+  - Assistant sandbox validation uses explicit context presets: `none`, `bootstrap-only`, `imports-only`, `selected-cells`, `full-notebook-replay`.
+  - Validation runs inside a fresh sandbox runtime with a hard 5-second timeout per attempt and may replay selected notebook or draft cells inside that sandbox before the target code/math source runs.
   - Sandbox execution must not mutate notebook state, outputs, autosave, or any shared live kernel namespace.
   - Draft state is chat-owned and separate from the live notebook state used for autosave, save, and export.
 - CAS UI behavior for code cells is MIME-first:

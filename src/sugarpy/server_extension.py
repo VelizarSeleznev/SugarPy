@@ -694,12 +694,125 @@ def _build_math_validation_code(source: str, trig_mode: str, render_mode: str) -
     )
 
 
+def _normalize_sandbox_context_preset(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw in {"none", "bootstrap-only", "imports-only", "selected-cells", "full-notebook-replay"}:
+        return raw
+    return "none"
+
+
+def _sandbox_cell_id(cell: dict[str, Any]) -> str:
+    return str(cell.get("id") or "").strip()
+
+
+def _sandbox_cell_context_source(cell: dict[str, Any]) -> str:
+    return "draft" if str(cell.get("contextSource") or "").strip() == "draft" else "notebook"
+
+
+def _is_replayable_sandbox_cell(cell: dict[str, Any]) -> bool:
+    return str(cell.get("type") or "code") in {"code", "math"} and bool(str(cell.get("source") or "").strip())
+
+
+def _is_import_only_source(source: str) -> bool:
+    stripped = source.strip()
+    if not stripped:
+        return False
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        return False
+    if not tree.body:
+        return False
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Constant) and isinstance(node.value.value, str):
+            continue
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            return False
+    return True
+
+
+def _build_math_replay_code(source: str, trig_mode: str, render_mode: str) -> str:
+    return "\n".join(
+        [
+            "from sugarpy.math_cell import render_math_cell",
+            f"_ = render_math_cell({json.dumps(source)}, mode={json.dumps(trig_mode)}, render_mode={json.dumps(render_mode)})",
+        ]
+    )
+
+
+def _wrap_replay_code(source: str) -> str:
+    lines = source.splitlines() or [source]
+    indented = "\n".join(f"        {line}" if line else "" for line in lines)
+    return "\n".join(
+        [
+            "import contextlib",
+            "import io",
+            "__sugarpy_replay_stdout = io.StringIO()",
+            "__sugarpy_replay_stderr = io.StringIO()",
+            "__sugarpy_prev_display = globals().get('__sugarpy_display')",
+            "__sugarpy_display = lambda *args, **kwargs: None",
+            "try:",
+            "    with contextlib.redirect_stdout(__sugarpy_replay_stdout), contextlib.redirect_stderr(__sugarpy_replay_stderr):",
+            indented,
+            "finally:",
+            "    if __sugarpy_prev_display is not None:",
+            "        __sugarpy_display = __sugarpy_prev_display",
+        ]
+    )
+
+
+def _build_sandbox_replay_chunks(
+    notebook_cells: list[dict[str, Any]],
+    context_preset: str,
+    selected_cell_ids: list[str],
+    trig_mode: str,
+    render_mode: str,
+) -> tuple[list[str], list[str], list[str]]:
+    if context_preset in {"none", "bootstrap-only"}:
+        return [], [], []
+
+    selected_lookup = {cell_id for cell_id in selected_cell_ids if cell_id}
+    replayed_ids: list[str] = []
+    context_sources: list[str] = []
+    chunks: list[str] = []
+    for cell in notebook_cells:
+        if not _is_replayable_sandbox_cell(cell):
+            continue
+        cell_id = _sandbox_cell_id(cell)
+        cell_type = str(cell.get("type") or "code")
+        if context_preset == "imports-only":
+            if cell_type != "code" or not _is_import_only_source(str(cell.get("source") or "")):
+                continue
+        elif context_preset == "selected-cells":
+            if cell_id not in selected_lookup:
+                continue
+        source = str(cell.get("source") or "")
+        if cell_type == "code":
+            chunks.append(_wrap_replay_code(source))
+        else:
+            chunks.append(
+                _wrap_replay_code(
+                    _build_math_replay_code(
+                        source,
+                        "rad" if cell.get("mathTrigMode") == "rad" else trig_mode,
+                        "decimal" if cell.get("mathRenderMode") == "decimal" else render_mode,
+                    )
+                )
+            )
+        replayed_ids.append(cell_id)
+        source_kind = _sandbox_cell_context_source(cell)
+        if source_kind not in context_sources:
+            context_sources.append(source_kind)
+    return chunks, replayed_ids, context_sources
+
+
 async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
     request = payload.get("request") if isinstance(payload.get("request"), dict) else payload
-    _notebook_cells = payload.get("notebookCells") if isinstance(payload.get("notebookCells"), list) else []
+    _notebook_cells = [cell for cell in payload.get("notebookCells", []) if isinstance(cell, dict)]
     _bootstrap_code = str(payload.get("bootstrapCode") or "").strip()
     target = "math" if request.get("target") == "math" else "code"
-    context_preset = "none"
+    context_preset = _normalize_sandbox_context_preset(request.get("contextPreset"))
+    selected_cell_ids = [str(item) for item in request.get("selectedCellIds", [])] if isinstance(request.get("selectedCellIds"), list) else []
     timeout_s = min(
         max(float(request.get("timeoutMs") or DEFAULT_SANDBOX_TIMEOUT_S * 1000.0) / 1000.0, 0.25),
         DEFAULT_SANDBOX_TIMEOUT_S,
@@ -707,6 +820,15 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
     trig_mode = "rad" if request.get("trigMode") == "rad" else "deg"
     render_mode = "decimal" if request.get("renderMode") == "decimal" else "exact"
     manager = _runtime_manager()
+    replay_chunks, replayed_cell_ids, replay_context_sources = _build_sandbox_replay_chunks(
+        _notebook_cells,
+        context_preset,
+        selected_cell_ids,
+        trig_mode,
+        render_mode,
+    )
+    executed_bootstrap = bool(_bootstrap_code)
+    context_sources_used = (["bootstrap"] if executed_bootstrap else []) + replay_context_sources
 
     if not _assistant_sandbox_available():
         return {
@@ -719,8 +841,10 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
             "errorValue": "Assistant validation is unavailable because restricted mode requires Docker-backed isolation.",
             "durationMs": 0,
             "contextPresetUsed": context_preset,
-            "executedBootstrap": False,
-            "replayedCellIds": [],
+            "selectedCellIds": selected_cell_ids,
+            "executedBootstrap": executed_bootstrap,
+            "replayedCellIds": replayed_cell_ids,
+            "contextSourcesUsed": context_sources_used,
         }
 
     if target == "code":
@@ -736,11 +860,20 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
                 "errorValue": "Sandbox code cannot be empty.",
                 "durationMs": 0,
                 "contextPresetUsed": context_preset,
-                "executedBootstrap": False,
-                "replayedCellIds": [],
+                "selectedCellIds": selected_cell_ids,
+                "executedBootstrap": executed_bootstrap,
+                "replayedCellIds": replayed_cell_ids,
+                "contextSourcesUsed": context_sources_used,
             }
         if _sandbox_code_cells_restricted():
-            errors = validate_restricted_python(code)
+            replay_code_sources = [
+                str(cell.get("source") or "")
+                for cell in _notebook_cells
+                if str(cell.get("type") or "code") == "code" and _sandbox_cell_id(cell) in set(replayed_cell_ids)
+            ]
+            errors = [*validate_restricted_python(code)]
+            for replay_source in replay_code_sources:
+                errors.extend(validate_restricted_python(replay_source))
             if errors:
                 return {
                     "target": target,
@@ -752,8 +885,10 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
                     "errorValue": "; ".join(errors),
                     "durationMs": 0,
                     "contextPresetUsed": context_preset,
-                    "executedBootstrap": False,
-                    "replayedCellIds": [],
+                    "selectedCellIds": selected_cell_ids,
+                    "executedBootstrap": executed_bootstrap,
+                    "replayedCellIds": replayed_cell_ids,
+                    "contextSourcesUsed": context_sources_used,
                 }
         target_code = _wrap_code_for_notebook_display(code)
     else:
@@ -769,15 +904,22 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
                 "errorValue": "Math sandbox source cannot be empty.",
                 "durationMs": 0,
                 "contextPresetUsed": context_preset,
-                "executedBootstrap": False,
-                "replayedCellIds": [],
+                "selectedCellIds": selected_cell_ids,
+                "executedBootstrap": executed_bootstrap,
+                "replayedCellIds": replayed_cell_ids,
+                "contextSourcesUsed": context_sources_used,
             }
         target_code = _build_math_validation_code(source, trig_mode, render_mode)
 
+    execution_chunks = [chunk for chunk in [_bootstrap_code, *replay_chunks, target_code] if chunk.strip()]
     sandbox_notebook_id = f"assistant-sandbox-{uuid.uuid4().hex}"
     started_at = time.perf_counter()
     try:
-        result, _runtime_payload = await manager.execute_in_runtime(sandbox_notebook_id, target_code, timeout_s)
+        result, _runtime_payload = await manager.execute_in_runtime(
+            sandbox_notebook_id,
+            _join_execution_chunks(execution_chunks),
+            timeout_s,
+        )
     except Exception as exc:
         return {
             "target": target,
@@ -789,8 +931,10 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
             "errorValue": str(exc),
             "durationMs": int((time.perf_counter() - started_at) * 1000),
             "contextPresetUsed": context_preset,
-            "executedBootstrap": False,
-            "replayedCellIds": [],
+            "selectedCellIds": selected_cell_ids,
+            "executedBootstrap": executed_bootstrap,
+            "replayedCellIds": replayed_cell_ids,
+            "contextSourcesUsed": context_sources_used,
         }
     finally:
         with contextlib.suppress(Exception):
@@ -800,8 +944,10 @@ async def execute_sandbox_request(payload: dict[str, Any]) -> dict[str, Any]:
         "target": target,
         **result,
         "contextPresetUsed": context_preset,
-        "executedBootstrap": False,
-        "replayedCellIds": [],
+        "selectedCellIds": selected_cell_ids,
+        "executedBootstrap": executed_bootstrap,
+        "replayedCellIds": replayed_cell_ids,
+        "contextSourcesUsed": context_sources_used,
     }
     if target == "math":
         response["mathValidation"] = _parse_math_validation(result.get("stdout") or "") or {
