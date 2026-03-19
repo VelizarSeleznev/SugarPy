@@ -162,6 +162,7 @@ Assistant regression checks:
 - A notebook execution timeout now forces a runtime restart for safety; after that, rerun any setup cells you still need in the live namespace or use `Run All`.
 - Idle live runtimes are culled in the background by the Jupyter extension, so abandoned tabs do not need a follow-up runtime request before their containers are removed. The default idle timeout is 30 minutes unless `SUGARPY_RUNTIME_IDLE_TIMEOUT_S` is overridden.
 - On the very first browser launch with no restored notebook, SugarPy seeds a one-time `SugarPy Quick Start` notebook with CAS-first examples and lightweight coachmarks.
+- The quick-start notebook now calls out the essential controls early: `+` for new blocks, `Shift+Enter` to run the current Code/Math cell, `⋮ > New Notebook` for a blank reset, and long-press drag on touch devices.
 - After that first-run seed, later `New Notebook` actions still open empty and show centered `Code | Text | Math` creation controls.
 - The same `Code | Text | Math` choices also appear in the header `+` menu and the divider insert menu.
 - On desktop, each cell exposes a left-side `+` insert rail with searchable block insertion; it inserts below by default and supports `Alt`/`Option` for above insertion.
