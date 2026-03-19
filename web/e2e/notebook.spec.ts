@@ -381,6 +381,8 @@ test.describe('Notebook first-run onboarding', () => {
     await expect(page.getByTestId('onboarding-coachmark-add')).toBeVisible();
 
     await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-menu')).toBeVisible();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
     await expect(page.getByTestId('onboarding-coachmark-drag')).toBeVisible();
   });
 
@@ -406,6 +408,7 @@ test.describe('Notebook first-run onboarding', () => {
     await page.goto('/');
 
     await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
     await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Next' }).click();
 
     const firstMathCell = page.locator('[data-testid="cell-row-math"]').first();
@@ -430,6 +433,8 @@ test.describe('Notebook first-run onboarding', () => {
     await page.goto('/');
 
     await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('onboarding-coachmark-menu')).toBeVisible();
+    await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
     await expect(page.getByTestId('onboarding-coachmark-drag')).toBeVisible();
     await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Dismiss' }).click();
     await expect(page.getByTestId('onboarding-coachmark-drag')).toHaveCount(0);

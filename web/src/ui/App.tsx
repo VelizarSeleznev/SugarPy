@@ -236,7 +236,7 @@ type AssistantPhotoImport = {
   instructions: string;
 };
 
-type CoachmarkStep = 'add' | 'drag' | 'math' | 'done';
+type CoachmarkStep = 'add' | 'menu' | 'drag' | 'math' | 'done';
 
 const MAX_ASSISTANT_IMPORT_IMAGE_BYTES = 10 * 1024 * 1024;
 const ASSISTANT_PHOTO_IMPORT_MODEL = 'gpt-5.4-mini';
@@ -1223,13 +1223,6 @@ function App() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (tutorialNotebookId !== notebookId || coachmarkStep !== 'add') return;
-    if (cells.length === 0) return;
-    const timerId = window.setTimeout(() => setCoachmarkStep('drag'), 2200);
-    return () => window.clearTimeout(timerId);
-  }, [cells.length, coachmarkStep, notebookId, tutorialNotebookId]);
 
   const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich') =>
     cellsRef.current.map((cell) =>
@@ -3171,7 +3164,8 @@ function App() {
 
   const advanceCoachmark = () => {
     setCoachmarkStep((prev) => {
-      if (prev === 'add') return 'drag';
+      if (prev === 'add') return 'menu';
+      if (prev === 'menu') return 'drag';
       if (prev === 'drag') return 'math';
       return 'done';
     });
@@ -3525,6 +3519,19 @@ function App() {
               onSecondary={dismissCoachmarks}
             />
           ) : null}
+          {activeCoachmarkStep === 'menu' ? (
+            <OnboardingCoachmark
+              testId="onboarding-coachmark-menu"
+              targetSelector='button[aria-label="More actions"]'
+              title="Start a fresh notebook"
+              body="Use the ⋮ menu when you want commands like New Notebook, Import, Save, or the CAS wiki link."
+              placement="bottom"
+              primaryLabel="Next"
+              secondaryLabel="Dismiss"
+              onPrimary={advanceCoachmark}
+              onSecondary={dismissCoachmarks}
+            />
+          ) : null}
           {activeCoachmarkStep === 'drag' ? (
             <OnboardingCoachmark
               testId="onboarding-coachmark-drag"
@@ -3532,8 +3539,8 @@ function App() {
               title="Reorder by dragging"
               body={
                 dragCoachmarkUsesCellShell
-                  ? 'Long press a cell, then drag to reorder it.'
-                  : 'Use the left drag handle to reorder cells.'
+                  ? 'Long press a cell, then drag to reorder it on touch devices.'
+                  : 'Use the left drag handle to reorder cells. On mobile, long press a cell first and then drag.'
               }
               placement={dragCoachmarkUsesCellShell ? 'bottom' : 'right'}
               primaryLabel="Next"

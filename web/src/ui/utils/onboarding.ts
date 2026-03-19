@@ -16,6 +16,13 @@ const FIRST_RUN_NOTEBOOK_CELLS: OnboardingSeedCell[] = [
 
 SugarPy is built around notebook blocks, but for most classroom math you should start with **Math** cells, not Python.
 
+## First controls to know
+
+- Use the header **+** button or the left-rail **+** to add a new block.
+- Run the current Code or Math cell with **Shift+Enter** or the run button.
+- Create a fresh blank notebook from **⋮ > New Notebook**.
+- Reorder blocks by dragging the left handle. On mobile, **long press** a cell shell and then drag.
+
 Math cells use CAS-style input, keep the written form readable, and show a rendered card after you run them.`
   },
   {
@@ -45,14 +52,16 @@ The toolbar also lets you switch **Exact / Decimal** and **Degrees / Radians** w
   },
   {
     type: 'math',
-    source: "plot(sin(x), x = -6..6, title='Sine curve')"
+    source: "plot(x^2 - 4, x = -4..4, title='Parabola')"
   },
   {
     type: 'markdown',
     source: `## Next actions
 
 - Use the header **+** button or the left rail **+** to add a new block.
-- Drag the left handle to reorder cells.
+- Drag the left handle to reorder cells. On mobile, long press a cell first and then drag.
+- Use **Shift+Enter** whenever you want to run the current Code or Math cell quickly.
+- Use **⋮ > New Notebook** when you want to start over with a blank notebook.
 - Stay in Math cells when the task is symbolic, equation-based, or graph-first.
 - Open the full quick reference here: [SugarPy CAS Wiki](/wiki).`
   }
