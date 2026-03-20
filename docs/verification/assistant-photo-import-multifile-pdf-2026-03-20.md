@@ -22,6 +22,7 @@
   - the exact live artifact used for trace inspection is stored at `/Users/velizard/PycharmProjects/Gymnasium/SugarPy/output/playwright/assistant-photo-import-trace.json`
   - the latest follow-up browser run now also enforces a photo-import replan when the Math-cell source still contains textbook syntax or free prose; the resulting staged draft is visibly more CAS-native (for example `circle := ...`, `x1 := ...`, `p1 := (...)`, `intersection := (...)`)
   - a later follow-up browser run shifted the output balance toward short Markdown idea notes plus CAS-only Math cells; the staged draft now includes one-sentence paper-style explanations such as “find the line from its slope and one point” while keeping the actual derivation in Math cells
+  - a further quality-lint pass now rejects photo-import drafts that overload Markdown with derivation detail or use OCR-style variable names; the latest live artifact shows short idea notes in Markdown plus compact Math cells with cleaner identifiers such as `x1`, `y1`, `p1`, and `distance_p1_p2`
   - the latest live run still reported validation failure because the local Docker daemon was unavailable for assistant sandbox execution, not because the draft Math syntax was rejected
 - Recovery paths covered:
   - duplicate file selection ignored instead of duplicating queued items

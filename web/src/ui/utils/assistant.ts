@@ -1580,6 +1580,32 @@ const ASSISTANT_MATH_ALLOWED_WORDS = new Set([
   'distance_p1p2'
 ]);
 
+const ASSISTANT_PHOTO_IMPORT_PREFERRED_IDENTIFIERS = [
+  /^a$/i,
+  /^b$/i,
+  /^c$/i,
+  /^d$/i,
+  /^x$/i,
+  /^y$/i,
+  /^r$/i,
+  /^l$/i,
+  /^eq\d*$/i,
+  /^line\d*$/i,
+  /^slope\d*$/i,
+  /^circle\d*$/i,
+  /^center\d*$/i,
+  /^radius\d*$/i,
+  /^intersection\d*$/i,
+  /^distance(?:_[a-z0-9]+)*$/i,
+  /^point\d*$/i,
+  /^solution(?:s)?\d*$/i,
+  /^result\d*$/i,
+  /^answer\d*$/i,
+  /^x_?\d+$/i,
+  /^y_?\d+$/i,
+  /^p_?\d+$/i
+] as const;
+
 const lineHasAssistantMathProse = (line: string) => {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return false;
@@ -1595,10 +1621,92 @@ const lineHasAssistantMathProse = (line: string) => {
   return suspiciousWords.length >= 2 || /:\s*$/.test(trimmed);
 };
 
+const extractAssistantMathAssignedIdentifiers = (source: string) =>
+  source
+    .split('\n')
+    .map((line) => line.trim())
+    .flatMap((line) => {
+      if (!line.includes(':=')) return [];
+      const lhs = line.slice(0, line.indexOf(':=')).trim();
+      return lhs
+        .split(',')
+        .map((part) => part.trim().replace(/^\(|\)$/g, ''))
+        .filter(Boolean);
+    });
+
+export const collectAssistantPhotoImportSuspiciousIdentifiers = (source: string) =>
+  Array.from(
+    new Set(
+      extractAssistantMathAssignedIdentifiers(source).filter((identifier) => {
+        if (!identifier) return false;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) return true;
+        if (ASSISTANT_PHOTO_IMPORT_PREFERRED_IDENTIFIERS.some((pattern) => pattern.test(identifier))) return false;
+        if (/[^A-Za-z0-9_]/.test(identifier)) return true;
+        if (identifier.length > 20) return true;
+        if ((identifier.match(/_/g) || []).length >= 3 && !identifier.startsWith('distance_')) return true;
+        if (!/^[\x00-\x7F]+$/.test(identifier)) return true;
+        return /^[A-Za-z]+(?:_[A-Za-z]+)+$/.test(identifier);
+      })
+    )
+  );
+
+export const getAssistantPhotoImportMarkdownIssue = (source: string) => {
+  const lines = source
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const headingLines = lines.filter((line) => line.startsWith('#'));
+  const noteLines = lines.filter((line) => !line.startsWith('#'));
+  if (headingLines.length === 0) return 'Markdown cell should include a short heading for the imported problem.';
+  if (noteLines.length === 0) return 'Markdown cell should include one short idea sentence under the heading.';
+  const noteText = noteLines.join(' ').trim();
+  const sentenceCount = noteText.split(/[.!?]+/).map((part) => part.trim()).filter(Boolean).length;
+  if (sentenceCount > 2) return 'Markdown idea note should stay at one or two short sentences.';
+  if (noteText.length > 180) return 'Markdown idea note is too long; keep it brief and paper-style.';
+  return null;
+};
+
 const getPlanDiagnostics = (plan: AssistantPlan) =>
   ((plan as AssistantPlan & { [ASSISTANT_PLAN_DIAGNOSTICS]?: AssistantMathNormalizationDiagnostic[] })[
     ASSISTANT_PLAN_DIAGNOSTICS
   ] ?? []) as AssistantMathNormalizationDiagnostic[];
+
+export const collectPhotoImportStructureDiagnostics = (plan: AssistantPlan): AssistantMathNormalizationDiagnostic[] => {
+  const diagnostics: AssistantMathNormalizationDiagnostic[] = [];
+  const insertOperations = plan.operations.filter((operation) => operation.type === 'insert_cell');
+  const markdownOps = insertOperations.filter(
+    (operation): operation is Extract<AssistantOperation, { type: 'insert_cell' }> =>
+      operation.type === 'insert_cell' && operation.cellType === 'markdown'
+  );
+  const mathOps = insertOperations.filter(
+    (operation): operation is Extract<AssistantOperation, { type: 'insert_cell' }> =>
+      operation.type === 'insert_cell' && operation.cellType === 'math'
+  );
+
+  if (mathOps.length === 0) {
+    diagnostics.push({
+      operationIndex: -1,
+      originalSource: '',
+      normalizedSource: '',
+      reason: 'Photo-import plan must include Math cells for the actual CAS derivation, not only Markdown notes.'
+    });
+  }
+
+  markdownOps.forEach((operation, index) => {
+    const bulletLines = operation.source.split('\n').filter((line) => line.trim().startsWith('- '));
+    const codeLikeLines = operation.source.split('\n').filter((line) => /`.+`/.test(line) || /:=|=\s*.+/.test(line));
+    if (bulletLines.length >= 4 || codeLikeLines.length >= 4 || operation.source.length > 320) {
+      diagnostics.push({
+        operationIndex: index,
+        originalSource: operation.source,
+        normalizedSource: operation.source,
+        reason: 'Markdown cell is carrying too much derivation detail; keep the idea short and move the actual math into a Math cell.'
+      });
+    }
+  });
+
+  return diagnostics;
+};
 
 const summarizeCell = (cell: NotebookCellSnapshot) => ({
   id: cell.id,
@@ -3664,6 +3772,26 @@ const normalizePlan = (raw: any): AssistantPlan => {
               reason: `Math-cell source still contains prose/non-CAS lines: ${proseLines.slice(0, 2).join(' | ')}`
             });
           }
+          const suspiciousIdentifiers = collectAssistantPhotoImportSuspiciousIdentifiers(normalizedSource);
+          if (suspiciousIdentifiers.length > 0) {
+            diagnostics.push({
+              operationIndex: index,
+              originalSource: source,
+              normalizedSource,
+              reason: `Math-cell source uses suspicious identifier names: ${suspiciousIdentifiers.join(', ')}`
+            });
+          }
+        }
+        if (cellType === 'markdown') {
+          const markdownIssue = getAssistantPhotoImportMarkdownIssue(source);
+          if (markdownIssue) {
+            diagnostics.push({
+              operationIndex: index,
+              originalSource: source,
+              normalizedSource: source,
+              reason: markdownIssue
+            });
+          }
         }
         return {
           type,
@@ -3694,6 +3822,15 @@ const normalizePlan = (raw: any): AssistantPlan => {
             originalSource: source,
             normalizedSource,
             reason: `Math-cell update still contains prose/non-CAS lines: ${proseLines.slice(0, 2).join(' | ')}`
+          });
+        }
+        const suspiciousIdentifiers = collectAssistantPhotoImportSuspiciousIdentifiers(normalizedSource);
+        if (suspiciousIdentifiers.length > 0) {
+          diagnostics.push({
+            operationIndex: index,
+            originalSource: source,
+            normalizedSource,
+            reason: `Math-cell update uses suspicious identifier names: ${suspiciousIdentifiers.join(', ')}`
           });
         }
         return {
@@ -4030,7 +4167,7 @@ export async function planNotebookChanges(params: {
   let plan: AssistantPlan = await runPlanning(planningSystemPrompt);
   if (photoImport) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const diagnostics = getPlanDiagnostics(plan);
+      const diagnostics = [...getPlanDiagnostics(plan), ...collectPhotoImportStructureDiagnostics(plan)];
       if (diagnostics.length === 0) break;
       onActivity?.({
         kind: 'phase',

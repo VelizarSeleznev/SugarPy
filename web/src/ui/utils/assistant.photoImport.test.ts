@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildOpenAIPhotoImportInput, normalizeAssistantMathSource } from './assistant.ts';
+import {
+  buildOpenAIPhotoImportInput,
+  collectPhotoImportStructureDiagnostics,
+  collectAssistantPhotoImportSuspiciousIdentifiers,
+  getAssistantPhotoImportMarkdownIssue,
+  normalizeAssistantMathSource
+} from './assistant.ts';
 import { buildAssistantImportSummary } from './assistantImportSummary.ts';
 
 test('buildOpenAIPhotoImportInput includes all queued images in order', () => {
@@ -170,4 +176,47 @@ test('normalizeAssistantMathSource keeps indexed identifiers intact in equation 
 test('normalizeAssistantMathSource does not split short identifier names like eq inside solve calls', () => {
   const normalized = normalizeAssistantMathSource('eq := (x - 1)^2 = 4\nsolutions := solve(eq, x)');
   assert.equal(normalized, 'eq := (x - 1)^2 = 4\nsolutions := solve(eq, x)');
+});
+
+test('collectAssistantPhotoImportSuspiciousIdentifiers flags OCR-style variable names', () => {
+  const suspicious = collectAssistantPhotoImportSuspiciousIdentifiers(
+    'en_hvilken_som_hestlinje := y = -1/3*x\nintersection := (3, 2)\np1 := (0, 0)'
+  );
+  assert.deepEqual(suspicious, ['en_hvilken_som_hestlinje']);
+});
+
+test('collectAssistantPhotoImportSuspiciousIdentifiers allows compact math identifiers', () => {
+  const suspicious = collectAssistantPhotoImportSuspiciousIdentifiers(
+    'eq := (x - 1)^2 = 4\nx1 := -3/5\ny1 := 4/5\np1 := (x1, y1)\ndistance_p1_p2 := sqrt((x2 - x1)^2 + (y2 - y1)^2)'
+  );
+  assert.deepEqual(suspicious, []);
+});
+
+test('getAssistantPhotoImportMarkdownIssue requires a short idea sentence below the heading', () => {
+  assert.equal(getAssistantPhotoImportMarkdownIssue('## Opg 1'), 'Markdown cell should include one short idea sentence under the heading.');
+  assert.equal(getAssistantPhotoImportMarkdownIssue('## Opg 1\nFind the line from a point and slope.'), null);
+});
+
+test('collectPhotoImportStructureDiagnostics flags markdown-only drafts that carry the derivation', () => {
+  const diagnostics = collectPhotoImportStructureDiagnostics({
+    summary: 'draft',
+    userMessage: '',
+    warnings: [],
+    operations: [
+      {
+        type: 'insert_cell',
+        index: 0,
+        cellType: 'markdown',
+        source:
+          '## Opg 1\nIdea note.\n- x = 1\n- y = 2\n- p = (1, 2)\n- distance = 3'
+      }
+    ],
+    outline: {
+      summary: 'draft',
+      steps: []
+    },
+    steps: []
+  });
+  assert.match(diagnostics[0]?.reason || '', /must include Math cells/);
+  assert.match(diagnostics[1]?.reason || '', /too much derivation detail/);
 });
