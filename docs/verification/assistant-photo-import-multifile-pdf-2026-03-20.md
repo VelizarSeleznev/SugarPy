@@ -20,7 +20,8 @@
   - after the shared server OpenAI key was configured, live extraction produced a staged draft for all 5 pages without validation errors
   - trace-driven follow-up normalization now rewrites handwritten textbook syntax into SugarPy-safe CAS form, including `±`, `v`, `|AB|`, prose-only math lines, `solve(...)` list assignments, and bare point tuples
   - the exact live artifact used for trace inspection is stored at `/Users/velizard/PycharmProjects/Gymnasium/SugarPy/output/playwright/assistant-photo-import-trace.json`
-  - the last follow-up browser retry for the final identifier-preservation micro-fix timed out at the assistant-flow wait step; that micro-fix is covered by a dedicated unit regression on `distance_p_1p_2`
+  - the latest follow-up browser run now also enforces a photo-import replan when the Math-cell source still contains textbook syntax or free prose; the resulting staged draft is visibly more CAS-native (for example `circle := ...`, `x1 := ...`, `p1 := (...)`, `intersection := (...)`)
+  - the latest live run still reported validation failure because the local Docker daemon was unavailable for assistant sandbox execution, not because the draft Math syntax was rejected
 - Recovery paths covered:
   - duplicate file selection ignored instead of duplicating queued items
   - unsupported file type rejected with drawer error

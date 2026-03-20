@@ -131,6 +131,13 @@ export type AssistantPhotoImportResult = {
   cells: AssistantPhotoImportCell[];
 };
 
+type AssistantMathNormalizationDiagnostic = {
+  operationIndex: number;
+  originalSource: string;
+  normalizedSource: string;
+  reason: string;
+};
+
 export type AssistantPhotoImportInputItem = {
   imageDataUrl: string;
   fileName?: string;
@@ -159,6 +166,7 @@ export type AssistantThinkingLevel = 'dynamic' | 'minimal' | 'low' | 'medium' | 
 export type AssistantProvider = 'gemini' | 'groq' | 'openai';
 
 const SERVER_PROXY_KEY_PREFIX = 'server-proxy:';
+const ASSISTANT_PLAN_DIAGNOSTICS = Symbol('assistantPlanDiagnostics');
 
 export type AssistantNetworkEvent = {
   phase: 'request_start' | 'response' | 'retry' | 'error' | 'aborted' | 'timeout' | 'stream';
@@ -1542,6 +1550,52 @@ export const normalizeAssistantMathSource = (source: string) => {
 
   return normalizedLines.join('\n');
 };
+
+const ASSISTANT_MATH_ALLOWED_WORDS = new Set([
+  'a',
+  'b',
+  'c',
+  'd',
+  'x',
+  'y',
+  'l',
+  'r',
+  'D',
+  'L',
+  'sqrt',
+  'solve',
+  'Eq',
+  'N',
+  'render_decimal',
+  'render_exact',
+  'set_decimal_places',
+  'center',
+  'radius',
+  'intersection',
+  'point',
+  'distance',
+  'distance_p1p2'
+]);
+
+const lineHasAssistantMathProse = (line: string) => {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith('#')) return false;
+  const words = trimmed.match(/[A-Za-zÆØÅæøå_]+/g) ?? [];
+  if (words.length === 0) return false;
+  const suspiciousWords = words.filter((word) => {
+    if (ASSISTANT_MATH_ALLOWED_WORDS.has(word)) return false;
+    if (/^[A-Za-z]_\d+$/.test(word)) return false;
+    if (/^[A-Za-z]$/.test(word)) return false;
+    if (/^[a-z]+_[a-z0-9_]+$/i.test(word)) return false;
+    return word.length > 1;
+  });
+  return suspiciousWords.length >= 2 || /:\s*$/.test(trimmed);
+};
+
+const getPlanDiagnostics = (plan: AssistantPlan) =>
+  ((plan as AssistantPlan & { [ASSISTANT_PLAN_DIAGNOSTICS]?: AssistantMathNormalizationDiagnostic[] })[
+    ASSISTANT_PLAN_DIAGNOSTICS
+  ] ?? []) as AssistantMathNormalizationDiagnostic[];
 
 const summarizeCell = (cell: NotebookCellSnapshot) => ({
   id: cell.id,
@@ -3043,6 +3097,21 @@ const VALIDATION_REQUIRED_REMINDER = [
   'If validation fails, revise the code or add a precise validation warning.'
 ].join('\n');
 
+const buildPhotoImportRevisionFeedback = (diagnostics: AssistantMathNormalizationDiagnostic[]) =>
+  [
+    'Your previous photo-import plan used handwritten or non-CAS math syntax that had to be normalized after generation.',
+    'Revise the plan so the Math-cell source is already valid SugarPy CAS syntax before any post-processing.',
+    'Do not repeat the rewritten patterns below.',
+    ...diagnostics.slice(0, 3).flatMap((diagnostic, index) => [
+      `Issue ${index + 1} reason: ${diagnostic.reason}`,
+      `Issue ${index + 1} original Math cell source:`,
+      diagnostic.originalSource,
+      `Issue ${index + 1} normalized target form:`,
+      diagnostic.normalizedSource
+    ]),
+    'Return a full revised AssistantPlan. Keep the mathematical meaning, but write it directly in valid SugarPy CAS syntax.'
+  ].join('\n');
+
 const runGeminiValidationLoop = async (
   apiKey: string,
   model: string,
@@ -3563,25 +3632,71 @@ const runGroqPlanningLoop = async (
 const normalizePlan = (raw: any): AssistantPlan => {
   const payload = raw && typeof raw === 'object' && raw.plan && typeof raw.plan === 'object' ? raw.plan : raw;
   const operations = Array.isArray(payload?.operations) ? payload.operations : [];
+  const diagnostics: AssistantMathNormalizationDiagnostic[] = [];
   const normalizedOperations = operations
-    .map((item: any) => {
+    .map((item: any, index: number) => {
       const type = String(item?.type ?? '');
       if (type === 'insert_cell') {
         const cellType = (item?.cellType ?? 'code') as AssistantCellKind;
         const source = String(item?.source ?? '');
+        const normalizedSource = cellType === 'math' ? normalizeAssistantMathSource(source) : source;
+        if (cellType === 'math' && normalizedSource !== source) {
+          diagnostics.push({
+            operationIndex: index,
+            originalSource: source,
+            normalizedSource,
+            reason: 'Math-cell source required textbook-to-CAS normalization.'
+          });
+        }
+        if (cellType === 'math') {
+          const proseLines = normalizedSource
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => lineHasAssistantMathProse(line));
+          if (proseLines.length > 0) {
+            diagnostics.push({
+              operationIndex: index,
+              originalSource: source,
+              normalizedSource,
+              reason: `Math-cell source still contains prose/non-CAS lines: ${proseLines.slice(0, 2).join(' | ')}`
+            });
+          }
+        }
         return {
           type,
           index: Number(item?.index ?? 0),
           cellType,
-          source: cellType === 'math' ? normalizeAssistantMathSource(source) : source,
+          source: normalizedSource,
           reason: item?.reason ? String(item.reason) : undefined
         };
       }
       if (type === 'update_cell') {
+        const source = String(item?.source ?? '');
+        const normalizedSource = normalizeAssistantMathSource(source);
+        if (normalizedSource !== source) {
+          diagnostics.push({
+            operationIndex: index,
+            originalSource: source,
+            normalizedSource,
+            reason: 'Math-cell update required textbook-to-CAS normalization.'
+          });
+        }
+        const proseLines = normalizedSource
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => lineHasAssistantMathProse(line));
+        if (proseLines.length > 0) {
+          diagnostics.push({
+            operationIndex: index,
+            originalSource: source,
+            normalizedSource,
+            reason: `Math-cell update still contains prose/non-CAS lines: ${proseLines.slice(0, 2).join(' | ')}`
+          });
+        }
         return {
           type,
           cellId: String(item?.cellId ?? ''),
-          source: String(item?.source ?? ''),
+          source: normalizedSource,
           reason: item?.reason ? String(item.reason) : undefined
         };
       }
@@ -3613,7 +3728,7 @@ const normalizePlan = (raw: any): AssistantPlan => {
     })
     .filter(Boolean) as AssistantOperation[];
   const steps = buildPlanSteps(normalizedOperations);
-  return {
+  const plan = {
     summary: String(payload?.summary ?? 'Prepared a notebook change set.'),
     userMessage: String(payload?.userMessage ?? ''),
     warnings: Array.isArray(payload?.warnings) ? payload.warnings.map((item: unknown) => String(item)) : [],
@@ -3623,7 +3738,11 @@ const normalizePlan = (raw: any): AssistantPlan => {
       steps: steps.map((step) => step.summary)
     },
     steps
-  };
+  } satisfies AssistantPlan;
+  (plan as AssistantPlan & { [ASSISTANT_PLAN_DIAGNOSTICS]?: AssistantMathNormalizationDiagnostic[] })[
+    ASSISTANT_PLAN_DIAGNOSTICS
+  ] = diagnostics;
+  return plan;
 };
 
 export async function planNotebookChanges(params: {
@@ -3795,7 +3914,8 @@ export async function planNotebookChanges(params: {
           'If a final object depends on solved values, substitute the concrete values before writing the final assignment. Do not leave placeholders such as (x, y).',
           'Do not use textbook notation such as sum_{k=1}^n, display-style chained equalities, or mixed assignment-plus-equation lines when a direct SugarPy form exists.',
           'Never write chained equalities such as a = b = c in one Math-cell line. Rewrite them as separate one-equation lines.',
-          'Each imported Math cell should be either one equation or a block of simple assignments, not both at once.'
+          'Each imported Math cell should be either one equation or a block of simple assignments, not both at once.',
+          'Your plan will be rejected and sent back for revision if the Math-cell source still needs textbook-to-CAS normalization after generation.'
         ]
       : []),
     ...preferenceRules
@@ -3837,13 +3957,20 @@ export async function planNotebookChanges(params: {
     throw new Error('Photo import currently requires an OpenAI model path.');
   }
   const planningInput = photoImport ? buildOpenAIPhotoImportInput(planningPayload, photoImport) : planningPayload;
-  const runPlanning = async (systemPrompt: string) => {
+  const runPlanning = async (systemPrompt: string, revisionFeedback?: string) => {
+    const revisedPayload = revisionFeedback ? `${planningPayload}\n\nPlanner revision feedback:\n${revisionFeedback}` : planningPayload;
+    const revisedInput =
+      photoImport && provider === 'openai'
+        ? buildOpenAIPhotoImportInput(revisedPayload, photoImport)
+        : photoImport
+          ? planningInput
+          : revisedPayload;
     if (provider === 'openai') {
       return runOpenAIPlanningLoop(
         apiKey,
         model,
         systemPrompt,
-        planningInput,
+        revisedInput,
         signal,
         thinkingLevel,
         onNetworkEvent,
@@ -3855,7 +3982,7 @@ export async function planNotebookChanges(params: {
         apiKey,
         model,
         systemPrompt,
-        planningPayload,
+        revisedPayload,
         signal,
         thinkingLevel,
         onNetworkEvent,
@@ -3874,7 +4001,7 @@ export async function planNotebookChanges(params: {
             contents: [
               {
                 role: 'user',
-                parts: [{ text: planningPayload }]
+                parts: [{ text: revisedPayload }]
               }
             ],
             generationConfig: {
@@ -3896,6 +4023,18 @@ export async function planNotebookChanges(params: {
   };
 
   let plan: AssistantPlan = await runPlanning(planningSystemPrompt);
+  if (photoImport) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const diagnostics = getPlanDiagnostics(plan);
+      if (diagnostics.length === 0) break;
+      onActivity?.({
+        kind: 'phase',
+        label: 'Revising photo-import syntax',
+        detail: `Requesting CAS-native rewrite ${attempt + 1}`
+      });
+      plan = await runPlanning(planningSystemPrompt, buildPhotoImportRevisionFeedback(diagnostics));
+    }
+  }
 
   if (requestLooksMathLike(request) && !requestExplicitlyAsksForPython(request) && planHasPythonCodeOperations(plan)) {
     onActivity?.({
