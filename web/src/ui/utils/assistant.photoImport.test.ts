@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildOpenAIPhotoImportInput } from './assistant.ts';
+import { buildOpenAIPhotoImportInput, normalizeAssistantMathSource } from './assistant.ts';
 import { buildAssistantImportSummary } from './assistantImportSummary.ts';
 
 test('buildOpenAIPhotoImportInput includes all queued images in order', () => {
@@ -85,4 +85,14 @@ test('buildAssistantImportSummary groups PDF pages and keeps standalone images',
   ]);
 
   assert.equal(summary, 'photo.png, notes.pdf (pages 1, 2)');
+});
+
+test('normalizeAssistantMathSource splits chained top-level equalities into one equation per line', () => {
+  const normalized = normalizeAssistantMathSource('y = -x + 4 = x^2 - 3*x + 2');
+  assert.equal(normalized, 'y = -x + 4\n-x + 4 = x^2 - 3*x + 2');
+});
+
+test('normalizeAssistantMathSource leaves assignments and single equations unchanged', () => {
+  const source = 'eq1 := (x - 2)^2 + (y - 1)^2 = 9\npoint := (3, 2)\ny = 2*x + 1';
+  assert.equal(normalizeAssistantMathSource(source), source);
 });

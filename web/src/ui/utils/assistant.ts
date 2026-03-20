@@ -1249,6 +1249,48 @@ const buildPlanSteps = (operations: AssistantOperation[]) => {
   return steps;
 };
 
+const findTopLevelEquationBreaks = (line: string) => {
+  const positions: number[] = [];
+  let depth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '(' || char === '[' || char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === ')' || char === ']' || char === '}') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (char !== '=' || depth !== 0) continue;
+    const prev = line[index - 1] || '';
+    const next = line[index + 1] || '';
+    if (prev === ':' || prev === '<' || prev === '>' || prev === '!' || next === '=') continue;
+    positions.push(index);
+  }
+  return positions;
+};
+
+export const normalizeAssistantMathSource = (source: string) => {
+  return source
+    .split('\n')
+    .flatMap((rawLine) => {
+      const line = rawLine.trim();
+      if (!line || line.includes(':=')) return [rawLine];
+      const breaks = findTopLevelEquationBreaks(rawLine);
+      if (breaks.length <= 1) return [rawLine];
+      const segments = rawLine.split('=').map((part) => part.trim()).filter(Boolean);
+      if (segments.length <= 2) return [rawLine];
+      const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+      const normalizedLines: string[] = [];
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        normalizedLines.push(`${indent}${segments[index]} = ${segments[index + 1]}`);
+      }
+      return normalizedLines;
+    })
+    .join('\n');
+};
+
 const summarizeCell = (cell: NotebookCellSnapshot) => ({
   id: cell.id,
   type: cell.type,
@@ -3273,11 +3315,13 @@ const normalizePlan = (raw: any): AssistantPlan => {
     .map((item: any) => {
       const type = String(item?.type ?? '');
       if (type === 'insert_cell') {
+        const cellType = (item?.cellType ?? 'code') as AssistantCellKind;
+        const source = String(item?.source ?? '');
         return {
           type,
           index: Number(item?.index ?? 0),
-          cellType: (item?.cellType ?? 'code') as AssistantCellKind,
-          source: String(item?.source ?? ''),
+          cellType,
+          source: cellType === 'math' ? normalizeAssistantMathSource(source) : source,
           reason: item?.reason ? String(item.reason) : undefined
         };
       }
@@ -3497,6 +3541,7 @@ export async function planNotebookChanges(params: {
           'Do not write labels like Intersection = (3, 2); use point := (3, 2) or leave the tuple unlabelled.',
           'If a final object depends on solved values, substitute the concrete values before writing the final assignment. Do not leave placeholders such as (x, y).',
           'Do not use textbook notation such as sum_{k=1}^n, display-style chained equalities, or mixed assignment-plus-equation lines when a direct SugarPy form exists.',
+          'Never write chained equalities such as a = b = c in one Math-cell line. Rewrite them as separate one-equation lines.',
           'Each imported Math cell should be either one equation or a block of simple assignments, not both at once.'
         ]
       : []),
