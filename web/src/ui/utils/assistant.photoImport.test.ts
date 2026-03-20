@@ -106,3 +106,63 @@ test('normalizeAssistantMathSource rewrites textbook norm notation into SugarPy 
     'distance_p_1p_2 := sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\ndistance_p_1p_2 = 1/5*sqrt(320)'
   );
 });
+
+test('normalizeAssistantMathSource rewrites plus-minus solutions into explicit CAS assignments', () => {
+  const normalized = normalizeAssistantMathSource('x = (-b ± sqrt(D)) / (2a)');
+  assert.equal(normalized, 'x_1 := (-b - sqrt(D)) / (2*a)\nx_2 := (-b + sqrt(D)) / (2*a)');
+});
+
+test('normalizeAssistantMathSource rewrites v-separated handwritten alternatives into explicit assignments', () => {
+  const normalized = normalizeAssistantMathSource('(-3 / 5) v x = 1');
+  assert.equal(normalized, 'x_1 := -3 / 5\nx_2 := 1');
+});
+
+test('normalizeAssistantMathSource carries forward the lhs for handwritten follow-up equality lines', () => {
+  const normalized = normalizeAssistantMathSource(
+    '|P_1P_2| = sqrt((1 - (-3 / 5))^2 + (4 - 4 / 5)^2)\n= sqrt((8 / 5)^2 + (16 / 5)^2)\n= 1 / 5 * sqrt(320)'
+  );
+  assert.equal(
+    normalized,
+    'distance_p_1p_2 := sqrt((1 - (-3 / 5))^2 + (4 - 4 / 5)^2)\ndistance_p_1p_2 = sqrt((8 / 5)^2 + (16 / 5)^2)\ndistance_p_1p_2 = 1 / 5 * sqrt(320)'
+  );
+});
+
+test('normalizeAssistantMathSource rewrites solve assignments into explicit unpack assignments', () => {
+  const normalized = normalizeAssistantMathSource('x := solve(5*x^2 - 2*x - 3 = 0, x)');
+  assert.equal(normalized, 'x_1, x_2 := solve(5*x^2 - 2*x - 3 = 0, x)');
+});
+
+test('normalizeAssistantMathSource rewrites assignment derivations and resolves indexed plus-minus branches', () => {
+  const normalized = normalizeAssistantMathSource(
+    'x_1 := (-b - sqrt(D)) / (2a) = -(-2) ± sqrt(64) / (2 * 5) = (2 ± 8) / 10'
+  );
+  assert.equal(
+    normalized,
+    'x_1 := (-b - sqrt(D)) / (2*a)\nx_1 = -(-2) - sqrt(64) / (2 * 5)\nx_1 = (2 - 8) / 10'
+  );
+});
+
+test('normalizeAssistantMathSource drops prose-only lines and keeps explicit example equations', () => {
+  const normalized = normalizeAssistantMathSource('En vinkel som hører til linie med hældning -1/3.\nFor eks.: y = -1/3 x.');
+  assert.equal(normalized, 'y = -1/3*x');
+});
+
+test('normalizeAssistantMathSource rewrites center and radius prose into assignments', () => {
+  const normalized = normalizeAssistantMathSource('Centrum er (1, -2) og radius er 4.');
+  assert.equal(normalized, 'center := (1, -2)\nradius := 4');
+});
+
+test('normalizeAssistantMathSource rewrites tuple summaries into explicit point assignments', () => {
+  const normalized = normalizeAssistantMathSource('Punkterne er da hhv. (-3/5, 4/5) og (1, 4)');
+  assert.equal(normalized, 'p_1 := (-3/5, 4/5)\np_2 := (1, 4)');
+});
+
+test('normalizeAssistantMathSource keeps indexed identifiers intact in equation follow-up lines', () => {
+  const normalized = normalizeAssistantMathSource(
+    'distance_p_1p_2 := sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\ndistance_p_1p_2 = sqrt((8/5)^2 + (16/5)^2)'
+  );
+  assert.equal(
+    normalized,
+    'distance_p_1p_2 := sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\ndistance_p_1p_2 = sqrt((8/5)^2 + (16/5)^2)'
+  );
+});

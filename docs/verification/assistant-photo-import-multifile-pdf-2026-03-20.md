@@ -17,7 +17,10 @@
   - live browser validation on `/Users/velizard/Downloads/PlangeometriProveRetteark.pdf`
   - verified 5 PDF pages render as queued previews in order before extraction
   - verified the extraction request leaves the browser through the SugarPy server proxy path when a shared server OpenAI key is configured
-  - live extraction on this machine stopped at upstream `401 Incorrect API key`, so final staged-draft validation remains blocked until a valid server/browser OpenAI key is configured
+  - after the shared server OpenAI key was configured, live extraction produced a staged draft for all 5 pages without validation errors
+  - trace-driven follow-up normalization now rewrites handwritten textbook syntax into SugarPy-safe CAS form, including `±`, `v`, `|AB|`, prose-only math lines, `solve(...)` list assignments, and bare point tuples
+  - the exact live artifact used for trace inspection is stored at `/Users/velizard/PycharmProjects/Gymnasium/SugarPy/output/playwright/assistant-photo-import-trace.json`
+  - the last follow-up browser retry for the final identifier-preservation micro-fix timed out at the assistant-flow wait step; that micro-fix is covered by a dedicated unit regression on `distance_p_1p_2`
 - Recovery paths covered:
   - duplicate file selection ignored instead of duplicating queued items
   - unsupported file type rejected with drawer error
