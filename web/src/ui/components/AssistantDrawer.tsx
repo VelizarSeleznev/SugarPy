@@ -29,11 +29,17 @@ type AssistantChat = {
 };
 
 type AssistantPhotoImportPreview = {
-  fileName: string;
-  mimeType: string;
-  previewUrl: string;
-  width: number;
-  height: number;
+  items: Array<{
+    id: string;
+    kind: 'image' | 'pdf-page';
+    fileName: string;
+    displayName: string;
+    mimeType: string;
+    previewUrl: string;
+    width: number;
+    height: number;
+    pageNumber?: number;
+  }>;
   instructions: string;
 };
 
@@ -51,6 +57,7 @@ type Props = {
   activeChatId: string | null;
   settingsOpen: boolean;
   photoImport: AssistantPhotoImportPreview | null;
+  photoImportPreparing: boolean;
   onClose: () => void;
   onOpenChat: () => void;
   onToggleSettings: () => void;
@@ -66,7 +73,8 @@ type Props = {
   onRevise: (messageId: string) => void;
   onSelectChat: (chatId: string) => void;
   onNewChat: () => void;
-  onSelectPhoto: (file: File | null) => void;
+  onSelectPhotoFiles: (files: File[] | FileList | null | undefined) => void;
+  onRemovePhotoItem: (id: string) => void;
   onChangePhotoInstructions: (value: string) => void;
   onExtractPhoto: () => void;
   onCancelPhotoImport: () => void;
@@ -100,6 +108,7 @@ export function AssistantDrawer({
   activeChatId,
   settingsOpen,
   photoImport,
+  photoImportPreparing,
   onClose,
   onOpenChat,
   onToggleSettings,
@@ -115,7 +124,8 @@ export function AssistantDrawer({
   onRevise,
   onSelectChat,
   onNewChat,
-  onSelectPhoto,
+  onSelectPhotoFiles,
+  onRemovePhotoItem,
   onChangePhotoInstructions,
   onExtractPhoto,
   onCancelPhotoImport
@@ -128,6 +138,7 @@ export function AssistantDrawer({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [timeTick, setTimeTick] = useState(Date.now());
+  const [isDragActive, setIsDragActive] = useState(false);
 
   useEffect(() => {
     if (!textareaRef.current) return;
@@ -154,6 +165,23 @@ export function AssistantDrawer({
     [activeChat]
   );
   const showChatSection = entryMode === 'chat' || visibleMessages.length > 0 || draft.trim().length > 0;
+  const photoImportItems = photoImport?.items ?? [];
+  const hasPhotoItems = photoImportItems.length > 0;
+  const hasPdfItems = photoImportItems.some((item) => item.kind === 'pdf-page');
+
+  const handleDataTransfer = (files: FileList | null) => {
+    onSelectPhotoFiles(files);
+  };
+
+  const handlePaste: React.ClipboardEventHandler<HTMLDivElement> = (event) => {
+    const clipboardFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (clipboardFiles.length === 0) return;
+    event.preventDefault();
+    onSelectPhotoFiles(clipboardFiles);
+  };
 
   return (
     <aside className={`assistant-drawer${open ? ' open' : ''}`} aria-hidden={!open}>
@@ -262,58 +290,116 @@ export function AssistantDrawer({
           <div>
             <div className="assistant-op-title">Import from photo</div>
             <div className="assistant-op-reason">
-              Use a handwritten photo as the main entry flow. The assistant keeps the proposed draft visible even when validation fails.
+              Paste screenshots, drop files here, or queue several images and PDF pages into one import run.
             </div>
           </div>
-          <div className="assistant-footer-actions">
-            <button
-              type="button"
-              className="button"
-              data-testid="assistant-import-photo"
-              onClick={() => photoInputRef.current?.click()}
-              disabled={loading}
-            >
-              Choose photo
-            </button>
-            {!showChatSection ? (
+          <div
+            className={`assistant-photo-dropzone${isDragActive ? ' is-drag-active' : ''}${photoImportPreparing ? ' is-preparing' : ''}`}
+            data-testid="assistant-photo-dropzone"
+            onPaste={handlePaste}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsDragActive(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (!isDragActive) setIsDragActive(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              const nextTarget = event.relatedTarget;
+              if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+                setIsDragActive(false);
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDragActive(false);
+              handleDataTransfer(event.dataTransfer.files);
+            }}
+          >
+            <div className="assistant-photo-dropzone-title">
+              {photoImportPreparing ? 'Preparing pages…' : 'Drop images or PDF here'}
+            </div>
+            <div className="assistant-op-reason">
+              Supports multiple images, drag-and-drop, clipboard images, and PDF files rendered into page previews.
+            </div>
+            <div className="assistant-footer-actions">
               <button
                 type="button"
-                className="button secondary"
-                data-testid="assistant-open-chat"
-                onClick={onOpenChat}
-                disabled={loading}
+                className="button"
+                data-testid="assistant-import-photo"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={loading || photoImportPreparing}
               >
-                Open typed assistant
+                {hasPhotoItems ? 'Add more files' : 'Choose files'}
               </button>
-            ) : null}
+              {!showChatSection ? (
+                <button
+                  type="button"
+                  className="button secondary"
+                  data-testid="assistant-open-chat"
+                  onClick={onOpenChat}
+                  disabled={loading}
+                >
+                  Open typed assistant
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
 
         <input
           ref={photoInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,application/pdf"
+          multiple
           className="file-input"
           data-testid="assistant-photo-input"
           onChange={(event) => {
-            onSelectPhoto(event.target.files?.[0] ?? null);
+            onSelectPhotoFiles(event.target.files);
             event.target.value = '';
           }}
         />
 
         {photoImport ? (
           <div className="assistant-photo-import" data-testid="assistant-photo-import">
-            <div className="assistant-photo-preview-wrap">
-              <img
-                src={photoImport.previewUrl}
-                alt={photoImport.fileName}
-                className="assistant-photo-preview"
-                data-testid="assistant-photo-preview"
-              />
+            <div className="assistant-photo-import-header">
+              <div>
+                <div className="assistant-op-title">
+                  {photoImportItems.length} queued {photoImportItems.length === 1 ? 'item' : 'items'}
+                </div>
+                <div className="assistant-op-reason">
+                  {hasPdfItems ? 'PDF pages keep their original order in the import request.' : 'The assistant will read the queued images in the shown order.'}
+                </div>
+              </div>
+              {photoImportPreparing ? <div className="assistant-op-reason">Rendering previews…</div> : null}
             </div>
-            <div className="assistant-photo-meta">
-              <strong>{photoImport.fileName}</strong>
-              <span>{photoImport.width} × {photoImport.height} · {photoImport.mimeType}</span>
+            <div className="assistant-photo-grid" data-testid="assistant-photo-grid">
+              {photoImportItems.map((item) => (
+                <div key={item.id} className="assistant-photo-card" data-testid="assistant-photo-preview">
+                  <div className="assistant-photo-preview-wrap">
+                    <img src={item.previewUrl} alt={item.displayName} className="assistant-photo-preview" />
+                  </div>
+                  <div className="assistant-photo-meta">
+                    <strong>{item.displayName}</strong>
+                    <span>
+                      {item.width} × {item.height} · {item.mimeType}
+                    </span>
+                  </div>
+                  <div className="assistant-preview-actions">
+                    <button
+                      type="button"
+                      className="button ghost"
+                      data-testid="assistant-photo-remove"
+                      onClick={() => onRemovePhotoItem(item.id)}
+                      disabled={loading || photoImportPreparing}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
             <label className="assistant-field">
               <span>Optional instruction</span>
@@ -331,31 +417,33 @@ export function AssistantDrawer({
                 className="button"
                 data-testid="assistant-photo-extract"
                 onClick={onExtractPhoto}
-                disabled={loading}
+                disabled={loading || photoImportPreparing || !hasPhotoItems}
               >
                 Extract draft
               </button>
               <button
                 type="button"
                 className="button secondary"
-                data-testid="assistant-photo-cancel"
+                data-testid="assistant-photo-clear"
                 onClick={onCancelPhotoImport}
-                disabled={loading}
+                disabled={loading || photoImportPreparing}
               >
-                Cancel
+                Clear all
               </button>
               <button
                 type="button"
                 className="button ghost"
                 data-testid="assistant-photo-replace"
                 onClick={() => photoInputRef.current?.click()}
-                disabled={loading}
+                disabled={loading || photoImportPreparing}
               >
-                Replace photo
+                Add more
               </button>
             </div>
           </div>
         ) : null}
+
+        {error && !showChatSection ? <div className="assistant-error">{error}</div> : null}
 
         {showChatSection ? (
           <div className="assistant-secondary-chat">

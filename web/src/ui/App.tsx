@@ -55,13 +55,18 @@ import {
   loadLastOpenId,
   pruneLocalNotebookSnapshots,
   removeStorageItem,
-  readFileAsDataUrl,
   readFileAsText,
   saveToLocalStorage,
   serializeIpynb,
   serializeSugarPy,
   writeStorageItem
 } from './utils/notebookIO';
+import {
+  AssistantImportItem,
+  buildFileDedupKey,
+  prepareAssistantImportFile
+} from './utils/assistantImport';
+import { buildAssistantImportSummary } from './utils/assistantImportSummary';
 import {
   FIRST_RUN_NOTEBOOK_NAME,
   getFirstRunNotebookCells,
@@ -242,17 +247,16 @@ type AssistantRuntimeConfig = {
 };
 
 type AssistantPhotoImport = {
-  fileName: string;
-  mimeType: string;
-  dataUrl: string;
-  width: number;
-  height: number;
+  items: AssistantImportItem[];
   instructions: string;
 };
 
 type CoachmarkStep = 'add' | 'menu' | 'drag' | 'math' | 'done';
 
 const MAX_ASSISTANT_IMPORT_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_ASSISTANT_IMPORT_TOTAL_BYTES = 30 * 1024 * 1024;
+const MAX_ASSISTANT_IMPORT_PDF_PAGES = 8;
+const MAX_ASSISTANT_IMPORT_ITEMS = 16;
 const ASSISTANT_PHOTO_IMPORT_MODEL = 'gpt-5.4-mini';
 
 const getNotebookExecCounter = (cells: CellModel[]) =>
@@ -318,6 +322,16 @@ type AssistantRunTrace = {
     };
   };
   conversationHistory: AssistantConversationEntry[];
+  photoImport?: {
+    instructions: string;
+    items: Array<{
+      index: number;
+      fileName: string;
+      displayName: string;
+      pageNumber: number | null;
+      mimeType: string;
+    }>;
+  };
   activity: AssistantActivity[];
   network: AssistantNetworkEvent[];
   responses: AssistantResponseTrace[];
@@ -370,14 +384,6 @@ const readOptionalStorageItem = (key: string) => {
     return null;
   }
 };
-
-const readImageDimensions = (dataUrl: string) =>
-  new Promise<{ width: number; height: number }>((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth || image.width, height: image.naturalHeight || image.height });
-    image.onerror = () => reject(new Error('Failed to load image preview.'));
-    image.src = dataUrl;
-  });
 
 const RunAllIcon = () => (
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
@@ -450,6 +456,7 @@ function App() {
   const [assistantThinkingLevel, setAssistantThinkingLevel] = useState<AssistantThinkingLevel>('dynamic');
   const [assistantDraft, setAssistantDraft] = useState('');
   const [assistantPhotoImport, setAssistantPhotoImport] = useState<AssistantPhotoImport | null>(null);
+  const [assistantPhotoImportPreparing, setAssistantPhotoImportPreparing] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState('');
@@ -2449,37 +2456,73 @@ function App() {
     return '';
   };
 
-  const handleSelectAssistantPhoto = async (file: File | null) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setAssistantError('Choose an image file for photo import.');
+  const getAssistantImportTotalBytes = (items: AssistantImportItem[]) =>
+    items.reduce((total, item) => total + item.sourceSizeBytes, 0);
+
+  const handleSelectAssistantPhotos = async (files: File[] | FileList | null | undefined) => {
+    const nextFiles = Array.from(files ?? []);
+    if (nextFiles.length === 0) return;
+    const existingImport = assistantPhotoImport;
+    const existingItems = existingImport?.items ?? [];
+    const knownSourceKeys = new Set(existingItems.map((item) => item.sourceKey));
+    const dedupedFiles: File[] = [];
+    for (const file of nextFiles) {
+      const sourceKey = buildFileDedupKey(file);
+      if (knownSourceKeys.has(sourceKey)) continue;
+      knownSourceKeys.add(sourceKey);
+      dedupedFiles.push(file);
+    }
+    if (dedupedFiles.length === 0) {
+      setAssistantError('Those files are already queued for import.');
       return;
     }
-    if (file.size > MAX_ASSISTANT_IMPORT_IMAGE_BYTES) {
-      setAssistantError('Photo import currently supports images up to 10 MB.');
+    if (existingItems.length + dedupedFiles.length > MAX_ASSISTANT_IMPORT_ITEMS) {
+      setAssistantError(`Photo import currently supports up to ${MAX_ASSISTANT_IMPORT_ITEMS} queued pages or images.`);
       return;
     }
+
+    setAssistantPhotoImportPreparing(true);
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const dimensions = await readImageDimensions(dataUrl);
+      const preparedItems = [...existingItems];
+      let totalBytes = getAssistantImportTotalBytes(preparedItems);
+      for (const file of dedupedFiles) {
+        const prepared = await prepareAssistantImportFile(file, {
+          maxImageBytes: MAX_ASSISTANT_IMPORT_IMAGE_BYTES,
+          maxPdfPages: MAX_ASSISTANT_IMPORT_PDF_PAGES,
+          maxTotalBytes: MAX_ASSISTANT_IMPORT_TOTAL_BYTES,
+          currentTotalBytes: totalBytes
+        });
+        if (!prepared.ok) {
+          setAssistantError(prepared.error);
+          return;
+        }
+        preparedItems.push(...prepared.items);
+        totalBytes = getAssistantImportTotalBytes(preparedItems);
+        if (preparedItems.length > MAX_ASSISTANT_IMPORT_ITEMS) {
+          setAssistantError(`Photo import currently supports up to ${MAX_ASSISTANT_IMPORT_ITEMS} queued pages or images.`);
+          return;
+        }
+      }
       setAssistantPhotoImport({
-        fileName: file.name || 'photo',
-        mimeType: file.type || 'image/*',
-        dataUrl,
-        width: dimensions.width,
-        height: dimensions.height,
-        instructions: assistantPhotoImport?.instructions ?? ''
+        items: preparedItems,
+        instructions: existingImport?.instructions ?? ''
       });
       setAssistantError('');
     } catch (error) {
-      setAssistantError(error instanceof Error ? error.message : 'Failed to read image file.');
+      setAssistantError(error instanceof Error ? error.message : 'Failed to prepare imported files.');
+    } finally {
+      setAssistantPhotoImportPreparing(false);
     }
   };
 
   const runAssistantPhotoImport = async (options?: { chatId?: string }) => {
     const photoImport = assistantPhotoImport;
-    if (!photoImport) {
-      setAssistantError('Choose a photo before extracting a draft.');
+    if (!photoImport || photoImport.items.length === 0) {
+      setAssistantError('Choose at least one image or PDF before extracting a draft.');
+      return;
+    }
+    if (assistantPhotoImportPreparing) {
+      setAssistantError('Wait for the selected files to finish preparing before extracting a draft.');
       return;
     }
     const runtimeConfig = await hydrateAssistantRuntimeConfig();
@@ -2492,8 +2535,9 @@ function App() {
     const chatId = options?.chatId ?? ensureAssistantChat();
     const traceId = `assistant-trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const timestamp = new Date().toISOString();
+    const importSummary = buildAssistantImportSummary(photoImport.items);
     const instructionSuffix = photoImport.instructions.trim() ? `\nInstruction: ${photoImport.instructions.trim()}` : '';
-    const messageLabel = `Import photo: ${photoImport.fileName}${instructionSuffix}`;
+    const messageLabel = `Import pages: ${importSummary}${instructionSuffix}`;
     const userMessageId = `assistant-user-${Date.now()}`;
     const assistantMessageId = `assistant-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const userMessage: AssistantChatMessage = {
@@ -2514,7 +2558,7 @@ function App() {
 
     updateAssistantChat(chatId, (chat) => ({
       ...chat,
-      title: chat.messages.length > 0 ? chat.title : previewAssistantLabel(`Photo import ${photoImport.fileName}`, 'Photo import'),
+      title: chat.messages.length > 0 ? chat.title : previewAssistantLabel(`Photo import ${importSummary}`, 'Photo import'),
       messages: [...chat.messages, userMessage, assistantMessage]
     }));
 
@@ -2538,6 +2582,16 @@ function App() {
         }
       },
       conversationHistory: [{ role: 'user', content: messageLabel }],
+      photoImport: {
+        instructions: photoImport.instructions,
+        items: photoImport.items.map((item, index) => ({
+          index,
+          fileName: item.sourceFileName,
+          displayName: item.displayName,
+          pageNumber: item.pageNumber ?? null,
+          mimeType: item.mimeType
+        }))
+      },
       activity: [],
       network: [],
       responses: [],
@@ -2558,8 +2612,9 @@ function App() {
 
     try {
       const requestText = [
-        'Import the uploaded handwritten math page into SugarPy notebook cells.',
+        'Import the uploaded handwritten pages into SugarPy notebook cells.',
         'Append imported content as new cells only.',
+        `Attached pages/images: ${importSummary}.`,
         photoImport.instructions.trim() ? `User import goal: ${photoImport.instructions.trim()}` : ''
       ]
         .filter(Boolean)
@@ -2572,8 +2627,13 @@ function App() {
         preference: ASSISTANT_PREFERENCE,
         context: buildAssistantContext(),
         photoImport: {
-          imageDataUrl: photoImport.dataUrl,
-          fileName: photoImport.fileName,
+          items: photoImport.items.map((item) => ({
+            imageDataUrl: item.dataUrl,
+            fileName: item.sourceFileName,
+            displayName: item.displayName,
+            mimeType: item.mimeType,
+            pageNumber: item.pageNumber
+          })),
           instructions: photoImport.instructions
         },
         signal: controller.signal,
@@ -4051,14 +4111,21 @@ function App() {
             chats={assistantChats}
             activeChatId={assistantActiveChatId}
             settingsOpen={assistantSettingsOpen}
+            photoImportPreparing={assistantPhotoImportPreparing}
             photoImport={
               assistantPhotoImport
                 ? {
-                    fileName: assistantPhotoImport.fileName,
-                    mimeType: assistantPhotoImport.mimeType,
-                    previewUrl: assistantPhotoImport.dataUrl,
-                    width: assistantPhotoImport.width,
-                    height: assistantPhotoImport.height,
+                    items: assistantPhotoImport.items.map((item) => ({
+                      id: item.id,
+                      kind: item.kind,
+                      fileName: item.sourceFileName,
+                      displayName: item.displayName,
+                      mimeType: item.mimeType,
+                      previewUrl: item.dataUrl,
+                      width: item.width,
+                      height: item.height,
+                      pageNumber: item.pageNumber
+                    })),
                     instructions: assistantPhotoImport.instructions
                   }
                 : null
@@ -4070,8 +4137,15 @@ function App() {
             onChangeModel={setAssistantModel}
             onChangeThinkingLevel={setAssistantThinkingLevel}
             onChangeDraft={setAssistantDraft}
-            onSelectPhoto={(file) => {
-              void handleSelectAssistantPhoto(file);
+            onSelectPhotoFiles={(files) => {
+              void handleSelectAssistantPhotos(files);
+            }}
+            onRemovePhotoItem={(id) => {
+              setAssistantPhotoImport((prev) => {
+                if (!prev) return prev;
+                const items = prev.items.filter((item) => item.id !== id);
+                return items.length > 0 ? { ...prev, items } : null;
+              });
             }}
             onChangePhotoInstructions={(value) => {
               setAssistantPhotoImport((prev) => (prev ? { ...prev, instructions: value } : prev));

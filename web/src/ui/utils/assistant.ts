@@ -131,9 +131,16 @@ export type AssistantPhotoImportResult = {
   cells: AssistantPhotoImportCell[];
 };
 
-export type AssistantPhotoImportInput = {
+export type AssistantPhotoImportInputItem = {
   imageDataUrl: string;
   fileName?: string;
+  displayName?: string;
+  mimeType?: string;
+  pageNumber?: number;
+};
+
+export type AssistantPhotoImportInput = {
+  items: AssistantPhotoImportInputItem[];
   instructions?: string;
 };
 
@@ -2175,6 +2182,10 @@ const buildInspectionPrompt = (
   conversationHistory: AssistantConversationEntry[],
   photoImport?: AssistantPhotoImportInput
 ) => {
+  const attachmentSummary = (photoImport?.items ?? [])
+    .map((item) => item.displayName || item.fileName || `attachment ${item.pageNumber ?? ''}`.trim())
+    .filter(Boolean)
+    .join(', ');
   const recentConversation = conversationHistory
     .slice(-6)
     .map((entry) => `${entry.role}: ${entry.content}`)
@@ -2194,8 +2205,9 @@ const buildInspectionPrompt = (
       : []),
     ...(photoImport
       ? [
-          'An uploaded handwritten photo is attached to this request.',
-          'Inspect the readable content of the photo and use it as source material for new notebook cells.',
+          'An ordered set of uploaded handwritten images is attached to this request.',
+          'Inspect the readable content of the attached pages and use them as source material for new notebook cells.',
+          'Preserve the page order when reasoning about the attached material.',
           'Treat scratched-out or unreadable parts as uncertain instead of inventing content.',
           'Keep import behavior additive: append new cells rather than rewriting existing notebook cells.',
           "For imported math content, consult get_reference('math_cells') before planning."
@@ -2203,7 +2215,7 @@ const buildInspectionPrompt = (
       : []),
     `Scope preference: ${scope}.`,
     `User request: ${request}`,
-    photoImport?.fileName ? `Attached photo: ${photoImport.fileName}` : '',
+    attachmentSummary ? `Attached pages/files: ${attachmentSummary}` : '',
     photoImport?.instructions?.trim() ? `Photo import instruction: ${photoImport.instructions.trim()}` : '',
     recentConversation ? `Recent conversation:\n${recentConversation}` : ''
   ]
@@ -2219,10 +2231,10 @@ export const buildOpenAIPhotoImportInput = (text: string, photoImport: Assistant
         type: 'input_text' as const,
         text
       },
-      {
+      ...photoImport.items.map((item) => ({
         type: 'input_image' as const,
-        image_url: photoImport.imageDataUrl
-      }
+        image_url: item.imageDataUrl
+      }))
     ]
   }
 ];
@@ -3474,8 +3486,9 @@ export async function planNotebookChanges(params: {
       : []),
     ...(photoImport
       ? [
-          'This request is importing a handwritten photo into the notebook.',
-          'Treat the uploaded photo as source material for new notebook cells.',
+          'This request is importing a handwritten set of images into the notebook.',
+          'Treat the uploaded pages as ordered source material for new notebook cells.',
+          'Preserve page order when extracting multi-page material.',
           'Photo import is additive: append imported cells after the current notebook content and do not update, move, or delete existing cells.',
           'Prefer Math cells for formulas and derivations from the photo.',
           'Use a Markdown cell only for a short heading or brief readable note that is clearly present on the page.',
@@ -3507,7 +3520,14 @@ export async function planNotebookChanges(params: {
     photoImport: photoImport
       ? {
           enabled: true,
-          fileName: photoImport.fileName ?? '',
+          fileCount: photoImport.items.length,
+          attachments: photoImport.items.map((item, index) => ({
+            index,
+            fileName: item.fileName ?? '',
+            displayName: item.displayName ?? '',
+            pageNumber: item.pageNumber ?? null,
+            mimeType: item.mimeType ?? ''
+          })),
           instructions: photoImport.instructions?.trim() ?? '',
           insertStartIndex: notebookManifest.length
         }

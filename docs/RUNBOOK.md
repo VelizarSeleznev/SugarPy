@@ -57,7 +57,10 @@ Assistant UX notes:
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The header primary assistant entry is `Import from photo`.
-  - The drawer lets the user replace/cancel the image and add an optional import instruction before extraction.
+  - The drawer accepts multiple images, drag-and-drop, clipboard image paste, and PDF uploads.
+  - PDF files are rendered into ordered page previews in the browser before extraction.
+  - The drawer keeps queued items until the user removes one item or clears the whole set.
+  - The user can add an optional import instruction before extraction.
   - The typed assistant is still available inside the drawer as a secondary flow.
   - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
 - The available `Thinking level` values are filtered by model family:

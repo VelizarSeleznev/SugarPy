@@ -1,0 +1,26 @@
+# Assistant Photo Import Multi-file PDF Verification
+
+- Change class: assistant drawer UX / multimodal planning input / browser PDF preparation
+- Impacted runtime or execution paths:
+  - browser-side multi-file image intake
+  - clipboard image paste and drag-and-drop import
+  - client-side PDF-to-page rendering before assistant extraction
+  - OpenAI Responses photo-import payload assembly with multiple ordered images
+- Verification mapping:
+  - payload assembly and import summary -> `web/src/ui/utils/assistant.photoImport.test.ts`
+  - drawer multi-file, paste/drop, and local PDF preview regressions -> `web/e2e/notebook.spec.ts`
+  - frontend compile gate -> `cd web && npm run build`
+- Regression tests added:
+  - `web/src/ui/utils/assistant.photoImport.test.ts`
+  - `web/e2e/notebook.spec.ts`
+- Browser verification:
+  - live browser validation on `/Users/velizard/Downloads/PlangeometriProveRetteark.pdf`
+  - verified 5 PDF pages render as queued previews in order before extraction
+  - verified the extraction request leaves the browser through the SugarPy server proxy path when a shared server OpenAI key is configured
+  - live extraction on this machine stopped at upstream `401 Incorrect API key`, so final staged-draft validation remains blocked until a valid server/browser OpenAI key is configured
+- Recovery paths covered:
+  - duplicate file selection ignored instead of duplicating queued items
+  - unsupported file type rejected with drawer error
+  - missing-key / hidden-chat photo-import errors now render in the visible photo-import section
+  - queued item removal and clear-all recovery
+  - PDF page-count / total-payload guardrails before assistant request

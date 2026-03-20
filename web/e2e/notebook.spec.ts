@@ -1,4 +1,9 @@
+import fs from 'node:fs';
+
 import { expect, test } from '@playwright/test';
+
+const REAL_PHOTO_IMPORT_PDF = '/Users/velizard/Downloads/PlangeometriProveRetteark.pdf';
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W4l8AAAAASUVORK5CYII=';
 
 const assistantNotebookFixtures = {
   cas_two_cells: {
@@ -1513,19 +1518,78 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
     await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
 
-    await page.getByTestId('assistant-photo-input').setInputFiles({
-      name: 'photo.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W4l8AAAAASUVORK5CYII=',
-        'base64'
-      )
-    });
+    await page.getByTestId('assistant-photo-input').setInputFiles([
+      {
+        name: 'photo-1.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+      },
+      {
+        name: 'photo-2.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+      }
+    ]);
 
     await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
-    await expect(page.getByTestId('assistant-photo-preview')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
     await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
-    await expect(page.locator('.assistant-photo-meta')).toContainText('photo.png');
+    await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-1.png');
+    await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-2.png');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: adding files, drop import, paste import, remove item, and clear all work together', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+
+    await page.getByTestId('assistant-photo-input').setInputFiles({
+      name: 'selected.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+    });
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(1);
+
+    await page.evaluate((base64) => {
+      const dropzone = document.querySelector('[data-testid="assistant-photo-dropzone"]');
+      if (!dropzone) throw new Error('Dropzone not found');
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const file = new File([bytes], 'dropped.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer }));
+    }, TINY_PNG_BASE64);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
+
+    await page.evaluate((base64) => {
+      const dropzone = document.querySelector('[data-testid="assistant-photo-dropzone"]');
+      if (!dropzone) throw new Error('Dropzone not found');
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const file = new File([bytes], 'pasted.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      dropzone.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: transfer }));
+    }, TINY_PNG_BASE64);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(3);
+
+    await page.getByTestId('assistant-photo-remove').nth(1).click();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
+
+    await page.getByTestId('assistant-photo-clear').click();
+    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: local real PDF renders five preview pages when available', async ({ page }) => {
+    test.skip(!fs.existsSync(REAL_PHOTO_IMPORT_PDF), 'Local PDF fixture is not available on this machine.');
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+    await page.getByTestId('assistant-photo-input').setInputFiles(REAL_PHOTO_IMPORT_PDF);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(5);
+    await expect(page.locator('.assistant-photo-meta').first()).toContainText('page 1');
+    await expect(page.locator('.assistant-photo-meta').nth(4)).toContainText('page 5');
     await expectNoGlobalErrors(page, guards);
   });
 

@@ -803,6 +803,55 @@ body {
   background: #fff;
 }
 
+.assistant-photo-import-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.assistant-photo-dropzone {
+  padding: 18px;
+  border-radius: 16px;
+  border: 1.5px dashed #cbd5e1;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  outline: none;
+}
+
+.assistant-photo-dropzone.is-drag-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.assistant-photo-dropzone.is-preparing {
+  border-color: #93c5fd;
+  background: #f8fbff;
+}
+
+.assistant-photo-dropzone-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.assistant-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.assistant-photo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border-light);
+  background: #fbfdff;
+}
+
 .assistant-photo-preview-wrap {
   width: 100%;
   border-radius: 14px;

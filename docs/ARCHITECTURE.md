@@ -7,6 +7,7 @@
 - Restricted backend API and execution/storage enforcement live in `src/sugarpy/server_extension.py`.
 - Assistant orchestration for model calls and structured notebook edits lives in `web/src/ui/utils/assistant.ts`.
   - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
+  - Photo import requests may attach an ordered set of browser-prepared image inputs, including PDF pages rendered client-side into page previews before the OpenAI request is sent.
 - Shared assistant keys can be held server-side by the Jupyter extension in `src/sugarpy/server_extension.py`.
   - The frontend only learns provider availability and default model, not the server key value.
   - Assistant provider requests are proxied through SugarPy-owned backend routes instead of browser-to-provider direct calls when shared keys are configured.
