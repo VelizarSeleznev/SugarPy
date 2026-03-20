@@ -1271,20 +1271,46 @@ const findTopLevelEquationBreaks = (line: string) => {
   return positions;
 };
 
+const sanitizeAssistantMathIdentifier = (value: string) =>
+  value
+    .trim()
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^[0-9]/, 'v_$&')
+    .toLowerCase();
+
+const normalizeAssistantMathRhs = (value: string) =>
+  value
+    .replace(/(\d|\))\s+(sqrt\s*\()/g, '$1*$2')
+    .replace(/(\d|\))\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*\())/g, '$1*$2');
+
 export const normalizeAssistantMathSource = (source: string) => {
+  const normAssignments = new Map<string, string>();
   return source
     .split('\n')
     .flatMap((rawLine) => {
       const line = rawLine.trim();
-      if (!line || line.includes(':=')) return [rawLine];
-      const breaks = findTopLevelEquationBreaks(rawLine);
-      if (breaks.length <= 1) return [rawLine];
-      const segments = rawLine.split('=').map((part) => part.trim()).filter(Boolean);
-      if (segments.length <= 2) return [rawLine];
+      if (!line) return [rawLine];
       const indent = rawLine.match(/^\s*/)?.[0] ?? '';
+      const normMatch = rawLine.match(/^\s*\|([^|]+)\|\s*=\s*(.+)$/);
+      if (normMatch) {
+        const normLabel = sanitizeAssistantMathIdentifier(normMatch[1] || 'distance');
+        const seenBefore = normAssignments.has(normLabel);
+        const variableName = normAssignments.get(normLabel) || `distance_${normLabel}`;
+        normAssignments.set(normLabel, variableName);
+        const rhs = normalizeAssistantMathRhs((normMatch[2] || '').trim());
+        const operator = seenBefore ? '=' : ':=';
+        return [`${indent}${variableName} ${operator} ${rhs}`];
+      }
+      if (line.includes(':=')) return [`${indent}${normalizeAssistantMathRhs(line)}`];
+      const breaks = findTopLevelEquationBreaks(rawLine);
+      if (breaks.length <= 1) return [`${indent}${normalizeAssistantMathRhs(line)}`];
+      const segments = rawLine.split('=').map((part) => part.trim()).filter(Boolean);
+      if (segments.length <= 2) return [`${indent}${normalizeAssistantMathRhs(line)}`];
       const normalizedLines: string[] = [];
       for (let index = 0; index < segments.length - 1; index += 1) {
-        normalizedLines.push(`${indent}${segments[index]} = ${segments[index + 1]}`);
+        normalizedLines.push(`${indent}${normalizeAssistantMathRhs(segments[index])} = ${normalizeAssistantMathRhs(segments[index + 1])}`);
       }
       return normalizedLines;
     })
@@ -3539,6 +3565,7 @@ export async function planNotebookChanges(params: {
           'If a handwritten part is unreadable or ambiguous, omit it and record a warning instead of guessing.',
           'For photo-import Math cells, prefer plain equations as standalone cells and use := only for pure assignments such as x := 3 or point := (3, 2).',
           'Do not write labels like Intersection = (3, 2); use point := (3, 2) or leave the tuple unlabelled.',
+          'Never use textbook norm notation such as |AB| or |P_1P_2| on the left-hand side. Use a named assignment such as distance_ab := sqrt(...).',
           'If a final object depends on solved values, substitute the concrete values before writing the final assignment. Do not leave placeholders such as (x, y).',
           'Do not use textbook notation such as sum_{k=1}^n, display-style chained equalities, or mixed assignment-plus-equation lines when a direct SugarPy form exists.',
           'Never write chained equalities such as a = b = c in one Math-cell line. Rewrite them as separate one-equation lines.',

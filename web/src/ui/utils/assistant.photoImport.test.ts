@@ -96,3 +96,13 @@ test('normalizeAssistantMathSource leaves assignments and single equations uncha
   const source = 'eq1 := (x - 2)^2 + (y - 1)^2 = 9\npoint := (3, 2)\ny = 2*x + 1';
   assert.equal(normalizeAssistantMathSource(source), source);
 });
+
+test('normalizeAssistantMathSource rewrites textbook norm notation into SugarPy assignments', () => {
+  const normalized = normalizeAssistantMathSource(
+    '|P_1P_2| = sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\n|P_1P_2| = 1/5 sqrt(320)'
+  );
+  assert.equal(
+    normalized,
+    'distance_p_1p_2 := sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\ndistance_p_1p_2 = 1/5*sqrt(320)'
+  );
+});
