@@ -28,6 +28,7 @@ Use it together with:
 - `Text`: Markdown editor with rendered preview.
 - `Math`: CAS-style symbolic editor rendered as a Math card after execution.
 - `Stoich`: chemistry stoichiometry table driven by a reaction equation and optional inputs.
+- `Regression`: compact x/y regression cell with a fitted graph and collapsible data editor.
 
 ## Notebook UI
 
@@ -40,10 +41,12 @@ Use it together with:
 - Header overlays dismiss on outside click or `Escape`.
 
 ### Notebook actions
-- `Clear Outputs`: removes current code, Math, and stoichiometry results without deleting cells or cell source.
+- `Clear Outputs`: removes current code, Math, stoichiometry, and regression results without deleting cells or cell source.
 - `Clear Outputs` is intended as a quick reset when the notebook UI is cluttered or you want to rerun cells from a visibly clean state.
 - On a brand-new browser with no restored notebook, SugarPy seeds a one-time `SugarPy Quick Start` notebook instead of dropping the user into a blank page.
 - The quick-start notebook is fully editable and behaves like a normal notebook after it is created.
+- Primary block insertion stays focused on `Code | Text | Math`.
+- Special-purpose blocks such as `Stoich` and `Regression` stay discoverable through `More blocks`, searchable insert menus, and slash discovery instead of living in the primary add row.
 - The quick-start flow adds lightweight coachmarks for:
   - adding a block from `+`
   - dragging cells to reorder them
@@ -165,6 +168,28 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Missing values are auto-computed from the limiting extent when possible.
 - Mismatch highlighting appears when provided values are inconsistent.
 - Blurring the reaction field can replace the input with the balanced reaction.
+
+## Regression cells
+
+### Purpose
+- Regression cells provide a compact data-fitting workflow for x/y classroom datasets.
+
+### Input and output
+- Accept one series of x/y points.
+- Support `Auto`, `linear`, `quadratic`, `cubic`, `exponential`, `logarithmic`, `power`, `logistic`, and saturating exponential fits.
+- Keep the data editor collapsed by default so the cell stays visually compact.
+- Axis labels are editable, so the graph does not rely on bare `x` / `y` only.
+- Show the selected/best model, fitted equation text, `R²`, `RMSE`, `AICc`, and a Plotly graph.
+- In `Auto`, SugarPy tries multiple families, ranks them, and can show alternatives when several fits are close.
+- Logarithmic and power fits internally evaluate a shifted x-domain anchored to the smallest input x-value so datasets like `log(x - x_min + eps)` and `power(x - x_min + eps)` remain fit-able.
+
+### Table behavior
+- A small chevron expands or collapses the data grid.
+- `Paste` accepts multi-row TSV/CSV clipboard data.
+- The editor uses a spreadsheet-like rectangular grid instead of large stacked form rows.
+- Multiple rows can be selected and copied or cleared together.
+- Invalid rows are highlighted without discarding valid points.
+- `Fit` reruns the selected regression without losing typed data.
 
 ## Function library and autocomplete
 

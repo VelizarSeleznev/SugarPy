@@ -9,6 +9,7 @@ import { buildSuggestions } from './utils/suggestUtils';
 import { extractFunctionNames } from './utils/functionParse';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
+import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
 import {
   AssistantActivity,
   AssistantCellKind,
@@ -76,7 +77,7 @@ export type CellModel = {
   id: string;
   source: string;
   output?: CellOutput;
-  type?: 'code' | 'markdown' | 'math' | 'stoich';
+  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -111,6 +112,8 @@ export type CellModel = {
   mathTrigMode?: 'deg' | 'rad';
   stoichState?: StoichState;
   stoichOutput?: StoichOutput;
+  regressionState?: RegressionState;
+  regressionOutput?: RegressionOutput;
   assistantMeta?: {
     runId: string;
     stepId: string;
@@ -134,18 +137,26 @@ export type CellOutput =
       evalue: string;
     };
 
-type InsertCellType = 'code' | 'markdown' | 'math';
+type InsertCellType = 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
 
 type InsertCellOption = {
   type: InsertCellType;
   label: string;
   searchTerms: string;
+  priority: 'primary' | 'secondary';
 };
 
 const INSERT_CELL_OPTIONS: InsertCellOption[] = [
-  { type: 'code', label: 'Code', searchTerms: 'code python script' },
-  { type: 'markdown', label: 'Text', searchTerms: 'text markdown note' },
-  { type: 'math', label: 'Math', searchTerms: 'math formula cas' }
+  { type: 'code', label: 'Code', searchTerms: 'code python script', priority: 'primary' },
+  { type: 'markdown', label: 'Text', searchTerms: 'text markdown note', priority: 'primary' },
+  { type: 'math', label: 'Math', searchTerms: 'math formula cas', priority: 'primary' },
+  { type: 'stoich', label: 'Stoich', searchTerms: 'stoich chemistry reaction table', priority: 'secondary' },
+  {
+    type: 'regression',
+    label: 'Regression',
+    searchTerms: 'regression fit trendline xy data table scatter',
+    priority: 'secondary'
+  }
 ];
 
 const matchesInsertCellQuery = (option: InsertCellOption, query: string) => {
@@ -156,6 +167,9 @@ const matchesInsertCellQuery = (option: InsertCellOption, query: string) => {
     option.searchTerms.includes(normalizedQuery)
   );
 };
+
+const PRIMARY_INSERT_CELL_OPTIONS = INSERT_CELL_OPTIONS.filter((option) => option.priority === 'primary');
+const SECONDARY_INSERT_CELL_OPTIONS = INSERT_CELL_OPTIONS.filter((option) => option.priority === 'secondary');
 
 const CELL_DRAG_LONG_PRESS_MS = 400;
 const CELL_DRAG_MOVE_THRESHOLD = 14;
@@ -607,6 +621,16 @@ function App() {
             ok: false,
             error: message,
             species: []
+          };
+          return nextCell;
+        }
+        if (cell.type === 'regression') {
+          nextCell.regressionOutput = {
+            ok: false,
+            model: cell.regressionState?.model ?? 'auto',
+            error: message,
+            points: [],
+            invalid_rows: []
           };
           return nextCell;
         }
@@ -1224,7 +1248,7 @@ function App() {
     };
   }, []);
 
-  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich') =>
+  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich' | 'regression') =>
     cellsRef.current.map((cell) =>
       cell.id === cellId
         ? {
@@ -1238,6 +1262,10 @@ function App() {
                     inputs: cell.stoichState?.inputs ?? {}
                   }
                 }
+              : type === 'regression'
+                ? {
+                    regressionState: cell.regressionState ?? createRegressionState()
+                  }
               : {})
           }
         : cell
@@ -1269,6 +1297,19 @@ function App() {
               isRunning: false,
               execCount: nextExecCount ?? cell.execCount,
               stoichOutput: response.stoichOutput as any,
+              ui: {
+                ...cell.ui,
+                outputCollapsed: false
+              }
+            };
+          }
+          if (response.cellType === 'regression') {
+            return {
+              ...cell,
+              isRunning: false,
+              execCount: nextExecCount ?? cell.execCount,
+              regressionOutput: response.regressionOutput as any,
+              output: response.output as any,
               ui: {
                 ...cell.ui,
                 outputCollapsed: false
@@ -1474,6 +1515,66 @@ function App() {
     }
   };
 
+  const runRegressionCell = async (cellId: string, state: RegressionState) => {
+    if (!activeKernel) return;
+    const executionGeneration = executionGenerationRef.current;
+    setRuntimeNotice('');
+    setCells((prev) =>
+      prev.map((c) =>
+        c.id === cellId
+          ? {
+              ...c,
+              isRunning: true,
+              ui: {
+                ...c.ui,
+                outputCollapsed: false
+              }
+            }
+          : c
+      )
+    );
+    try {
+      const nextCells = cellsRef.current.map((cell) =>
+        cell.id === cellId
+          ? {
+              ...cell,
+              type: 'regression',
+              regressionState: state
+            }
+          : cell
+      );
+      const response = await executeNotebookCell({
+        notebookId,
+        cells: nextCells as Array<Record<string, unknown>>,
+        targetCellId: cellId,
+        trigMode,
+        defaultMathRenderMode,
+        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
+      });
+      if (executionGeneration !== executionGenerationRef.current) return;
+      applyExecutionResult(cellId, response, true);
+    } catch (error) {
+      if (executionGeneration !== executionGenerationRef.current) return;
+      setCells((prev) =>
+        prev.map((c) =>
+          c.id === cellId
+            ? {
+                ...c,
+                isRunning: false,
+                regressionOutput: {
+                  ok: false,
+                  model: c.regressionState?.model ?? 'auto',
+                  error: String(error),
+                  points: [],
+                  invalid_rows: []
+                }
+              }
+            : c
+        )
+      );
+    }
+  };
+
   const runAllCells = async () => {
     if (isRunningAll) return;
     if (!activeKernel) {
@@ -1503,6 +1604,11 @@ function App() {
           if (stopRunAllRequestedRef.current) break;
           continue;
         }
+        if (cell.type === 'regression') {
+          await runRegressionCell(cell.id, cell.regressionState ?? createRegressionState());
+          if (stopRunAllRequestedRef.current) break;
+          continue;
+        }
         await runCell(cell.id, cell.source);
         if (stopRunAllRequestedRef.current) break;
       }
@@ -1512,7 +1618,7 @@ function App() {
   };
 
   const createCell = (
-    type: 'code' | 'markdown' | 'math' | 'stoich',
+    type: 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
     source = '',
     indexSeed?: number
   ): CellModel => {
@@ -1523,6 +1629,17 @@ function App() {
         source,
         type,
         stoichState: createStoichState(),
+        ui: {
+          outputCollapsed: false
+        }
+      };
+    }
+    if (type === 'regression') {
+      return {
+        id: `cell-${idSuffix}`,
+        source,
+        type,
+        regressionState: createRegressionState(),
         ui: {
           outputCollapsed: false
         }
@@ -1584,6 +1701,7 @@ function App() {
               output: undefined,
               mathOutput: undefined,
               stoichOutput: undefined,
+              regressionOutput: undefined,
               ui: {
                 ...cell.ui,
                 outputCollapsed: false,
@@ -1618,6 +1736,9 @@ function App() {
     if (cell.type === 'stoich') {
       return cell.stoichState?.reaction ?? '';
     }
+    if (cell.type === 'regression') {
+      return cell.regressionOutput?.equation_text ?? cell.regressionOutput?.error ?? '';
+    }
     if (cell.output?.type === 'error') {
       return `${cell.output.ename}: ${cell.output.evalue}`;
     }
@@ -1638,17 +1759,18 @@ function App() {
     activeCellId,
     cells: cells.map((cell) => ({
       id: cell.id,
-      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich',
+      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
       source: cell.source,
       mathRenderMode: cell.mathRenderMode,
       mathTrigMode: cell.mathTrigMode,
       stoichReaction: cell.stoichState?.reaction ?? '',
-      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput),
+      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.regressionOutput),
       outputPreview: getCellDisplayText(cell),
       hasError: !!(
         cell.output?.type === 'error' ||
         cell.mathOutput?.error ||
-        (cell.stoichOutput && cell.stoichOutput.ok === false)
+        (cell.stoichOutput && cell.stoichOutput.ok === false) ||
+        (cell.regressionOutput && cell.regressionOutput.ok === false)
       )
     }))
   });
@@ -1680,6 +1802,8 @@ function App() {
       mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
       stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
       stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
+      regressionState: cell.regressionState ? JSON.parse(JSON.stringify(cell.regressionState)) : undefined,
+      regressionOutput: cell.regressionOutput ? JSON.parse(JSON.stringify(cell.regressionOutput)) : undefined,
       output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
     })),
     trigMode: trigModeRef.current,
@@ -2040,6 +2164,10 @@ function App() {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
   };
 
+  const updateRegressionState = (cellId: string, state: RegressionState) => {
+    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, regressionState: state } : c)));
+  };
+
   const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
     setAssistantChats((prev) =>
       prev.map((chat) => {
@@ -2107,6 +2235,8 @@ function App() {
     () => INSERT_CELL_OPTIONS.filter((option) => matchesInsertCellQuery(option, cellInsertMenuQuery)),
     [cellInsertMenuQuery]
   );
+  const filteredPrimaryInsertOptions = filteredCellInsertOptions.filter((option) => option.priority === 'primary');
+  const filteredSecondaryInsertOptions = filteredCellInsertOptions.filter((option) => option.priority === 'secondary');
 
   const handleSlashCommand = (cellId: string, command: string) => {
     const entry = slashCommandMap.get(command);
@@ -2130,6 +2260,24 @@ function App() {
             }
           };
         }
+        if (entry.id === 'math.regression_table') {
+          return {
+            ...cell,
+            type: 'regression',
+            source: '',
+            output: undefined,
+            execCount: undefined,
+            isRunning: false,
+            mathOutput: undefined,
+            stoichOutput: undefined,
+            regressionOutput: undefined,
+            stoichState: undefined,
+            regressionState: createRegressionState(),
+            ui: {
+              outputCollapsed: false
+            }
+          };
+        }
         return {
           ...cell,
           type: 'code',
@@ -2139,7 +2287,9 @@ function App() {
           isRunning: false,
           mathOutput: undefined,
           stoichOutput: undefined,
+          regressionOutput: undefined,
           stoichState: undefined,
+          regressionState: undefined,
           ui: {
             outputCollapsed: false
           }
@@ -2879,9 +3029,14 @@ function App() {
       };
     };
 
+    const makeRegressionCell = (indexSeed?: number) => createCell('regression', '', indexSeed);
+
     const createFromOperation = (operation: Extract<AssistantOperation, { type: 'insert_cell' }>) => {
       if (operation.cellType === 'stoich') {
         return makeStoichCell(operation.source, operation.index + 1);
+      }
+      if (operation.cellType === 'regression') {
+        return makeRegressionCell(operation.index + 1);
       }
       return createCell(operation.cellType, operation.source, operation.index + 1);
     };
@@ -2907,12 +3062,20 @@ function App() {
                 stoichOutput: undefined
               };
             }
+            if (cell.type === 'regression') {
+              return {
+                ...cell,
+                regressionOutput: undefined,
+                assistantMeta: undefined
+              };
+            }
             return {
               ...cell,
               source: operation.source,
               output: undefined,
               mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
               stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput,
+              regressionOutput: cell.type === 'regression' ? undefined : cell.regressionOutput,
               assistantMeta: undefined
             };
           });
@@ -3178,6 +3341,7 @@ function App() {
         output: undefined,
         mathOutput: undefined,
         stoichOutput: undefined,
+        regressionOutput: undefined,
         ui: {
           ...cell.ui,
           outputCollapsed: false,
@@ -3339,6 +3503,8 @@ function App() {
     const raw =
       draggedCell.type === 'stoich'
         ? draggedCell.stoichState?.reaction ?? draggedCell.source
+        : draggedCell.type === 'regression'
+          ? draggedCell.regressionOutput?.equation_text ?? `${draggedCell.regressionState?.model ?? 'auto'} fit`
         : draggedCell.source;
     return raw.replace(/\s+/g, ' ').trim();
   })();
@@ -3382,10 +3548,20 @@ function App() {
               {addCellMenuOpen ? (
                 <div className="header-menu add-cell-menu">
                   <div className="menu-section-label">Add below selected</div>
-                  {INSERT_CELL_OPTIONS.map((option) => (
+                  {PRIMARY_INSERT_CELL_OPTIONS.map((option) => (
                     <button
                       key={option.type}
                       className="menu-item"
+                      onClick={() => insertCellBelowActive(option.type)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  <div className="menu-section-label">More blocks</div>
+                  {SECONDARY_INSERT_CELL_OPTIONS.map((option) => (
+                    <button
+                      key={option.type}
+                      className="menu-item menu-item-secondary"
                       onClick={() => insertCellBelowActive(option.type)}
                     >
                       {option.label}
@@ -3578,8 +3754,29 @@ function App() {
               <div className="cell-empty">
                 <div className="cell-empty-title">Start with a cell.</div>
                 <div className="cell-empty-actions">
-                  {INSERT_CELL_OPTIONS.map((option) => (
+                  {PRIMARY_INSERT_CELL_OPTIONS.map((option) => (
                     <button key={option.type} className="button secondary" onClick={() => insertCellAt(0, option.type)}>
+                      {option.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="button secondary subtle"
+                    onClick={() => {
+                      const firstSecondary = SECONDARY_INSERT_CELL_OPTIONS[0];
+                      if (firstSecondary) insertCellAt(0, firstSecondary.type);
+                    }}
+                  >
+                    More blocks
+                  </button>
+                </div>
+                <div className="cell-empty-secondary">
+                  {SECONDARY_INSERT_CELL_OPTIONS.map((option) => (
+                    <button
+                      key={option.type}
+                      className="divider-btn secondary-discovery-btn"
+                      onClick={() => insertCellAt(0, option.type)}
+                    >
                       {option.label}
                     </button>
                   ))}
@@ -3597,7 +3794,7 @@ function App() {
                       <div className="cell-divider" data-testid={`cell-divider-${index}`}>
                         <div className="cell-divider-line" />
                         <div className="divider-menu" role="menu" aria-label="Insert cell type">
-                          {INSERT_CELL_OPTIONS.map((option) => (
+                          {PRIMARY_INSERT_CELL_OPTIONS.map((option) => (
                             <button
                               key={option.type}
                               className="divider-btn"
@@ -3606,6 +3803,14 @@ function App() {
                               {option.label}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            className="divider-btn divider-btn-secondary"
+                            aria-label="More blocks"
+                            onClick={() => openCellInsertMenu(cell.id, 'above')}
+                          >
+                            ⋮
+                          </button>
                         </div>
                       </div>
                     ) : null}
@@ -3682,6 +3887,8 @@ function App() {
                         }
                         onRunStoich={(state) => runStoichCell(cell.id, state)}
                         onChangeStoich={(state) => updateStoichState(cell.id, state)}
+                        onRunRegression={(state) => runRegressionCell(cell.id, state)}
+                        onChangeRegression={(state) => updateRegressionState(cell.id, state)}
                         onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
                         onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
                         onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}
@@ -3728,19 +3935,42 @@ function App() {
                             onPointerDown={(event) => event.stopPropagation()}
                           />
                           <div className="cell-insert-menu-list" role="menu" aria-label="Insert block type">
-                            {filteredCellInsertOptions.map((option) => (
-                              <button
-                                key={option.type}
-                                type="button"
-                                className="cell-insert-menu-item"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  insertCellFromMenu(cell.id, option.type);
-                                }}
-                              >
-                                {option.label}
-                              </button>
-                            ))}
+                            {filteredPrimaryInsertOptions.length > 0 ? (
+                              <div className="cell-insert-menu-group">
+                                <div className="cell-insert-menu-label">Core blocks</div>
+                                {filteredPrimaryInsertOptions.map((option) => (
+                                  <button
+                                    key={option.type}
+                                    type="button"
+                                    className="cell-insert-menu-item"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      insertCellFromMenu(cell.id, option.type);
+                                    }}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                            {filteredSecondaryInsertOptions.length > 0 ? (
+                              <div className="cell-insert-menu-group">
+                                <div className="cell-insert-menu-label">More blocks</div>
+                                {filteredSecondaryInsertOptions.map((option) => (
+                                  <button
+                                    key={option.type}
+                                    type="button"
+                                    className="cell-insert-menu-item cell-insert-menu-item-secondary"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      insertCellFromMenu(cell.id, option.type);
+                                    }}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
                             {filteredCellInsertOptions.length === 0 ? (
                               <div className="cell-insert-menu-empty">No matching blocks.</div>
                             ) : null}
@@ -3757,7 +3987,7 @@ function App() {
                   <div className="cell-divider" data-testid={`cell-divider-${cells.length}`}>
                     <div className="cell-divider-line" />
                     <div className="divider-menu" role="menu" aria-label="Insert cell type">
-                      {INSERT_CELL_OPTIONS.map((option) => (
+                      {PRIMARY_INSERT_CELL_OPTIONS.map((option) => (
                         <button
                           key={option.type}
                           className="divider-btn"
@@ -3766,6 +3996,17 @@ function App() {
                           {option.label}
                         </button>
                       ))}
+                      <button
+                        type="button"
+                        className="divider-btn divider-btn-secondary"
+                        aria-label="More blocks"
+                        onClick={() => {
+                          const lastCell = cells[cells.length - 1];
+                          if (lastCell) openCellInsertMenu(lastCell.id, 'below');
+                        }}
+                      >
+                        ⋮
+                      </button>
                     </div>
                   </div>
                 ) : null}

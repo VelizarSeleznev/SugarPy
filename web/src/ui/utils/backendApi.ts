@@ -44,6 +44,7 @@ export type SugarPyExecutionResponse = {
   };
   mathOutput?: Record<string, unknown>;
   stoichOutput?: Record<string, unknown>;
+  regressionOutput?: Record<string, unknown>;
   freshRuntime?: boolean;
   execCountIncrement?: boolean;
   replayedCellIds?: string[];

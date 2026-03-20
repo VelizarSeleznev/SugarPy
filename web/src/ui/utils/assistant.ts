@@ -9,7 +9,7 @@ import { buildAssistantProxyBaseUrl } from './backendApi';
 export type AssistantScope = 'notebook' | 'active';
 export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
 
-export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich';
+export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
 
 export type NotebookCellSnapshot = {
   id: string;
@@ -419,7 +419,7 @@ const DETAIL_OUTPUT_LIMIT = 240;
 const GEMINI_REQUEST_TIMEOUT_MS = 45000;
 const COMPACT_REFERENCE = [
   'SugarPy compact reference:',
-  '- Cell types: code, markdown, math, stoich.',
+  '- Cell types: code, markdown, math, stoich, regression.',
   '- Math cells are CAS-style, not Python-style.',
   '- In Math cells: = means equation, := means assignment, ^ is exponent, implicit multiplication works.',
   '- name := expr assigns a value or symbolic expression to a name; it does not define a callable function.',
@@ -454,9 +454,9 @@ const COMPACT_REFERENCE = [
 const REFERENCE_SECTIONS = {
   overview: [
     'SugarPy product overview:',
-    '- Notebook app with code, markdown, math, and stoich cells.',
+    '- Notebook app with code, markdown, math, stoich, and regression cells.',
     '- Optional AI assistant edits notebook cells through structured operations.',
-    '- Run All executes code, math, and stoich cells top-to-bottom.',
+    '- Run All executes code, math, stoich, and regression cells top-to-bottom.',
     '- Header defaults include Degrees/Radians and Exact/Decimal for Math cells.'
   ].join('\n'),
   math_cells: [
@@ -506,7 +506,8 @@ const REFERENCE_SECTIONS = {
     '- code: Python execution.',
     '- markdown: text/notes.',
     '- math: CAS symbolic input with rendered math card.',
-    '- stoich: chemistry stoichiometry table over a reaction.'
+    '- stoich: chemistry stoichiometry table over a reaction.',
+    '- regression: compact x/y data table with fitted regression graph.'
   ].join('\n'),
   assistant: [
     'Assistant behavior reference:',
@@ -817,7 +818,7 @@ const PLAN_SCHEMA = {
           index: { type: 'NUMBER' },
           cellType: {
             type: 'STRING',
-            enum: ['code', 'markdown', 'math', 'stoich']
+            enum: ['code', 'markdown', 'math', 'stoich', 'regression']
           },
           source: { type: 'STRING' },
           cellId: { type: 'STRING' },
@@ -861,7 +862,7 @@ const OPENAI_PLAN_SCHEMA = {
           },
           cellType: {
             type: ['string', 'null'],
-            enum: ['code', 'markdown', 'math', 'stoich', null]
+            enum: ['code', 'markdown', 'math', 'stoich', 'regression', null]
           },
           source: {
             type: ['string', 'null']
@@ -3414,6 +3415,7 @@ export async function planNotebookChanges(params: {
     'Prefer submitting the full plan in one submit_plan call.',
     'Use step-by-step planning tool calls only if you truly cannot produce the full plan in one response.',
     'For stoich cells, store the reaction text in source.',
+    'Regression cells are UI-driven and should only be inserted when the user explicitly wants x/y regression editing.',
     'Prefer minimal edits over broad rewrites.',
     'Do not invent cell ids that do not exist.',
     'Prefer notebook content that is natively supported by SugarPy over mathematically equivalent but less compatible forms.',

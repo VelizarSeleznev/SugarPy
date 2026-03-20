@@ -43,5 +43,14 @@
     "description": "Interactive stoichiometry table with auto calculations.",
     "signature": "stoichiometry_table(reaction, inputs)",
     "snippet": "# Insert Stoichiometry Table in the notebook\n# Use the UI cell to edit reaction + inputs"
+  },
+  {
+    "id": "math.regression_table",
+    "title": "Regression table",
+    "subject": "math",
+    "tags": ["regression", "trendline", "xy", "table"],
+    "description": "Interactive x/y regression table with fitted graph.",
+    "signature": "regression_table(points, model='linear')",
+    "snippet": "# Insert Regression Table in the notebook\n# Use the UI cell to edit x/y data and choose a model"
   }
 ]

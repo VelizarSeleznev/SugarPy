@@ -4,7 +4,9 @@ import { CodeEditor } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
 import { StoichiometryCell } from './StoichiometryCell';
+import { RegressionCell } from './RegressionCell';
 import { StoichState } from '../utils/stoichTypes';
+import { RegressionState } from '../utils/regressionTypes';
 import { CellWrapper, CellMenuAction } from './CellWrapper';
 import { OutputArea } from './OutputArea';
 
@@ -21,6 +23,8 @@ type Props = {
   onRunMath: (value: string) => void;
   onRunStoich: (state: StoichState) => void;
   onChangeStoich: (state: StoichState) => void;
+  onRunRegression: (state: RegressionState) => void;
+  onChangeRegression: (state: RegressionState) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
@@ -40,12 +44,12 @@ type Props = {
 
 const statusFromCell = (cell: CellModel) => {
   if (cell.isRunning) return '*';
-  if (cell.type === 'markdown' || cell.type === 'stoich') return '';
+  if (cell.type === 'markdown' || cell.type === 'stoich' || cell.type === 'regression') return '';
   if (cell.execCount === null || cell.execCount === undefined) return '';
   return String(cell.execCount);
 };
 
-const hasOutput = (cell: CellModel) => !!(cell.output || cell.mathOutput || cell.stoichOutput);
+const hasOutput = (cell: CellModel) => !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.regressionOutput);
 
 const TrashIcon = () => (
   <svg
@@ -87,6 +91,8 @@ export function NotebookCell({
   onRunMath,
   onRunStoich,
   onChangeStoich,
+  onRunRegression,
+  onChangeRegression,
   onMoveUp,
   onMoveDown,
   onDelete,
@@ -109,7 +115,7 @@ export function NotebookCell({
   const outputHidden = !!cell.ui?.outputCollapsed;
   const outputAvailable = hasOutput(cell);
   const runHandler =
-    cellType === 'markdown' || cellType === 'stoich'
+    cellType === 'markdown' || cellType === 'stoich' || cellType === 'regression'
       ? undefined
       : () => {
           if (cellType === 'math') onRunMath(cell.source);
@@ -258,6 +264,18 @@ export function NotebookCell({
             isRunning={cell.isRunning}
             onChange={onChangeStoich}
             onCompute={onRunStoich}
+            kernelReady={kernelReady}
+            showOutput={!outputHidden}
+          />
+        ) : null}
+
+        {cellType === 'regression' ? (
+          <RegressionCell
+            state={cell.regressionState ?? { points: [], model: 'auto', labels: { x: 'x', y: 'y' } }}
+            output={cell.regressionOutput}
+            isRunning={cell.isRunning}
+            onChange={onChangeRegression}
+            onCompute={onRunRegression}
             kernelReady={kernelReady}
             showOutput={!outputHidden}
           />

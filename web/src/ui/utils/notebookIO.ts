@@ -173,6 +173,7 @@ const stripRuntimeOutputs = (cell: Omit<CellModel, 'isRunning'>): Omit<CellModel
   delete nextCell.output;
   delete nextCell.mathOutput;
   delete nextCell.stoichOutput;
+  delete nextCell.regressionOutput;
   return nextCell;
 };
 
@@ -262,6 +263,32 @@ const stoichToMarkdown = (cell: CellModel) => {
   return lines.join('\n');
 };
 
+const regressionToMarkdown = (cell: CellModel) => {
+  const state = cell.regressionState;
+  const output = cell.regressionOutput;
+  const lines = ['### Regression', ''];
+  lines.push(`Model: ${state?.model ?? 'auto'}`, '');
+  lines.push(`X label: ${state?.labels?.x ?? 'x'}`);
+  lines.push(`Y label: ${state?.labels?.y ?? 'y'}`, '');
+  if (output?.equation_text) {
+    lines.push(`Equation: ${output.equation_text}`);
+  }
+  if (output?.r2 !== null && output?.r2 !== undefined) {
+    lines.push(`R²: ${output.r2.toFixed(4)}`);
+  }
+  lines.push('', '| x | y |', '| --- | --- |');
+  const points = state?.points ?? [];
+  if (points.length === 0) {
+    lines.push('|  |  |');
+  } else {
+    points.forEach((point) => {
+      if (!point.x && !point.y) return;
+      lines.push(`| ${point.x} | ${point.y} |`);
+    });
+  }
+  return lines.join('\n');
+};
+
 export const serializeIpynb = (params: {
   id: string;
   name: string;
@@ -281,6 +308,19 @@ export const serializeIpynb = (params: {
           }
         },
         source: toLines(stoichToMarkdown(cell))
+      };
+    }
+    if (cell.type === 'regression') {
+      return {
+        cell_type: 'markdown',
+        metadata: {
+          sugarpy: {
+            type: 'regression',
+            regressionState: cell.regressionState ?? null,
+            regressionOutput: cell.regressionOutput ?? null
+          }
+        },
+        source: toLines(regressionToMarkdown(cell))
       };
     }
     if (cell.type === 'markdown') {
@@ -360,6 +400,24 @@ export const deserializeIpynb = (data: any) => {
         type: 'stoich',
         stoichState: sugarpy.stoichState ?? { reaction: '', inputs: {} },
         stoichOutput: sugarpy.stoichOutput ?? undefined,
+        ui: {
+          outputCollapsed: false
+        },
+        isRunning: false
+      };
+    }
+    if (sugarpy?.type === 'regression') {
+      return {
+        id: `cell-${Date.now()}-${idx}`,
+        source: fromLines(cell?.source ?? ''),
+        type: 'regression',
+        regressionState: sugarpy.regressionState ?? {
+          points: [],
+          model: 'auto',
+          labels: { x: 'x', y: 'y' },
+          ui: { editorExpanded: false }
+        },
+        regressionOutput: sugarpy.regressionOutput ?? undefined,
         ui: {
           outputCollapsed: false
         },
