@@ -443,16 +443,19 @@ body {
 }
 
 .assistant-panel {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 16px 18px 24px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
 .assistant-chat-panel {
-  height: 100%;
-  overflow: hidden;
+  min-height: 0;
   padding-top: 12px;
 }
 
@@ -511,6 +514,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 14px;
