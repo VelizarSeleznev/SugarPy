@@ -1293,7 +1293,10 @@ const buildAssistantIndexedName = (name: string, index: number) => `${sanitizeAs
 const normalizeAssistantMathRhs = (value: string) =>
   value
     .replace(/Δ([A-Za-z_][A-Za-z0-9_]*)/g, 'delta_$1')
-    .replace(/\b([A-Za-z])([A-Za-z])\b/g, '$1*$2')
+    .replace(/\b([A-Za-z])([A-Za-z])\b/g, (match, left: string, right: string) => {
+      const token = `${left}${right}`.toLowerCase();
+      return token === 'eq' || token === 'pi' ? match : `${left}*${right}`;
+    })
     .replace(/(?<![A-Za-z0-9_])(\d|\))(?=[A-Za-z_(])/g, '$1*')
     .replace(/(\d|\))\s+(sqrt\s*\()/g, '$1*$2')
     .replace(/(?<![A-Za-z0-9_])(\d|\))\s+([A-Za-z_][A-Za-z0-9_]*(?:\s*\()?)/g, '$1*$2');
@@ -3906,7 +3909,9 @@ export async function planNotebookChanges(params: {
           'Preserve page order when extracting multi-page material.',
           'Photo import is additive: append imported cells after the current notebook content and do not update, move, or delete existing cells.',
           'Prefer Math cells for formulas and derivations from the photo.',
-          'Use a Markdown cell only for a short heading or brief readable note that is clearly present on the page.',
+          'Use Markdown to explain the paper-style idea in short natural language, and keep Math cells strictly CAS-only.',
+          'For each imported problem or page section, prefer a short Markdown heading plus one concise Markdown note that says what would be done on paper before the CAS steps.',
+          'Keep Markdown notes short: usually one sentence, at most two short sentences.',
           'If a handwritten part is unreadable or ambiguous, omit it and record a warning instead of guessing.',
           'For photo-import Math cells, prefer plain equations as standalone cells and use := only for pure assignments such as x := 3 or point := (3, 2).',
           'Do not write labels like Intersection = (3, 2); use point := (3, 2) or leave the tuple unlabelled.',

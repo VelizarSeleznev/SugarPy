@@ -64,6 +64,7 @@ Assistant UX notes:
   - The typed assistant is still available inside the drawer as a secondary flow.
   - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
   - Photo-import math extraction is now held to CAS-native output: if the draft still contains handwritten/textbook syntax that would require post-processing, the planner is asked to revise the Math-cell source before the draft is shown.
+  - The intended output balance for photo import is: short Markdown headings and one brief human-readable idea note per problem, with the actual derivation kept in CAS-only Math cells.
 - The available `Thinking level` values are filtered by model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
   - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`

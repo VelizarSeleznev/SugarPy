@@ -166,3 +166,8 @@ test('normalizeAssistantMathSource keeps indexed identifiers intact in equation 
     'distance_p_1p_2 := sqrt((1 - (-3/5))^2 + (4 - 4/5)^2)\ndistance_p_1p_2 = sqrt((8/5)^2 + (16/5)^2)'
   );
 });
+
+test('normalizeAssistantMathSource does not split short identifier names like eq inside solve calls', () => {
+  const normalized = normalizeAssistantMathSource('eq := (x - 1)^2 = 4\nsolutions := solve(eq, x)');
+  assert.equal(normalized, 'eq := (x - 1)^2 = 4\nsolutions := solve(eq, x)');
+});

@@ -21,6 +21,7 @@
   - trace-driven follow-up normalization now rewrites handwritten textbook syntax into SugarPy-safe CAS form, including `±`, `v`, `|AB|`, prose-only math lines, `solve(...)` list assignments, and bare point tuples
   - the exact live artifact used for trace inspection is stored at `/Users/velizard/PycharmProjects/Gymnasium/SugarPy/output/playwright/assistant-photo-import-trace.json`
   - the latest follow-up browser run now also enforces a photo-import replan when the Math-cell source still contains textbook syntax or free prose; the resulting staged draft is visibly more CAS-native (for example `circle := ...`, `x1 := ...`, `p1 := (...)`, `intersection := (...)`)
+  - a later follow-up browser run shifted the output balance toward short Markdown idea notes plus CAS-only Math cells; the staged draft now includes one-sentence paper-style explanations such as “find the line from its slope and one point” while keeping the actual derivation in Math cells
   - the latest live run still reported validation failure because the local Docker daemon was unavailable for assistant sandbox execution, not because the draft Math syntax was rejected
 - Recovery paths covered:
   - duplicate file selection ignored instead of duplicating queued items
