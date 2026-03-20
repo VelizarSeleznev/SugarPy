@@ -449,6 +449,15 @@ def _build_stoich_code(reaction: str, inputs: dict[str, Any]) -> str:
     )
 
 
+def _build_regression_code(points: list[dict[str, Any]], model: str, x_label: str, y_label: str) -> str:
+    return "\n".join(
+        [
+            "from sugarpy.regression import display_regression",
+            f"_ = display_regression({json.dumps(points)}, {json.dumps(model)}, x_label={json.dumps(x_label)}, y_label={json.dumps(y_label)})",
+        ]
+    )
+
+
 def _wrap_code_for_notebook_display(source: str) -> str:
     try:
         tree = ast.parse(source)
@@ -491,6 +500,14 @@ def _cell_source_for_execution(cell: dict[str, Any], trig_mode: str, render_mode
         reaction = str(state.get("reaction") or "")
         inputs = state.get("inputs") if isinstance(state.get("inputs"), dict) else {}
         return _build_stoich_code(reaction, inputs)
+    if cell_type == "regression":
+        state = cell.get("regressionState") if isinstance(cell.get("regressionState"), dict) else {}
+        points = state.get("points") if isinstance(state.get("points"), list) else []
+        model = str(state.get("model") or "linear")
+        labels = state.get("labels") if isinstance(state.get("labels"), dict) else {}
+        x_label = str(labels.get("x") or "x")
+        y_label = str(labels.get("y") or "y")
+        return _build_regression_code(points, model, x_label, y_label)
     return _wrap_code_for_notebook_display(str(cell.get("source") or ""))
 
 
@@ -677,6 +694,23 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
                 "ok": False,
                 "error": result.get("errorValue") or "Stoichiometry execution failed.",
                 "species": [],
+            }
+        return response
+
+    if target_type == "regression":
+        regression_payload = result["mimeData"].get("application/vnd.sugarpy.regression+json")
+        if isinstance(regression_payload, dict):
+            response["regressionOutput"] = regression_payload
+            figure = regression_payload.get("plotly_figure")
+            if figure:
+                response["output"] = {"type": "mime", "data": {"application/vnd.plotly.v1+json": figure}}
+        else:
+            response["regressionOutput"] = {
+                "ok": False,
+                "model": "linear",
+                "error": result.get("errorValue") or "Regression execution failed.",
+                "points": [],
+                "invalid_rows": [],
             }
         return response
 

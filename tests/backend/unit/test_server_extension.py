@@ -163,6 +163,76 @@ def test_execute_notebook_request_marks_fresh_runtime_without_replay():
     assert response["replayedCellIds"] == []
 
 
+def test_execute_notebook_request_returns_regression_payload():
+    class FakeRuntimeManager:
+        backend = "docker"
+
+        async def ensure_runtime(self, notebook_id):
+            return {"notebookId": notebook_id, "status": "connected", "backend": "docker", "sessionState": "existing"}
+
+        async def execute_code(self, notebook_id, code, timeout_s):
+            return (
+                {
+                    "status": "ok",
+                    "stdout": "",
+                    "stderr": "",
+                    "mimeData": {
+                        "application/vnd.sugarpy.regression+json": {
+                            "ok": True,
+                            "model": "linear",
+                            "equation_text": "y = 2x + 0",
+                            "r2": 1.0,
+                            "points": [{"x": 1, "y": 2}, {"x": 2, "y": 4}],
+                            "invalid_rows": [],
+                            "plotly_figure": {"data": [], "layout": {}},
+                        }
+                    },
+                    "errorName": None,
+                    "errorValue": None,
+                },
+                {"notebookId": notebook_id, "status": "connected", "backend": "docker"},
+            )
+
+    fake_manager = FakeRuntimeManager()
+
+    original_factory = server_extension._runtime_manager
+    server_extension._RUNTIME_MANAGER = fake_manager
+    server_extension._runtime_manager = lambda: fake_manager
+    try:
+        response = asyncio.run(
+            execute_notebook_request(
+                {
+                    "notebookId": "nb-regression",
+                    "cells": [
+                        {
+                            "id": "cell-1",
+                            "type": "regression",
+                            "source": "",
+                            "regressionState": {
+                                "model": "linear",
+                                "points": [{"x": "1", "y": "2"}, {"x": "2", "y": "4"}],
+                            },
+                        }
+                    ],
+                    "targetCellId": "cell-1",
+                    "trigMode": "deg",
+                    "defaultMathRenderMode": "exact",
+                    "timeoutMs": 5000,
+                }
+            )
+        )
+    finally:
+        server_extension._RUNTIME_MANAGER = None
+        server_extension._runtime_manager = original_factory
+
+    assert response["status"] == "ok"
+    assert response["regressionOutput"]["equation_text"] == "y = 2x + 0"
+    assert response["output"] == {
+        "type": "mime",
+        "data": {"application/vnd.plotly.v1+json": {"data": [], "layout": {}}},
+    }
+
+
 def test_load_jupyter_server_extension_starts_background_runtime_cleanup(monkeypatch):
     cleanup_calls: list[str] = []
 

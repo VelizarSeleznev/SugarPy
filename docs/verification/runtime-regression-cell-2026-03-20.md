@@ -1,0 +1,30 @@
+# Regression Cell Verification
+
+- Change class: runtime-critical regression-cell execution path and notebook execution payload wiring
+- Impacted runtime or execution paths:
+  - notebook regression-cell execution through `server_extension.py`
+  - regression fit payload generation and Plotly output serialization
+  - frontend regression-cell state round-trip, autosave payload, and execution request wiring
+  - special-cell discoverability and compact regression UI rendering
+- Verification mapping:
+  - regression execution payload and notebook handler coverage -> `tests/backend/unit/test_server_extension.py`
+  - regression fitting families and auto-fit ranking coverage -> `tests/backend/unit/test_regression.py`
+  - regression smoke coverage -> `tests/backend/test_smoke.py`
+  - notebook regression-cell browser flow coverage -> `web/e2e/notebook.spec.ts`
+- Regression tests added or updated:
+  - `tests/backend/unit/test_regression.py`
+  - `tests/backend/unit/test_server_extension.py`
+  - `tests/backend/test_smoke.py`
+  - `web/e2e/notebook.spec.ts`
+- Commands run:
+  - `./scripts/check backend`
+  - `./.venv/bin/pytest tests/backend/unit/test_regression.py -q`
+  - `cd web && npm run build`
+- Browser verification:
+  - launched a live Vite server on `http://127.0.0.1:4173/` from the current worktree
+  - exercised a real regression cell flow in Chromium: entered `X label = Not x`, `Y label = Not y`, clicked `Fit`, and confirmed the Plotly graph rendered visible axis titles
+  - captured verification screenshot at `output/playwright/regression-axis-labels-live-flow.png`
+- Recovery paths covered:
+  - invalid or partially empty regression rows remain isolated from valid fitted points
+  - manual refit after editing labels or points updates the serialized Plotly payload cleanly
+  - compact collapsed regression view still renders persisted plot output on notebook restore

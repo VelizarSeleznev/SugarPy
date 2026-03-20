@@ -291,6 +291,100 @@ const installExecutionCounterApiMocks = async (page: any) => {
   });
 };
 
+const installRegressionApiMocks = async (page: any) => {
+  await page.route('**/api/config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ mode: 'restricted-demo' })
+    });
+  });
+  await page.route('**/api/autosave/**', async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'not found' })
+    });
+  });
+  await page.route('**/api/runtime/*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notebookId: 'notebook',
+        status: 'connected',
+        backend: 'docker',
+        containerName: 'fake',
+        workspacePath: '/tmp/fake',
+        connectionFilePath: '/tmp/fake/kernel.json',
+        image: 'fake-image'
+      })
+    });
+  });
+  await page.route('**/api/execute', async (route) => {
+    const request = route.request().postDataJSON();
+    const cell = request.cells.find((entry: any) => entry.id === request.targetCellId);
+    const points = (cell?.regressionState?.points ?? [])
+      .filter((entry: any) => String(entry.x ?? '').trim() && String(entry.y ?? '').trim())
+      .map((entry: any) => ({ x: Number(entry.x), y: Number(entry.y) }));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        notebookId: 'notebook',
+        cellId: request.targetCellId,
+        cellType: 'regression',
+        status: 'ok',
+        execCountIncrement: true,
+        regressionOutput: {
+          ok: true,
+          model: 'linear',
+          requested_model: cell?.regressionState?.model ?? 'auto',
+          model_label: 'Linear',
+          equation_text: 'y = 2x + 0',
+          r2: 1,
+          rmse: 0,
+          aicc: -12,
+          bic: -11,
+          points,
+          invalid_rows: [],
+          warnings: [],
+          alternatives: [
+            {
+              model_name: 'linear',
+              model_label: 'Linear',
+              rmse: 0,
+              r2: 1,
+              aicc: -12,
+              bic: -11,
+              formula: 'y = 2x + 0'
+            }
+          ],
+          plotly_figure: {
+            data: [
+              { type: 'scatter', mode: 'markers', name: 'Data', x: points.map((entry: any) => entry.x), y: points.map((entry: any) => entry.y) },
+              { type: 'scatter', mode: 'lines', name: 'Linear', x: [1, 3], y: [2, 6] }
+            ],
+            layout: {}
+          }
+        },
+        output: {
+          type: 'mime',
+          data: {
+            'application/vnd.plotly.v1+json': {
+              data: [
+                { type: 'scatter', mode: 'markers', name: 'Data', x: points.map((entry: any) => entry.x), y: points.map((entry: any) => entry.y) },
+                { type: 'scatter', mode: 'lines', name: 'Linear', x: [1, 3], y: [2, 6] }
+              ],
+              layout: {}
+            }
+          }
+        }
+      })
+    });
+  });
+};
+
 const addMathCellAfterFirstCode = async (page: any) => {
   await addCodeCellToEmptyNotebook(page);
   await page.getByTestId('add-cell-button').click();
@@ -466,6 +560,45 @@ test.describe('Notebook CAS outputs', () => {
       const box = await page.locator(selector).first().boundingBox();
       expect(box?.height ?? 0).toBeLessThan(140);
     }
+  });
+
+  test('Notebook chrome: stoich and regression stay secondary but discoverable', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await installRegressionApiMocks(page);
+    await page.goto('/');
+
+    const emptyActions = page.locator('.cell-empty-actions');
+    await expect(emptyActions.getByRole('button', { name: /^Code$/ })).toBeVisible();
+    await expect(emptyActions.getByRole('button', { name: /^Text$/ })).toBeVisible();
+    await expect(emptyActions.getByRole('button', { name: /^Math$/ })).toBeVisible();
+    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ })).toBeVisible();
+    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Stoich$/ })).toBeVisible();
+
+    await page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ }).click();
+    const regressionCell = page.locator('[data-testid="cell-row-regression"]').first();
+    await expect(regressionCell).toBeVisible();
+    await expect(regressionCell.locator('.regression-editor')).toHaveCount(0);
+
+    await regressionCell.getByLabel('Expand data table').click();
+    await regressionCell.locator('.regression-sheet-input').nth(0).fill('1');
+    await regressionCell.locator('.regression-sheet-input').nth(1).fill('2');
+    await regressionCell.locator('.regression-sheet-input').nth(2).fill('2');
+    await regressionCell.locator('.regression-sheet-input').nth(3).fill('4');
+    await regressionCell.locator('.regression-sheet-input').nth(4).fill('3');
+    await regressionCell.locator('.regression-sheet-input').nth(5).fill('6');
+    await regressionCell.getByLabel('Collapse data table').click();
+    await regressionCell.getByRole('button', { name: 'Fit' }).click();
+
+    await expect(regressionCell.getByText('y = 2x + 0').first()).toBeVisible();
+    await expect(regressionCell.getByText('R²: 1.0000')).toBeVisible();
+    await expect(regressionCell.getByTestId('regression-plot')).toBeVisible();
+
+    await page.locator('.cell-row-add-btn').first().click({ force: true });
+    await page.locator('.cell-insert-search').fill('regression');
+    await expect(page.locator('.cell-insert-menu-label').getByText('More blocks')).toBeVisible();
+    await expect(page.locator('.cell-insert-menu-item-secondary').getByText('Regression')).toBeVisible();
+
+    await expectNoGlobalErrors(page, guards);
   });
 
   test('Notebook chrome: active toolbar is consistent and math has a single run affordance', async ({ page }) => {

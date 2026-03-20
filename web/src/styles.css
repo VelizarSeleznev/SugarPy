@@ -981,17 +981,18 @@ body {
 
 .cell-action-bar {
   position: absolute;
-  top: 6px;
+  top: 0;
   right: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px;
+  padding: 0 2px;
   border: 1px solid rgba(229, 231, 235, 0.95);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.1);
   z-index: 10;
+  transform: translateY(-50%);
 }
 
 .cell-action-bar.floating {
@@ -1271,6 +1272,21 @@ body {
   overflow: auto;
 }
 
+.cell-insert-menu-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cell-insert-menu-label {
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .cell-insert-menu-item {
   border: 0;
   background: transparent;
@@ -1286,6 +1302,10 @@ body {
 .cell-insert-menu-item:hover {
   background: #eff6ff;
   color: var(--primary-accent);
+}
+
+.cell-insert-menu-item-secondary {
+  color: var(--text-muted);
 }
 
 .cell-insert-menu-empty {
@@ -1491,6 +1511,13 @@ body {
   background: #f3f4f6;
 }
 
+.divider-btn-secondary {
+  color: var(--text-muted);
+  min-width: 36px;
+  padding: 3px 6px;
+  font-size: 14px;
+}
+
 .divider-menu.open {
   position: static;
   transform: none;
@@ -1520,6 +1547,22 @@ body {
   flex-wrap: wrap;
   justify-content: center;
   gap: 10px;
+}
+
+.cell-empty-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
+.secondary-discovery-btn {
+  min-width: 96px;
+  color: var(--text-muted);
+}
+
+.button.secondary.subtle {
+  color: var(--text-muted);
 }
 
 .cell-empty-title {
@@ -2089,6 +2132,254 @@ body {
   background: #fef2f2;
   color: #991b1b;
   font-weight: 600;
+}
+
+.regression-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.regression-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.regression-toolbar-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.regression-toolbar-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.regression-collapse-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.regression-collapse-btn:hover {
+  background: #f3f4f6;
+  color: var(--text-main);
+}
+
+.regression-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.regression-model-picker select {
+  min-width: 132px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.regression-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.button.slim {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.regression-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.regression-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.regression-axis-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.regression-axis-label input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.regression-editor {
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  padding: 8px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.regression-sheet-wrap {
+  overflow-x: auto;
+}
+
+.regression-sheet {
+  width: 100%;
+  min-width: 540px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #fff;
+}
+
+.regression-sheet th,
+.regression-sheet td {
+  border: 1px solid #dbe3ee;
+  padding: 0;
+  vertical-align: middle;
+}
+
+.regression-sheet th {
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.regression-row-select-head {
+  width: 44px;
+  text-align: center;
+}
+
+.regression-row-select-cell {
+  background: #f8fafc;
+}
+
+.regression-row-select-btn {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.regression-row-select-btn.is-selected,
+.regression-sheet tbody tr.is-selected .regression-row-select-btn {
+  background: #dbeafe;
+  color: var(--primary-accent);
+  font-weight: 700;
+}
+
+.regression-sheet tbody tr.is-selected td {
+  background: rgba(219, 234, 254, 0.28);
+}
+
+.regression-sheet-input {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.regression-sheet-input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.18);
+  outline-offset: -2px;
+}
+
+.regression-error-head {
+  width: 180px;
+}
+
+.regression-row-error-cell {
+  padding: 8px 10px;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.regression-running {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.regression-error {
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.regression-warning {
+  color: #9a3412;
+  font-size: 12px;
+}
+
+.regression-plot .output {
+  margin: 0;
+}
+
+.regression-alternatives {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.regression-alternatives summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.regression-alternatives-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.regression-alternative-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.75);
 }
 
 .wiki-page {

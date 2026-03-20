@@ -2558,6 +2558,10 @@ source = { editable = "." }
 dependencies = [
     { name = "chempy" },
     { name = "ipywidgets" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sympy" },
 ]
 
@@ -2576,7 +2580,9 @@ requires-dist = [
     { name = "ipykernel", marker = "extra == 'lab'", specifier = ">=6.0" },
     { name = "ipywidgets", specifier = ">=8.1" },
     { name = "jupyterlab", marker = "extra == 'lab'", specifier = ">=4.0" },
+    { name = "numpy", specifier = ">=2.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
+    { name = "scipy", specifier = ">=1.15" },
     { name = "sympy", specifier = ">=1.12" },
 ]
 provides-extras = ["lab", "test"]
