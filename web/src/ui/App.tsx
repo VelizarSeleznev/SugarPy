@@ -2529,7 +2529,7 @@ function App() {
     }
   };
 
-  const runAssistantPhotoImport = async (options?: { chatId?: string }) => {
+  const runAssistantPhotoImport = async (options?: { chatId?: string; instructionOverride?: string }) => {
     const photoImport = assistantPhotoImport;
     if (!photoImport || photoImport.items.length === 0) {
       setAssistantError('Choose at least one image or PDF before extracting a draft.');
@@ -2550,7 +2550,8 @@ function App() {
     const traceId = `assistant-trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const timestamp = new Date().toISOString();
     const importSummary = buildAssistantImportSummary(photoImport.items);
-    const instructionSuffix = photoImport.instructions.trim() ? `\nInstruction: ${photoImport.instructions.trim()}` : '';
+    const effectiveInstruction = (options?.instructionOverride ?? photoImport.instructions ?? '').trim();
+    const instructionSuffix = effectiveInstruction ? `\nInstruction: ${effectiveInstruction}` : '';
     const messageLabel = `Import pages: ${importSummary}${instructionSuffix}`;
     const userMessageId = `assistant-user-${Date.now()}`;
     const assistantMessageId = `assistant-reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -2597,7 +2598,7 @@ function App() {
       },
       conversationHistory: [{ role: 'user', content: messageLabel }],
       photoImport: {
-        instructions: photoImport.instructions,
+        instructions: effectiveInstruction,
         items: photoImport.items.map((item, index) => ({
           index,
           fileName: item.sourceFileName,
@@ -2629,7 +2630,7 @@ function App() {
         'Import the uploaded handwritten pages into SugarPy notebook cells.',
         'Append imported content as new cells only.',
         `Attached pages/images: ${importSummary}.`,
-        photoImport.instructions.trim() ? `User import goal: ${photoImport.instructions.trim()}` : ''
+        effectiveInstruction ? `User import goal: ${effectiveInstruction}` : ''
       ]
         .filter(Boolean)
         .join('\n');
@@ -2648,7 +2649,7 @@ function App() {
             mimeType: item.mimeType,
             pageNumber: item.pageNumber
           })),
-          instructions: photoImport.instructions
+          instructions: effectiveInstruction
         },
         signal: controller.signal,
         conversationHistory: [{ role: 'user', content: requestText }],
@@ -2734,6 +2735,7 @@ function App() {
       }));
       setAssistantPhotoImport(null);
       setAssistantDrawerSection('hub');
+      setAssistantDraft('');
       void persistAssistantTrace({
         ...baseTrace,
         status: 'completed',
@@ -4165,15 +4167,8 @@ function App() {
                 return { ...prev, items };
               });
             }}
-            onChangePhotoInstructions={(value) => {
-              setAssistantPhotoImport((prev) => (prev ? { ...prev, instructions: value } : prev));
-            }}
             onExtractPhoto={() => {
-              void runAssistantPhotoImport();
-            }}
-            onCancelPhotoImport={() => {
-              setAssistantPhotoImport(null);
-              setAssistantDrawerSection('hub');
+              void runAssistantPhotoImport({ instructionOverride: assistantDraft });
             }}
             onSend={() => {
               void runAssistant();

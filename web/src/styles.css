@@ -552,6 +552,12 @@ body {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.assistant-compose-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .assistant-message {
   display: flex;
 }
@@ -813,7 +819,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: 1px solid rgba(229, 231, 235, 0.9);
 }
 
@@ -928,28 +934,30 @@ body {
 .assistant-compose {
   display: flex;
   gap: 8px;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .assistant-chat-input {
   flex: 1;
-  min-height: 44px;
-  max-height: 160px;
+  min-height: 42px;
+  max-height: 96px;
   resize: none;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 10px 11px;
   border-radius: 12px;
   border: 1px solid var(--border-light);
   background: #fff;
   font: inherit;
   color: var(--text-main);
   line-height: 1.45;
+  font-size: 13px;
 }
 
 .assistant-send-btn {
   min-width: 44px;
   min-height: 44px;
   padding-inline: 0;
+  flex: 0 0 auto;
 }
 
 .button.compact {
@@ -968,6 +976,96 @@ body {
 .assistant-icon-send {
   font-size: 18px;
   line-height: 1;
+}
+
+.assistant-attach-btn {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+  border-radius: 12px;
+  flex: 0 0 auto;
+}
+
+.assistant-attachment-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.assistant-attachment-pill {
+  min-width: 138px;
+  max-width: 168px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  background: #fff;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 20px;
+  gap: 8px;
+  align-items: center;
+}
+
+.assistant-attachment-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #f3f4f6;
+}
+
+.assistant-attachment-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-attachment-meta strong,
+.assistant-attachment-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-attachment-meta strong {
+  font-size: 11px;
+  color: var(--text-main);
+}
+
+.assistant-attachment-meta span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.assistant-attachment-remove {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: var(--text-muted);
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.assistant-attachment-remove:hover {
+  background: #e5e7eb;
+  color: var(--text-main);
+}
+
+.assistant-attachment-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .button.ghost {

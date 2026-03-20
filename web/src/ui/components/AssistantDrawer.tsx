@@ -76,9 +76,7 @@ type Props = {
   onNewChat: () => void;
   onSelectPhotoFiles: (files: File[] | FileList | null | undefined) => void;
   onRemovePhotoItem: (id: string) => void;
-  onChangePhotoInstructions: (value: string) => void;
   onExtractPhoto: () => void;
-  onCancelPhotoImport: () => void;
 };
 
 const CUSTOM_MODEL_VALUE = '__custom__';
@@ -132,9 +130,7 @@ export function AssistantDrawer({
   onNewChat,
   onSelectPhotoFiles,
   onRemovePhotoItem,
-  onChangePhotoInstructions,
-  onExtractPhoto,
-  onCancelPhotoImport
+  onExtractPhoto
 }: Props) {
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? chats[0] ?? null;
   const isPresetModel = ASSISTANT_MODEL_PRESETS.some((entry) => entry.value === model);
@@ -144,13 +140,12 @@ export function AssistantDrawer({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [timeTick, setTimeTick] = useState(Date.now());
-  const [isDragActive, setIsDragActive] = useState(false);
 
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = '0px';
-    const nextHeight = Math.min(textareaRef.current.scrollHeight, 160);
-    textareaRef.current.style.height = `${Math.max(44, nextHeight)}px`;
+    const nextHeight = Math.min(textareaRef.current.scrollHeight, 120);
+    textareaRef.current.style.height = `${Math.max(42, nextHeight)}px`;
   }, [draft]);
 
   useEffect(() => {
@@ -168,7 +163,6 @@ export function AssistantDrawer({
 
   useEffect(() => {
     if (!open) return;
-    if (entryMode !== 'chat') return;
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, [entryMode, open]);
 
@@ -178,20 +172,8 @@ export function AssistantDrawer({
   );
   const photoImportItems = photoImport?.items ?? [];
   const hasPhotoItems = photoImportItems.length > 0;
-  const hasPdfItems = photoImportItems.some((item) => item.kind === 'pdf-page');
-  const isPhotoPanelOpen = activeSection === 'photo-import';
-  const showPhotoSection = isPhotoPanelOpen || hasPhotoItems || photoImportPreparing;
   const showRecentChats = activeSection === 'recent-chats' && chats.length > 1;
   const showSettings = activeSection === 'settings';
-  const photoSummaryText = photoImportPreparing
-    ? 'Preparing previews…'
-    : hasPhotoItems
-      ? `${photoImportItems.length} queued ${photoImportItems.length === 1 ? 'item' : 'items'}`
-      : 'No queued files';
-
-  const handleDataTransfer = (files: FileList | null) => {
-    onSelectPhotoFiles(files);
-  };
 
   const handlePaste: React.ClipboardEventHandler<HTMLDivElement> = (event) => {
     const clipboardFiles = Array.from(event.clipboardData.items)
@@ -203,6 +185,20 @@ export function AssistantDrawer({
     onSelectPhotoFiles(clipboardFiles);
   };
 
+  const handlePrimarySubmit = () => {
+    if (loading) {
+      onStop();
+      return;
+    }
+    if (hasPhotoItems) {
+      onExtractPhoto();
+      return;
+    }
+    if (draft.trim()) {
+      onSend();
+    }
+  };
+
   return (
     <aside className={`assistant-drawer${open ? ' open' : ''}`} aria-hidden={!open}>
       <div className="assistant-drawer-header compact">
@@ -211,6 +207,18 @@ export function AssistantDrawer({
           <div className="assistant-header-note">Draft-first notebook edits. Nothing applies until you accept it.</div>
         </div>
         <div className="assistant-header-actions">
+          {chats.length > 1 ? (
+            <button
+              className={`assistant-icon-btn${showRecentChats ? ' active' : ''}`}
+              type="button"
+              onClick={() => onChangeSection(showRecentChats ? 'hub' : 'recent-chats')}
+              aria-label="Recent chats"
+              title="Recent chats"
+              data-testid="assistant-recent-toggle"
+            >
+              ≡
+            </button>
+          ) : null}
           <button className="assistant-icon-btn" type="button" onClick={onNewChat} aria-label="New chat" title="New chat">
             +
           </button>
@@ -231,56 +239,6 @@ export function AssistantDrawer({
       </div>
 
       <div className="assistant-panel assistant-chat-panel">
-        <div className="assistant-hub-card" data-testid="assistant-hub">
-          <div className="assistant-hub-copy">
-            <div className="assistant-op-title">Describe a change or add a photo</div>
-            <div className="assistant-op-reason">
-              Keep the main workflow compact. Photos, recent chats, and settings open only when needed.
-            </div>
-          </div>
-          <div className="assistant-hub-actions">
-            <button
-              type="button"
-              className={`button secondary compact${isPhotoPanelOpen ? ' is-active' : ''}`}
-              data-testid="assistant-photo-toggle"
-              onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
-            >
-              Add photo
-            </button>
-            {chats.length > 1 ? (
-              <button
-                type="button"
-                className={`button secondary compact${showRecentChats ? ' is-active' : ''}`}
-                data-testid="assistant-recent-toggle"
-                onClick={() => onChangeSection(showRecentChats ? 'hub' : 'recent-chats')}
-              >
-                Recent chats
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className={`button ghost compact${showSettings ? ' is-active' : ''}`}
-              data-testid="assistant-settings-panel-toggle"
-              onClick={() => onChangeSection(showSettings ? 'hub' : 'settings')}
-            >
-              Settings
-            </button>
-          </div>
-          {hasPhotoItems || photoImportPreparing ? (
-            <button
-              type="button"
-              className="assistant-photo-summary"
-              data-testid="assistant-photo-summary"
-              onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
-            >
-              <span className="assistant-photo-summary-title">{photoSummaryText}</span>
-              <span className="assistant-photo-summary-detail">
-                {hasPdfItems ? 'PDF page order stays intact.' : 'Ready for one compact import run.'}
-              </span>
-            </button>
-          ) : null}
-        </div>
-
         {showSettings ? (
           <div className="assistant-settings-body">
             <label className="assistant-field">
@@ -358,7 +316,7 @@ export function AssistantDrawer({
             <div className="assistant-section-card-header">
               <div>
                 <div className="assistant-op-title">Recent chats</div>
-                <div className="assistant-op-reason">Switch context only when you need to revisit an earlier draft.</div>
+                <div className="assistant-op-reason">Switch back to an earlier draft when you need it.</div>
               </div>
               <button type="button" className="button ghost compact" onClick={() => onChangeSection('hub')}>
                 Hide
@@ -382,166 +340,10 @@ export function AssistantDrawer({
           </div>
         ) : null}
 
-        {showPhotoSection ? (
-          <div className="assistant-photo-import" data-testid="assistant-photo-import">
-            <div className="assistant-photo-import-header">
-              <div>
-                <div className="assistant-op-title">Photo import</div>
-                <div className="assistant-op-reason">
-                  {hasPhotoItems
-                    ? hasPdfItems
-                      ? 'Queued PDF pages keep their original order.'
-                      : 'Queued images will be read in the shown order.'
-                    : 'Expand only when you want to upload or review files.'}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="button ghost compact"
-                data-testid="assistant-photo-collapse"
-                onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
-              >
-                {isPhotoPanelOpen ? 'Collapse' : 'Expand'}
-              </button>
-            </div>
-
-            {isPhotoPanelOpen ? (
-              <>
-                <div
-                  className={`assistant-photo-dropzone compact${isDragActive ? ' is-drag-active' : ''}${photoImportPreparing ? ' is-preparing' : ''}`}
-                  data-testid="assistant-photo-dropzone"
-                  onPaste={handlePaste}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    setIsDragActive(true);
-                  }}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    if (!isDragActive) setIsDragActive(true);
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    const nextTarget = event.relatedTarget;
-                    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-                      setIsDragActive(false);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setIsDragActive(false);
-                    handleDataTransfer(event.dataTransfer.files);
-                  }}
-                >
-                  <div className="assistant-photo-dropzone-title">
-                    {photoImportPreparing ? 'Preparing pages…' : hasPhotoItems ? 'Add more images or PDFs' : 'Drop images or PDF here'}
-                  </div>
-                  <div className="assistant-op-reason">
-                    Supports drag-and-drop, clipboard images, multiple images, and PDF page previews.
-                  </div>
-                  <div className="assistant-footer-actions">
-                    <button
-                      type="button"
-                      className="button compact"
-                      data-testid="assistant-import-photo"
-                      onClick={() => photoInputRef.current?.click()}
-                      disabled={loading || photoImportPreparing}
-                    >
-                      {hasPhotoItems ? 'Choose more' : 'Choose files'}
-                    </button>
-                  </div>
-                </div>
-
-                {hasPhotoItems ? (
-                  <>
-                    <div className="assistant-photo-grid" data-testid="assistant-photo-grid">
-                      {photoImportItems.map((item) => (
-                        <div key={item.id} className="assistant-photo-card" data-testid="assistant-photo-preview">
-                          <div className="assistant-photo-preview-wrap compact">
-                            <img src={item.previewUrl} alt={item.displayName} className="assistant-photo-preview compact" />
-                          </div>
-                          <div className="assistant-photo-meta compact">
-                            <strong>{item.displayName}</strong>
-                            <span>{item.kind === 'pdf-page' && item.pageNumber ? `Page ${item.pageNumber}` : 'Image'}</span>
-                          </div>
-                          <div className="assistant-preview-actions compact">
-                            <button
-                              type="button"
-                              className="button ghost compact"
-                              data-testid="assistant-photo-remove"
-                              onClick={() => onRemovePhotoItem(item.id)}
-                              disabled={loading || photoImportPreparing}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <label className="assistant-field">
-                      <span>Optional instruction</span>
-                      <input
-                        className="input"
-                        data-testid="assistant-photo-instructions"
-                        value={photoImport?.instructions ?? ''}
-                        onChange={(event) => onChangePhotoInstructions(event.target.value)}
-                        placeholder="For example: keep only the clean derivation"
-                      />
-                    </label>
-
-                    <div className="assistant-preview-actions compact">
-                      <button
-                        type="button"
-                        className="button compact"
-                        data-testid="assistant-photo-extract"
-                        onClick={onExtractPhoto}
-                        disabled={loading || photoImportPreparing || !hasPhotoItems}
-                      >
-                        Extract draft
-                      </button>
-                      <button
-                        type="button"
-                        className="button ghost compact"
-                        data-testid="assistant-photo-replace"
-                        onClick={() => photoInputRef.current?.click()}
-                        disabled={loading || photoImportPreparing}
-                      >
-                        Add more
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary compact"
-                        data-testid="assistant-photo-clear"
-                        onClick={onCancelPhotoImport}
-                        disabled={loading || photoImportPreparing}
-                      >
-                        Clear all
-                      </button>
-                    </div>
-                  </>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        ) : null}
-
-        <input
-          ref={photoInputRef}
-          type="file"
-          accept="image/*,application/pdf"
-          multiple
-          className="file-input"
-          data-testid="assistant-photo-input"
-          onChange={(event) => {
-            onSelectPhotoFiles(event.target.files);
-            event.target.value = '';
-          }}
-        />
-
         <div className="assistant-chat-messages" ref={messageListRef}>
           {visibleMessages.length === 0 ? (
             <div className="assistant-empty-state">
-              Ask for a notebook change in plain language. The assistant will build a staged draft and wait for acceptance before applying anything.
+              Describe a notebook change, or attach photos and add a short extraction hint in the input below.
             </div>
           ) : null}
 
@@ -736,40 +538,94 @@ export function AssistantDrawer({
 
         {error && !visibleMessages.some((message) => message.error === error) ? <div className="assistant-error">{error}</div> : null}
 
-        <div className="assistant-chat-footer">
-          <div className="assistant-compose">
-            <textarea
-              ref={textareaRef}
-              data-testid="assistant-prompt"
-              className="assistant-chat-input"
-              value={draft}
-              onChange={(event) => onChangeDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  if (!loading && draft.trim()) {
-                    onSend();
-                  }
-                }
-              }}
-              placeholder="Describe the notebook change you want."
-            />
-            {loading ? (
-              <button type="button" className="button secondary compact assistant-send-btn assistant-icon-send" onClick={onStop}>
-                ■
+        <div
+          className="assistant-compose-stack"
+          data-testid="assistant-attachment-zone"
+          onPaste={handlePaste}
+          onDragOver={(event) => {
+            event.preventDefault();
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            onSelectPhotoFiles(event.dataTransfer.files);
+          }}
+        >
+          {hasPhotoItems || photoImportPreparing ? (
+            <div className="assistant-attachment-strip" data-testid="assistant-photo-strip">
+              {photoImportItems.map((item) => (
+                <div key={item.id} className="assistant-attachment-pill" data-testid="assistant-photo-preview">
+                  <img src={item.previewUrl} alt={item.displayName} className="assistant-attachment-thumb" />
+                  <div className="assistant-attachment-meta">
+                    <strong>{item.kind === 'pdf-page' && item.pageNumber ? `Page ${item.pageNumber}` : 'Image'}</strong>
+                    <span>{item.displayName}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="assistant-attachment-remove"
+                    data-testid="assistant-photo-remove"
+                    onClick={() => onRemovePhotoItem(item.id)}
+                    disabled={loading || photoImportPreparing}
+                    aria-label={`Remove ${item.displayName}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              {photoImportPreparing ? <div className="assistant-attachment-status">Preparing previews…</div> : null}
+            </div>
+          ) : null}
+
+          <div className="assistant-chat-footer">
+            <div className="assistant-compose">
+              <button
+                type="button"
+                className="button secondary compact assistant-attach-btn"
+                data-testid="assistant-import-photo"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={loading || photoImportPreparing}
+                aria-label="Add photo"
+                title="Add photo"
+              >
+                +
               </button>
-            ) : (
+              <textarea
+                ref={textareaRef}
+                data-testid="assistant-prompt"
+                className="assistant-chat-input"
+                value={draft}
+                onChange={(event) => onChangeDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    handlePrimarySubmit();
+                  }
+                }}
+                placeholder={hasPhotoItems ? 'Add an optional note' : 'Describe the change'}
+              />
               <button
                 data-testid="assistant-generate"
                 className="button compact assistant-send-btn assistant-icon-send"
-                onClick={onSend}
-                disabled={!draft.trim()}
+                onClick={handlePrimarySubmit}
+                disabled={loading ? false : !hasPhotoItems && !draft.trim()}
               >
-                ↑
+                {loading ? '■' : '↑'}
               </button>
-            )}
+            </div>
           </div>
         </div>
+
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*,application/pdf"
+          multiple
+          className="file-input"
+          data-testid="assistant-photo-input"
+          onChange={(event) => {
+            onSelectPhotoFiles(event.target.files);
+            event.target.value = '';
+          }}
+        />
       </div>
     </aside>
   );

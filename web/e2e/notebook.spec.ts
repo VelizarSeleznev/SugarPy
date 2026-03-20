@@ -1512,8 +1512,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
-    await expect(page.getByTestId('assistant-hub')).toBeVisible();
-    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
+    await expect(page.getByTestId('assistant-prompt')).toBeVisible();
     await page.getByTestId('assistant-settings-toggle').click();
     await expect(page.getByTestId('assistant-api-key')).toHaveAttribute('placeholder', 'Using shared key by default');
     await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
@@ -1531,12 +1530,9 @@ test.describe('Notebook CAS outputs', () => {
       }
     ]);
 
-    await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
-    await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
-    await expect(page.getByTestId('assistant-photo-summary')).toContainText('2 queued items');
-    await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-1.png');
-    await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-2.png');
+    await expect(page.getByTestId('assistant-photo-strip')).toContainText('photo-1.png');
+    await expect(page.getByTestId('assistant-photo-strip')).toContainText('photo-2.png');
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -1544,7 +1540,6 @@ test.describe('Notebook CAS outputs', () => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
-    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
 
     await page.getByTestId('assistant-photo-input').setInputFiles({
       name: 'selected.png',
@@ -1554,8 +1549,8 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(1);
 
     await page.evaluate((base64) => {
-      const dropzone = document.querySelector('[data-testid="assistant-photo-dropzone"]');
-      if (!dropzone) throw new Error('Dropzone not found');
+      const dropzone = document.querySelector('[data-testid="assistant-attachment-zone"]');
+      if (!dropzone) throw new Error('Attachment zone not found');
       const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
       const file = new File([bytes], 'dropped.png', { type: 'image/png' });
       const transfer = new DataTransfer();
@@ -1565,8 +1560,8 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
 
     await page.evaluate((base64) => {
-      const dropzone = document.querySelector('[data-testid="assistant-photo-dropzone"]');
-      if (!dropzone) throw new Error('Dropzone not found');
+      const dropzone = document.querySelector('[data-testid="assistant-attachment-zone"]');
+      if (!dropzone) throw new Error('Attachment zone not found');
       const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
       const file = new File([bytes], 'pasted.png', { type: 'image/png' });
       const transfer = new DataTransfer();
@@ -1577,10 +1572,9 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.getByTestId('assistant-photo-remove').nth(1).click();
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
-
-    await page.getByTestId('assistant-photo-clear').click();
-    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
-    await expect(page.getByTestId('assistant-hub')).toBeVisible();
+    await page.getByTestId('assistant-photo-remove').nth(1).click();
+    await page.getByTestId('assistant-photo-remove').nth(0).click();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(0);
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -1591,21 +1585,24 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-photo-entry').click();
     await page.getByTestId('assistant-photo-input').setInputFiles(REAL_PHOTO_IMPORT_PDF);
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(5);
-    await expect(page.locator('.assistant-photo-meta').first()).toContainText('Page 1');
-    await expect(page.locator('.assistant-photo-meta').nth(4)).toContainText('Page 5');
+    await expect(page.locator('.assistant-attachment-meta').first()).toContainText('Page 1');
+    await expect(page.locator('.assistant-attachment-meta').nth(4)).toContainText('Page 5');
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Assistant drawer: compact hub opens by default and photo panel expands only on demand', async ({ page }) => {
+  test('Assistant drawer: composer stays visible and attachments stack above input', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
     await expect(page.locator('.assistant-drawer.open')).toBeVisible();
-    await expect(page.getByTestId('assistant-hub')).toBeVisible();
     await expect(page.getByTestId('assistant-prompt')).toBeVisible();
-    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
-    await page.getByTestId('assistant-photo-toggle').click();
-    await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
     await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
+    await page.getByTestId('assistant-photo-input').setInputFiles({
+      name: 'selected.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+    });
+    await expect(page.getByTestId('assistant-photo-strip')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(1);
   });
 
   test('Assistant drawer: recent chats stay hidden until the user opens them', async ({ page }) => {
