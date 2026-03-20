@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { FunctionEntry, useFunctionLibrary } from './hooks/useFunctionLibrary';
 import { NotebookCell } from './components/NotebookCell';
-import { AssistantDrawer } from './components/AssistantDrawer';
+import { AssistantDrawer, AssistantDrawerSection } from './components/AssistantDrawer';
 import { OnboardingCoachmark } from './components/OnboardingCoachmark';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
@@ -421,6 +421,7 @@ const PhotoImportIcon = () => (
 
 function App() {
   const [assistantEntryMode, setAssistantEntryMode] = useState<'photo-import' | 'chat'>('photo-import');
+  const [assistantDrawerSection, setAssistantDrawerSection] = useState<AssistantDrawerSection>('hub');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [statusDetail, setStatusDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -457,7 +458,6 @@ function App() {
   const [assistantDraft, setAssistantDraft] = useState('');
   const [assistantPhotoImport, setAssistantPhotoImport] = useState<AssistantPhotoImport | null>(null);
   const [assistantPhotoImportPreparing, setAssistantPhotoImportPreparing] = useState(false);
-  const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState('');
   const [assistantChats, setAssistantChats] = useState<AssistantChatSession[]>([]);
@@ -2213,6 +2213,7 @@ function App() {
     const nextChat = createAssistantChat();
     setAssistantChats((prev) => [nextChat, ...prev].slice(0, 5));
     setAssistantActiveChatId(nextChat.id);
+    setAssistantDrawerSection('hub');
     setAssistantError('');
     return nextChat.id;
   };
@@ -2358,6 +2359,7 @@ function App() {
     setAssistantDraft('');
     setAssistantError('');
     setAssistantPhotoImport(null);
+    setAssistantDrawerSection('hub');
     const storageKey = `${ASSISTANT_HISTORY_STORAGE_PREFIX}${notebookId}`;
     const raw = readOptionalStorageItem(storageKey);
     if (!raw) {
@@ -2410,8 +2412,19 @@ function App() {
     }
   }, [notebookId]);
 
+  const resolveAssistantDrawerSection = (mode: 'photo-import' | 'chat'): AssistantDrawerSection => {
+    if (assistantPhotoImportPreparing || (assistantPhotoImport?.items.length ?? 0) > 0) {
+      return 'photo-import';
+    }
+    if (mode === 'chat') {
+      return 'hub';
+    }
+    return 'hub';
+  };
+
   const openAssistantDrawer = (mode: 'photo-import' | 'chat') => {
     setAssistantEntryMode(mode);
+    setAssistantDrawerSection(resolveAssistantDrawerSection(mode));
     setAssistantOpen(true);
     void hydrateAssistantRuntimeConfig();
   };
@@ -2507,6 +2520,7 @@ function App() {
         items: preparedItems,
         instructions: existingImport?.instructions ?? ''
       });
+      setAssistantDrawerSection('photo-import');
       setAssistantError('');
     } catch (error) {
       setAssistantError(error instanceof Error ? error.message : 'Failed to prepare imported files.');
@@ -2719,6 +2733,7 @@ function App() {
         draftRun
       }));
       setAssistantPhotoImport(null);
+      setAssistantDrawerSection('hub');
       void persistAssistantTrace({
         ...baseTrace,
         status: 'completed',
@@ -3654,11 +3669,11 @@ function App() {
               data-testid="assistant-photo-entry"
               aria-label="Import from photo"
               onClick={() => {
-                if (assistantOpen && assistantEntryMode === 'photo-import') {
-                  setAssistantOpen(false);
-                  return;
-                }
-                openAssistantDrawer('photo-import');
+            if (assistantOpen && assistantEntryMode === 'photo-import') {
+              setAssistantOpen(false);
+              return;
+            }
+            openAssistantDrawer('photo-import');
               }}
             >
               <span className="header-action-icon" aria-hidden="true"><PhotoImportIcon /></span>
@@ -4101,6 +4116,7 @@ function App() {
           <AssistantDrawer
             open={assistantOpen}
             entryMode={assistantEntryMode}
+            activeSection={assistantDrawerSection}
             apiKey={assistantApiKey}
             hasDefaultApiKey={assistantDefaultProviderAvailable}
             model={assistantModel}
@@ -4110,7 +4126,6 @@ function App() {
             error={assistantError}
             chats={assistantChats}
             activeChatId={assistantActiveChatId}
-            settingsOpen={assistantSettingsOpen}
             photoImportPreparing={assistantPhotoImportPreparing}
             photoImport={
               assistantPhotoImport
@@ -4131,8 +4146,7 @@ function App() {
                 : null
             }
             onClose={() => setAssistantOpen(false)}
-            onOpenChat={() => openAssistantDrawer('chat')}
-            onToggleSettings={() => setAssistantSettingsOpen((prev) => !prev)}
+            onChangeSection={setAssistantDrawerSection}
             onChangeApiKey={setAssistantApiKey}
             onChangeModel={setAssistantModel}
             onChangeThinkingLevel={setAssistantThinkingLevel}
@@ -4144,7 +4158,11 @@ function App() {
               setAssistantPhotoImport((prev) => {
                 if (!prev) return prev;
                 const items = prev.items.filter((item) => item.id !== id);
-                return items.length > 0 ? { ...prev, items } : null;
+                if (items.length === 0) {
+                  setAssistantDrawerSection('hub');
+                  return null;
+                }
+                return { ...prev, items };
               });
             }}
             onChangePhotoInstructions={(value) => {
@@ -4155,6 +4173,7 @@ function App() {
             }}
             onCancelPhotoImport={() => {
               setAssistantPhotoImport(null);
+              setAssistantDrawerSection('hub');
             }}
             onSend={() => {
               void runAssistant();
@@ -4170,7 +4189,10 @@ function App() {
             onRevise={(messageId) => {
               void reviseAssistantDraft(messageId);
             }}
-            onSelectChat={setAssistantActiveChatId}
+            onSelectChat={(chatId) => {
+              setAssistantActiveChatId(chatId);
+              setAssistantDrawerSection('hub');
+            }}
             onNewChat={() => {
               createNewAssistantChat();
             }}

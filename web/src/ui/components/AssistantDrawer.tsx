@@ -43,9 +43,12 @@ type AssistantPhotoImportPreview = {
   instructions: string;
 };
 
+export type AssistantDrawerSection = 'hub' | 'photo-import' | 'recent-chats' | 'settings';
+
 type Props = {
   open: boolean;
   entryMode: 'photo-import' | 'chat';
+  activeSection: AssistantDrawerSection;
   apiKey: string;
   hasDefaultApiKey: boolean;
   model: string;
@@ -55,12 +58,10 @@ type Props = {
   error: string;
   chats: AssistantChat[];
   activeChatId: string | null;
-  settingsOpen: boolean;
   photoImport: AssistantPhotoImportPreview | null;
   photoImportPreparing: boolean;
   onClose: () => void;
-  onOpenChat: () => void;
-  onToggleSettings: () => void;
+  onChangeSection: (section: AssistantDrawerSection) => void;
   onChangeApiKey: (value: string) => void;
   onChangeModel: (value: string) => void;
   onChangeThinkingLevel: (value: 'dynamic' | 'minimal' | 'low' | 'medium' | 'high') => void;
@@ -94,9 +95,16 @@ const formatValidationStatusLabel = (status: ReturnType<typeof getDraftStepStatu
   return 'Text only';
 };
 
+const latestActivityLabel = (activity: AssistantActivity[]) => {
+  const last = activity[activity.length - 1];
+  if (!last) return '';
+  return [last.label, last.detail].filter(Boolean).join(' · ');
+};
+
 export function AssistantDrawer({
   open,
   entryMode,
+  activeSection,
   apiKey,
   hasDefaultApiKey,
   model,
@@ -106,12 +114,10 @@ export function AssistantDrawer({
   error,
   chats,
   activeChatId,
-  settingsOpen,
   photoImport,
   photoImportPreparing,
   onClose,
-  onOpenChat,
-  onToggleSettings,
+  onChangeSection,
   onChangeApiKey,
   onChangeModel,
   onChangeThinkingLevel,
@@ -143,7 +149,7 @@ export function AssistantDrawer({
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = '0px';
-    const nextHeight = Math.min(textareaRef.current.scrollHeight, 180);
+    const nextHeight = Math.min(textareaRef.current.scrollHeight, 160);
     textareaRef.current.style.height = `${Math.max(44, nextHeight)}px`;
   }, [draft]);
 
@@ -160,14 +166,28 @@ export function AssistantDrawer({
     return () => window.clearInterval(id);
   }, [loading]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (entryMode !== 'chat') return;
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [entryMode, open]);
+
   const visibleMessages = useMemo(
     () => (activeChat?.messages ?? []).filter((message) => message.status !== 'dismissed'),
     [activeChat]
   );
-  const showChatSection = entryMode === 'chat' || visibleMessages.length > 0 || draft.trim().length > 0;
   const photoImportItems = photoImport?.items ?? [];
   const hasPhotoItems = photoImportItems.length > 0;
   const hasPdfItems = photoImportItems.some((item) => item.kind === 'pdf-page');
+  const isPhotoPanelOpen = activeSection === 'photo-import';
+  const showPhotoSection = isPhotoPanelOpen || hasPhotoItems || photoImportPreparing;
+  const showRecentChats = activeSection === 'recent-chats' && chats.length > 1;
+  const showSettings = activeSection === 'settings';
+  const photoSummaryText = photoImportPreparing
+    ? 'Preparing previews…'
+    : hasPhotoItems
+      ? `${photoImportItems.length} queued ${photoImportItems.length === 1 ? 'item' : 'items'}`
+      : 'No queued files';
 
   const handleDataTransfer = (files: FileList | null) => {
     onSelectPhotoFiles(files);
@@ -185,19 +205,19 @@ export function AssistantDrawer({
 
   return (
     <aside className={`assistant-drawer${open ? ' open' : ''}`} aria-hidden={!open}>
-      <div className="assistant-drawer-header">
+      <div className="assistant-drawer-header compact">
         <div>
-          <div className="assistant-kicker">Photo-first assistant</div>
-          <h2>Import notebook edits from a photo</h2>
+          <h2>Assistant</h2>
+          <div className="assistant-header-note">Draft-first notebook edits. Nothing applies until you accept it.</div>
         </div>
         <div className="assistant-header-actions">
           <button className="assistant-icon-btn" type="button" onClick={onNewChat} aria-label="New chat" title="New chat">
             +
           </button>
           <button
-            className={`assistant-icon-btn${settingsOpen ? ' active' : ''}`}
+            className={`assistant-icon-btn${showSettings ? ' active' : ''}`}
             type="button"
-            onClick={onToggleSettings}
+            onClick={() => onChangeSection(showSettings ? 'hub' : 'settings')}
             aria-label="Assistant settings"
             title="Settings"
             data-testid="assistant-settings-toggle"
@@ -211,11 +231,58 @@ export function AssistantDrawer({
       </div>
 
       <div className="assistant-panel assistant-chat-panel">
-        {settingsOpen ? (
-          <div className="assistant-settings-body">
-            <button type="button" className="assistant-settings-close" onClick={onToggleSettings} aria-label="Hide assistant settings">
-              Hide settings
+        <div className="assistant-hub-card" data-testid="assistant-hub">
+          <div className="assistant-hub-copy">
+            <div className="assistant-op-title">Describe a change or add a photo</div>
+            <div className="assistant-op-reason">
+              Keep the main workflow compact. Photos, recent chats, and settings open only when needed.
+            </div>
+          </div>
+          <div className="assistant-hub-actions">
+            <button
+              type="button"
+              className={`button secondary compact${isPhotoPanelOpen ? ' is-active' : ''}`}
+              data-testid="assistant-photo-toggle"
+              onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
+            >
+              Add photo
             </button>
+            {chats.length > 1 ? (
+              <button
+                type="button"
+                className={`button secondary compact${showRecentChats ? ' is-active' : ''}`}
+                data-testid="assistant-recent-toggle"
+                onClick={() => onChangeSection(showRecentChats ? 'hub' : 'recent-chats')}
+              >
+                Recent chats
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`button ghost compact${showSettings ? ' is-active' : ''}`}
+              data-testid="assistant-settings-panel-toggle"
+              onClick={() => onChangeSection(showSettings ? 'hub' : 'settings')}
+            >
+              Settings
+            </button>
+          </div>
+          {hasPhotoItems || photoImportPreparing ? (
+            <button
+              type="button"
+              className="assistant-photo-summary"
+              data-testid="assistant-photo-summary"
+              onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
+            >
+              <span className="assistant-photo-summary-title">{photoSummaryText}</span>
+              <span className="assistant-photo-summary-detail">
+                {hasPdfItems ? 'PDF page order stays intact.' : 'Ready for one compact import run.'}
+              </span>
+            </button>
+          ) : null}
+        </div>
+
+        {showSettings ? (
+          <div className="assistant-settings-body">
             <label className="assistant-field">
               <span>API key override</span>
               <input
@@ -286,68 +353,177 @@ export function AssistantDrawer({
           </div>
         ) : null}
 
-        <div className="assistant-photo-entry-card">
-          <div>
-            <div className="assistant-op-title">Import from photo</div>
-            <div className="assistant-op-reason">
-              Paste screenshots, drop files here, or queue several images and PDF pages into one import run.
+        {showRecentChats ? (
+          <div className="assistant-section-card" data-testid="assistant-recent-panel">
+            <div className="assistant-section-card-header">
+              <div>
+                <div className="assistant-op-title">Recent chats</div>
+                <div className="assistant-op-reason">Switch context only when you need to revisit an earlier draft.</div>
+              </div>
+              <button type="button" className="button ghost compact" onClick={() => onChangeSection('hub')}>
+                Hide
+              </button>
+            </div>
+            <div className="assistant-history-list">
+              {chats.map((chat) => (
+                <button
+                  key={chat.id}
+                  type="button"
+                  className={`assistant-history-chip${chat.id === activeChat?.id ? ' active' : ''}`}
+                  onClick={() => {
+                    onSelectChat(chat.id);
+                    onChangeSection('hub');
+                  }}
+                >
+                  {chat.title}
+                </button>
+              ))}
             </div>
           </div>
-          <div
-            className={`assistant-photo-dropzone${isDragActive ? ' is-drag-active' : ''}${photoImportPreparing ? ' is-preparing' : ''}`}
-            data-testid="assistant-photo-dropzone"
-            onPaste={handlePaste}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setIsDragActive(true);
-            }}
-            onDragOver={(event) => {
-              event.preventDefault();
-              if (!isDragActive) setIsDragActive(true);
-            }}
-            onDragLeave={(event) => {
-              event.preventDefault();
-              const nextTarget = event.relatedTarget;
-              if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-                setIsDragActive(false);
-              }
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              setIsDragActive(false);
-              handleDataTransfer(event.dataTransfer.files);
-            }}
-          >
-            <div className="assistant-photo-dropzone-title">
-              {photoImportPreparing ? 'Preparing pages…' : 'Drop images or PDF here'}
-            </div>
-            <div className="assistant-op-reason">
-              Supports multiple images, drag-and-drop, clipboard images, and PDF files rendered into page previews.
-            </div>
-            <div className="assistant-footer-actions">
+        ) : null}
+
+        {showPhotoSection ? (
+          <div className="assistant-photo-import" data-testid="assistant-photo-import">
+            <div className="assistant-photo-import-header">
+              <div>
+                <div className="assistant-op-title">Photo import</div>
+                <div className="assistant-op-reason">
+                  {hasPhotoItems
+                    ? hasPdfItems
+                      ? 'Queued PDF pages keep their original order.'
+                      : 'Queued images will be read in the shown order.'
+                    : 'Expand only when you want to upload or review files.'}
+                </div>
+              </div>
               <button
                 type="button"
-                className="button"
-                data-testid="assistant-import-photo"
-                onClick={() => photoInputRef.current?.click()}
-                disabled={loading || photoImportPreparing}
+                className="button ghost compact"
+                data-testid="assistant-photo-collapse"
+                onClick={() => onChangeSection(isPhotoPanelOpen ? 'hub' : 'photo-import')}
               >
-                {hasPhotoItems ? 'Add more files' : 'Choose files'}
+                {isPhotoPanelOpen ? 'Collapse' : 'Expand'}
               </button>
-              {!showChatSection ? (
-                <button
-                  type="button"
-                  className="button secondary"
-                  data-testid="assistant-open-chat"
-                  onClick={onOpenChat}
-                  disabled={loading}
-                >
-                  Open typed assistant
-                </button>
-              ) : null}
             </div>
+
+            {isPhotoPanelOpen ? (
+              <>
+                <div
+                  className={`assistant-photo-dropzone compact${isDragActive ? ' is-drag-active' : ''}${photoImportPreparing ? ' is-preparing' : ''}`}
+                  data-testid="assistant-photo-dropzone"
+                  onPaste={handlePaste}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setIsDragActive(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    if (!isDragActive) setIsDragActive(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    const nextTarget = event.relatedTarget;
+                    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+                      setIsDragActive(false);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setIsDragActive(false);
+                    handleDataTransfer(event.dataTransfer.files);
+                  }}
+                >
+                  <div className="assistant-photo-dropzone-title">
+                    {photoImportPreparing ? 'Preparing pages…' : hasPhotoItems ? 'Add more images or PDFs' : 'Drop images or PDF here'}
+                  </div>
+                  <div className="assistant-op-reason">
+                    Supports drag-and-drop, clipboard images, multiple images, and PDF page previews.
+                  </div>
+                  <div className="assistant-footer-actions">
+                    <button
+                      type="button"
+                      className="button compact"
+                      data-testid="assistant-import-photo"
+                      onClick={() => photoInputRef.current?.click()}
+                      disabled={loading || photoImportPreparing}
+                    >
+                      {hasPhotoItems ? 'Choose more' : 'Choose files'}
+                    </button>
+                  </div>
+                </div>
+
+                {hasPhotoItems ? (
+                  <>
+                    <div className="assistant-photo-grid" data-testid="assistant-photo-grid">
+                      {photoImportItems.map((item) => (
+                        <div key={item.id} className="assistant-photo-card" data-testid="assistant-photo-preview">
+                          <div className="assistant-photo-preview-wrap compact">
+                            <img src={item.previewUrl} alt={item.displayName} className="assistant-photo-preview compact" />
+                          </div>
+                          <div className="assistant-photo-meta compact">
+                            <strong>{item.displayName}</strong>
+                            <span>{item.kind === 'pdf-page' && item.pageNumber ? `Page ${item.pageNumber}` : 'Image'}</span>
+                          </div>
+                          <div className="assistant-preview-actions compact">
+                            <button
+                              type="button"
+                              className="button ghost compact"
+                              data-testid="assistant-photo-remove"
+                              onClick={() => onRemovePhotoItem(item.id)}
+                              disabled={loading || photoImportPreparing}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <label className="assistant-field">
+                      <span>Optional instruction</span>
+                      <input
+                        className="input"
+                        data-testid="assistant-photo-instructions"
+                        value={photoImport?.instructions ?? ''}
+                        onChange={(event) => onChangePhotoInstructions(event.target.value)}
+                        placeholder="For example: keep only the clean derivation"
+                      />
+                    </label>
+
+                    <div className="assistant-preview-actions compact">
+                      <button
+                        type="button"
+                        className="button compact"
+                        data-testid="assistant-photo-extract"
+                        onClick={onExtractPhoto}
+                        disabled={loading || photoImportPreparing || !hasPhotoItems}
+                      >
+                        Extract draft
+                      </button>
+                      <button
+                        type="button"
+                        className="button ghost compact"
+                        data-testid="assistant-photo-replace"
+                        onClick={() => photoInputRef.current?.click()}
+                        disabled={loading || photoImportPreparing}
+                      >
+                        Add more
+                      </button>
+                      <button
+                        type="button"
+                        className="button secondary compact"
+                        data-testid="assistant-photo-clear"
+                        onClick={onCancelPhotoImport}
+                        disabled={loading || photoImportPreparing}
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+              </>
+            ) : null}
           </div>
-        </div>
+        ) : null}
 
         <input
           ref={photoInputRef}
@@ -362,361 +538,238 @@ export function AssistantDrawer({
           }}
         />
 
-        {photoImport ? (
-          <div className="assistant-photo-import" data-testid="assistant-photo-import">
-            <div className="assistant-photo-import-header">
-              <div>
-                <div className="assistant-op-title">
-                  {photoImportItems.length} queued {photoImportItems.length === 1 ? 'item' : 'items'}
-                </div>
-                <div className="assistant-op-reason">
-                  {hasPdfItems ? 'PDF pages keep their original order in the import request.' : 'The assistant will read the queued images in the shown order.'}
-                </div>
-              </div>
-              {photoImportPreparing ? <div className="assistant-op-reason">Rendering previews…</div> : null}
+        <div className="assistant-chat-messages" ref={messageListRef}>
+          {visibleMessages.length === 0 ? (
+            <div className="assistant-empty-state">
+              Ask for a notebook change in plain language. The assistant will build a staged draft and wait for acceptance before applying anything.
             </div>
-            <div className="assistant-photo-grid" data-testid="assistant-photo-grid">
-              {photoImportItems.map((item) => (
-                <div key={item.id} className="assistant-photo-card" data-testid="assistant-photo-preview">
-                  <div className="assistant-photo-preview-wrap">
-                    <img src={item.previewUrl} alt={item.displayName} className="assistant-photo-preview" />
-                  </div>
-                  <div className="assistant-photo-meta">
-                    <strong>{item.displayName}</strong>
-                    <span>
-                      {item.width} × {item.height} · {item.mimeType}
+          ) : null}
+
+          {visibleMessages.map((message) => {
+            const hasDraftFailures = !!message.draftRun?.hasFailures;
+            const stepCards = (message.draftRun?.steps ?? []).map((step) => {
+              const stepStatus = getDraftStepStatus(step);
+              return (
+                <div key={`${message.id}-step-${step.id}`} className={`assistant-step-card status-${stepStatus}`} data-testid="assistant-step-card">
+                  <div className="assistant-step-header">
+                    <div>
+                      <div className="assistant-op-title">{step.title}</div>
+                      <div className="assistant-op-reason">{step.explanation}</div>
+                    </div>
+                    <span className={`assistant-step-badge status-${stepStatus}`} data-testid="assistant-step-status">
+                      {formatValidationStatusLabel(stepStatus)}
                     </span>
                   </div>
-                  <div className="assistant-preview-actions">
+
+                  {step.errors.length > 0 ? (
+                    <div className="assistant-warning">Acceptance is blocked for this step until the draft is revised.</div>
+                  ) : null}
+
+                  <details className="assistant-step-details">
+                    <summary>Draft preview</summary>
+                    {step.sourcePreview ? (
+                      <pre className="assistant-op-source">
+                        <code>{step.sourcePreview}</code>
+                      </pre>
+                    ) : (
+                      <div className="assistant-op-reason">No new source in this step.</div>
+                    )}
+                  </details>
+
+                  <details className="assistant-step-details">
+                    <summary>Validation</summary>
+                    {step.validations.length > 0 ? (
+                      step.validations.map((validation, index) => (
+                        <div
+                          key={`${message.id}-validation-row-${step.id}-${index}`}
+                          className="assistant-validation-detail"
+                          data-testid="assistant-validation-detail"
+                        >
+                          <div className="assistant-op-reason">
+                            Stage {index + 1}: {validation.summary.status} · {validation.summary.outputKind}
+                          </div>
+                          <div className="assistant-op-reason">Context: {validation.summary.contextSummary}</div>
+                          <div className="assistant-op-reason">
+                            Result: {validation.summary.outputPreview || 'No visible output.'}
+                          </div>
+                          {validation.summary.errorSummary ? (
+                            <div className="assistant-error inline">{validation.summary.errorSummary}</div>
+                          ) : null}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="assistant-op-reason">Text-only step. No sandbox validation was required.</div>
+                    )}
+                  </details>
+
+                  <details className="assistant-step-details">
+                    <summary>Planned change</summary>
+                    <div className="assistant-op-list">
+                      {step.changes.map((change, index) => (
+                        <div key={`${message.id}-change-${step.id}-${index}`} className="assistant-op-reason">
+                          {change}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+
+                  <div className="assistant-preview-actions compact">
                     <button
                       type="button"
-                      className="button ghost"
-                      data-testid="assistant-photo-remove"
-                      onClick={() => onRemovePhotoItem(item.id)}
-                      disabled={loading || photoImportPreparing}
+                      className="button secondary compact"
+                      onClick={() => onAcceptStep(message.id, step.id)}
+                      disabled={loading || step.errors.length > 0}
                     >
-                      Remove
+                      Accept step
                     </button>
                   </div>
                 </div>
-              ))}
-            </div>
-            <label className="assistant-field">
-              <span>Optional instruction</span>
-              <input
-                className="input"
-                data-testid="assistant-photo-instructions"
-                value={photoImport.instructions}
-                onChange={(event) => onChangePhotoInstructions(event.target.value)}
-                placeholder="For example: keep only the clean derivation"
-              />
-            </label>
-            <div className="assistant-preview-actions">
-              <button
-                type="button"
-                className="button"
-                data-testid="assistant-photo-extract"
-                onClick={onExtractPhoto}
-                disabled={loading || photoImportPreparing || !hasPhotoItems}
+              );
+            });
+
+            return (
+              <div
+                key={message.id}
+                className={`assistant-message assistant-message-${message.role}`}
+                data-testid={message.role === 'user' ? 'assistant-user-message' : 'assistant-message'}
               >
-                Extract draft
-              </button>
-              <button
-                type="button"
-                className="button secondary"
-                data-testid="assistant-photo-clear"
-                onClick={onCancelPhotoImport}
-                disabled={loading || photoImportPreparing}
-              >
-                Clear all
-              </button>
-              <button
-                type="button"
-                className="button ghost"
-                data-testid="assistant-photo-replace"
-                onClick={() => photoInputRef.current?.click()}
-                disabled={loading || photoImportPreparing}
-              >
-                Add more
-              </button>
-            </div>
-          </div>
-        ) : null}
+                <div className="assistant-message-bubble">
+                  {message.content ? <p className="assistant-message-text">{message.content}</p> : null}
+                  {message.error ? (
+                    <div className="assistant-error inline" data-testid="assistant-error">
+                      {message.error}
+                    </div>
+                  ) : null}
 
-        {error && !showChatSection ? <div className="assistant-error">{error}</div> : null}
-
-        {showChatSection ? (
-          <div className="assistant-secondary-chat">
-            <div className="assistant-secondary-chat-header">
-              <div>
-                <div className="assistant-op-title">Typed assistant</div>
-                <div className="assistant-op-reason">Use this when you want to describe a notebook change without a photo.</div>
-              </div>
-              <button
-                type="button"
-                className="button ghost assistant-inline-chat-toggle"
-                data-testid="assistant-open-chat"
-                onClick={onOpenChat}
-                disabled={loading}
-              >
-                Chat mode
-              </button>
-            </div>
-
-            {chats.length > 0 ? (
-              <div className="assistant-history-strip">
-                {chats.map((chat) => (
-                  <button
-                    key={chat.id}
-                    type="button"
-                    className={`assistant-history-chip${chat.id === activeChat?.id ? ' active' : ''}`}
-                    onClick={() => onSelectChat(chat.id)}
-                  >
-                    {chat.title}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            <div className="assistant-chat-messages" ref={messageListRef}>
-              {visibleMessages.length === 0 ? (
-                <div className="assistant-empty-state">
-                  Ask for a notebook change in plain language. The assistant will prepare a staged draft, validate it, and wait for acceptance before applying anything.
-                </div>
-              ) : null}
-
-              {visibleMessages.map((message) => {
-                const hasDraftFailures = !!message.draftRun?.hasFailures;
-                const stepCards = (message.draftRun?.steps ?? []).map((step) => {
-                  const stepStatus = getDraftStepStatus(step);
-                  return (
-                    <div key={`${message.id}-step-${step.id}`} className={`assistant-step-card status-${stepStatus}`} data-testid="assistant-step-card">
-                      <div className="assistant-step-header">
-                        <div>
-                          <div className="assistant-op-title">{step.title}</div>
-                          <div className="assistant-op-reason">{step.explanation}</div>
-                        </div>
-                        <span className={`assistant-step-badge status-${stepStatus}`} data-testid="assistant-step-status">
-                          {formatValidationStatusLabel(stepStatus)}
-                        </span>
+                  {message.activity?.length ? (
+                    message.status === 'loading' ? (
+                      <div className="assistant-loading-status" data-testid="assistant-activity">
+                        {latestActivityLabel(message.activity)}
                       </div>
-
-                      <div className="assistant-step-section">
-                        <div className="assistant-step-label">Proposed draft</div>
-                        {step.sourcePreview ? (
-                          <pre className="assistant-op-source">
-                            <code>{step.sourcePreview}</code>
-                          </pre>
-                        ) : (
-                          <div className="assistant-op-reason">No new source in this step.</div>
-                        )}
-                      </div>
-
-                      <div className="assistant-step-section">
-                        <div className="assistant-step-label">Validation</div>
-                        {step.validations.length > 0 ? (
-                          step.validations.map((validation, index) => (
-                            <div key={`${message.id}-validation-row-${step.id}-${index}`} className="assistant-validation-detail">
-                              <div className="assistant-op-reason">
-                                Stage {index + 1}: {validation.summary.status} · {validation.summary.outputKind}
-                              </div>
-                              <div className="assistant-op-reason">Context: {validation.summary.contextSummary}</div>
-                              <div className="assistant-op-reason">
-                                Result: {validation.summary.outputPreview || 'No visible output.'}
-                              </div>
-                              {validation.summary.errorSummary ? (
-                                <div className="assistant-error inline">{validation.summary.errorSummary}</div>
-                              ) : null}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="assistant-op-reason">Text-only step. No sandbox validation was required.</div>
-                        )}
-                        {step.errors.length > 0 ? (
-                          <div className="assistant-warning">Acceptance is blocked for this step until the draft is revised.</div>
-                        ) : null}
-                      </div>
-
-                      <div className="assistant-step-section">
-                        <div className="assistant-step-label">Planned change</div>
-                        <div className="assistant-op-list">
-                          {step.changes.map((change, index) => (
-                            <div key={`${message.id}-change-${step.id}-${index}`} className="assistant-op-reason">
-                              {change}
+                    ) : (
+                      <details className="assistant-activity-collapsed">
+                        <summary>Technical details</summary>
+                        <div className="assistant-inline-activity">
+                          {message.activity.map((item, index) => (
+                            <div key={`${message.id}-collapsed-activity-${index}`} className={`assistant-activity-item kind-${item.kind}`}>
+                              <span className="assistant-activity-label">{item.label}</span>
+                              {item.detail ? <span className="assistant-activity-detail">{item.detail}</span> : null}
                             </div>
                           ))}
                         </div>
+                      </details>
+                    )
+                  ) : null}
+
+                  {message.status === 'loading' ? (
+                    <div className="assistant-loading-line">
+                      Thinking{'.'.repeat(Math.floor(timeTick / 500) % 3 + 1)}
+                      {message.createdAt ? ` ${Math.max(0, Math.floor((timeTick - Date.parse(message.createdAt)) / 1000))}s` : ''}
+                    </div>
+                  ) : null}
+
+                  {message.plan || message.draftRun ? (
+                    <div className="assistant-preview" data-testid="assistant-preview">
+                      <p className="assistant-summary">{message.plan?.summary ?? message.draftRun?.summary ?? ''}</p>
+
+                      {hasDraftFailures ? (
+                        <div className="assistant-error" data-testid="assistant-draft-failure-banner">
+                          Validation failed. The notebook was not changed. The draft below is the assistant proposal that failed validation.
+                        </div>
+                      ) : null}
+
+                      <div className="assistant-op-item">
+                        <div className="assistant-op-title">Plan</div>
+                        <div className="assistant-op-reason">{message.plan?.outline?.summary ?? message.plan?.summary ?? 'No plan summary.'}</div>
+                        {(message.plan?.outline?.steps ?? []).map((step, index) => (
+                          <div key={`${message.id}-outline-${index}`} className="assistant-warning">
+                            {index + 1}. {step}
+                          </div>
+                        ))}
                       </div>
+
+                      {message.plan?.warnings?.length ? (
+                        <div className="assistant-warning-list">
+                          {message.plan.warnings.map((warning, index) => (
+                            <div key={`${message.id}-warning-${index}`} className="assistant-warning">
+                              {warning}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {message.draftRun ? <div className="assistant-step-list">{stepCards}</div> : null}
 
                       <div className="assistant-preview-actions">
                         <button
-                          type="button"
-                          className="button secondary"
-                          onClick={() => onAcceptStep(message.id, step.id)}
-                          disabled={loading || step.errors.length > 0}
+                          data-testid="assistant-accept-all"
+                          className="button compact"
+                          onClick={() => onAcceptAll(message.id)}
+                          disabled={loading || !message.draftRun || message.draftRun.hasFailures}
                         >
-                          Accept step
+                          Accept all
+                        </button>
+                        <button
+                          data-testid="assistant-reject-draft"
+                          className="button secondary compact"
+                          onClick={() => onReject(message.id)}
+                          disabled={loading || !message.draftRun}
+                        >
+                          Reject draft
+                        </button>
+                        <button
+                          data-testid="assistant-revise-draft"
+                          className="button ghost compact"
+                          onClick={() => onRevise(message.id)}
+                          disabled={loading || !message.requestPrompt}
+                        >
+                          Revise
                         </button>
                       </div>
                     </div>
-                  );
-                });
-
-                return (
-                  <div
-                    key={message.id}
-                    className={`assistant-message assistant-message-${message.role}`}
-                    data-testid={message.role === 'user' ? 'assistant-user-message' : 'assistant-message'}
-                  >
-                    <div className="assistant-message-bubble">
-                      {message.content ? <p className="assistant-message-text">{message.content}</p> : null}
-                      {message.error ? (
-                        <div className="assistant-error inline" data-testid="assistant-error">
-                          {message.error}
-                        </div>
-                      ) : null}
-
-                      {message.activity?.length ? (
-                        message.status === 'loading' ? (
-                          <div className="assistant-inline-activity" data-testid="assistant-activity">
-                            {message.activity.map((item, index) => (
-                              <div key={`${message.id}-activity-${index}`} className={`assistant-activity-item kind-${item.kind}`}>
-                                <span className="assistant-activity-label">{item.label}</span>
-                                {item.detail ? <span className="assistant-activity-detail">{item.detail}</span> : null}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <details className="assistant-activity-collapsed">
-                            <summary>Technical details</summary>
-                            <div className="assistant-inline-activity">
-                              {message.activity.map((item, index) => (
-                                <div key={`${message.id}-collapsed-activity-${index}`} className={`assistant-activity-item kind-${item.kind}`}>
-                                  <span className="assistant-activity-label">{item.label}</span>
-                                  {item.detail ? <span className="assistant-activity-detail">{item.detail}</span> : null}
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        )
-                      ) : null}
-
-                      {message.status === 'loading' ? (
-                        <div className="assistant-loading-line">
-                          Thinking{'.'.repeat(Math.floor(timeTick / 500) % 3 + 1)}
-                          {message.createdAt ? ` ${Math.max(0, Math.floor((timeTick - Date.parse(message.createdAt)) / 1000))}s` : ''}
-                        </div>
-                      ) : null}
-
-                      {message.plan || message.draftRun ? (
-                        <div className="assistant-preview" data-testid="assistant-preview">
-                          <p className="assistant-summary">{message.plan?.summary ?? message.draftRun?.summary ?? ''}</p>
-
-                          {hasDraftFailures ? (
-                            <div className="assistant-error" data-testid="assistant-draft-failure-banner">
-                              Validation failed. The notebook was not changed. The draft below is the assistant proposal that failed validation.
-                            </div>
-                          ) : null}
-
-                          {hasDraftFailures && message.draftRun ? <div className="assistant-step-list">{stepCards}</div> : null}
-
-                          <div className="assistant-op-item">
-                            <div className="assistant-op-title">Plan</div>
-                            <div className="assistant-op-reason">{message.plan?.outline?.summary ?? message.plan?.summary ?? 'No plan summary.'}</div>
-                            {(message.plan?.outline?.steps ?? []).map((step, index) => (
-                              <div key={`${message.id}-outline-${index}`} className="assistant-warning">
-                                {index + 1}. {step}
-                              </div>
-                            ))}
-                          </div>
-
-                          {message.plan?.warnings?.length ? (
-                            <div className="assistant-warning-list">
-                              {message.plan.warnings.map((warning, index) => (
-                                <div key={`${message.id}-warning-${index}`} className="assistant-warning">
-                                  {warning}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          {!hasDraftFailures && message.draftRun ? <div className="assistant-step-list">{stepCards}</div> : null}
-
-                          <div className="assistant-preview-actions">
-                            <button
-                              data-testid="assistant-accept-all"
-                              className="button"
-                              onClick={() => onAcceptAll(message.id)}
-                              disabled={loading || !message.draftRun || message.draftRun.hasFailures}
-                            >
-                              Accept all
-                            </button>
-                            <button
-                              data-testid="assistant-reject-draft"
-                              className="button secondary"
-                              onClick={() => onReject(message.id)}
-                              disabled={loading || !message.draftRun}
-                            >
-                              Reject draft
-                            </button>
-                            <button
-                              data-testid="assistant-revise-draft"
-                              className="button ghost"
-                              onClick={() => onRevise(message.id)}
-                              disabled={loading || !message.requestPrompt}
-                            >
-                              Revise
-                            </button>
-                            <button type="button" className="button ghost" onClick={() => textareaRef.current?.focus()}>
-                              Continue chat
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {error && !visibleMessages.some((message) => message.error === error) ? <div className="assistant-error">{error}</div> : null}
-
-            <div className="assistant-chat-footer">
-              <div className="assistant-compose">
-                <textarea
-                  ref={textareaRef}
-                  data-testid="assistant-prompt"
-                  className="assistant-chat-input"
-                  value={draft}
-                  onChange={(event) => onChangeDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
-                      if (!loading && draft.trim()) {
-                        onSend();
-                      }
-                    }
-                  }}
-                  placeholder="Describe the notebook change you want."
-                />
-                {loading ? (
-                  <button type="button" className="button secondary assistant-send-btn assistant-icon-send" onClick={onStop}>
-                    ■
-                  </button>
-                ) : (
-                  <button
-                    data-testid="assistant-generate"
-                    className="button assistant-send-btn assistant-icon-send"
-                    onClick={onSend}
-                    disabled={!draft.trim()}
-                  >
-                    ↑
-                  </button>
-                )}
+                  ) : null}
+                </div>
               </div>
-            </div>
+            );
+          })}
+        </div>
+
+        {error && !visibleMessages.some((message) => message.error === error) ? <div className="assistant-error">{error}</div> : null}
+
+        <div className="assistant-chat-footer">
+          <div className="assistant-compose">
+            <textarea
+              ref={textareaRef}
+              data-testid="assistant-prompt"
+              className="assistant-chat-input"
+              value={draft}
+              onChange={(event) => onChangeDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (!loading && draft.trim()) {
+                    onSend();
+                  }
+                }
+              }}
+              placeholder="Describe the notebook change you want."
+            />
+            {loading ? (
+              <button type="button" className="button secondary compact assistant-send-btn assistant-icon-send" onClick={onStop}>
+                ■
+              </button>
+            ) : (
+              <button
+                data-testid="assistant-generate"
+                className="button compact assistant-send-btn assistant-icon-send"
+                onClick={onSend}
+                disabled={!draft.trim()}
+              >
+                ↑
+              </button>
+            )}
           </div>
-        ) : null}
+        </div>
       </div>
     </aside>
   );

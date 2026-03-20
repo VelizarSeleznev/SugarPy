@@ -211,11 +211,16 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 ### Current behavior
 - The assistant is optional and opened from the header `Assistant` button.
 - It uses a chat-style drawer with a composer at the bottom.
+- The drawer now opens as a compact hub instead of a large photo-first hero layout.
+- The typed composer is visible immediately.
+- `Add photo`, `Recent chats`, and `Settings` are progressively disclosed instead of staying expanded all the time.
 - It drafts notebook edits from a plain-language request.
 - It shows a short outline first and then builds a staged draft preview instead of mutating the live notebook immediately.
 - For Math-heavy requests, it is constrained to a documented teaching-oriented Math-cell subset instead of free-form SymPy-like guessing.
 - The main chat UI keeps only the core controls visible.
 - Assistant settings are collapsed under `Settings`.
+- Recent chats stay hidden until the user opens them.
+- Technical activity, validation detail, and source previews are collapsed by default inside assistant replies.
 - The main assistant flow now defaults to whole-notebook context and `Auto` output mode.
 - The drawer keeps the last 5 chats per notebook in browser `localStorage`.
 - Creating a new notebook starts with a fresh assistant history.
@@ -234,6 +239,7 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - The assistant drawer provides preset model choices and also allows a custom model id.
 - The model defaults to `gpt-5-mini`.
 - Assistant settings also expose a `Thinking level` selector.
+- The visible settings panel is opened on demand from the compact hub or the header gear button.
 - SugarPy now normalizes the available `thinkingLevel` options per model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
   - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`

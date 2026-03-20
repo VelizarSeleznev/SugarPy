@@ -399,7 +399,6 @@ const addMathCellAfterFirstCode = async (page: any) => {
 
 const openTypedAssistant = async (page: any) => {
   await page.getByTestId('assistant-photo-entry').click();
-  await page.getByTestId('assistant-open-chat').click();
   await expect(page.getByTestId('assistant-prompt')).toBeVisible();
 };
 
@@ -1513,10 +1512,11 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
+    await expect(page.getByTestId('assistant-hub')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
     await page.getByTestId('assistant-settings-toggle').click();
     await expect(page.getByTestId('assistant-api-key')).toHaveAttribute('placeholder', 'Using shared key by default');
     await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
-    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
 
     await page.getByTestId('assistant-photo-input').setInputFiles([
       {
@@ -1534,6 +1534,7 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
     await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
+    await expect(page.getByTestId('assistant-photo-summary')).toContainText('2 queued items');
     await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-1.png');
     await expect(page.getByTestId('assistant-photo-grid')).toContainText('photo-2.png');
     await expectNoGlobalErrors(page, guards);
@@ -1543,6 +1544,7 @@ test.describe('Notebook CAS outputs', () => {
     const guards = attachBrowserErrorGuards(page);
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
+    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
 
     await page.getByTestId('assistant-photo-input').setInputFiles({
       name: 'selected.png',
@@ -1578,6 +1580,7 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.getByTestId('assistant-photo-clear').click();
     await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
+    await expect(page.getByTestId('assistant-hub')).toBeVisible();
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -1588,19 +1591,30 @@ test.describe('Notebook CAS outputs', () => {
     await page.getByTestId('assistant-photo-entry').click();
     await page.getByTestId('assistant-photo-input').setInputFiles(REAL_PHOTO_IMPORT_PDF);
     await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(5);
-    await expect(page.locator('.assistant-photo-meta').first()).toContainText('page 1');
-    await expect(page.locator('.assistant-photo-meta').nth(4)).toContainText('page 5');
+    await expect(page.locator('.assistant-photo-meta').first()).toContainText('Page 1');
+    await expect(page.locator('.assistant-photo-meta').nth(4)).toContainText('Page 5');
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Assistant drawer: photo-first entry opens the drawer and typed chat stays secondary', async ({ page }) => {
+  test('Assistant drawer: compact hub opens by default and photo panel expands only on demand', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
     await expect(page.locator('.assistant-drawer.open')).toBeVisible();
-    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
-    await expect(page.getByTestId('assistant-prompt')).toHaveCount(0);
-    await page.getByTestId('assistant-open-chat').click();
+    await expect(page.getByTestId('assistant-hub')).toBeVisible();
     await expect(page.getByTestId('assistant-prompt')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-import')).toHaveCount(0);
+    await page.getByTestId('assistant-photo-toggle').click();
+    await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
+    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
+  });
+
+  test('Assistant drawer: recent chats stay hidden until the user opens them', async ({ page }) => {
+    await page.goto('/');
+    await openTypedAssistant(page);
+    await page.getByRole('button', { name: 'New chat' }).click();
+    await expect(page.getByTestId('assistant-recent-panel')).toHaveCount(0);
+    await page.getByTestId('assistant-recent-toggle').click();
+    await expect(page.getByTestId('assistant-recent-panel')).toBeVisible();
   });
 
   test('Assistant preview: failed validation keeps the proposed draft visible and blocks acceptance', async ({ page }) => {
@@ -1766,8 +1780,10 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
     await expect(page.getByTestId('assistant-draft-failure-banner')).toContainText('not changed');
     await expect(page.getByTestId('assistant-step-status')).toContainText('Failed');
+    await page.locator('.assistant-step-details summary').filter({ hasText: 'Draft preview' }).click();
     await expect(page.locator('.assistant-op-source code')).toContainText('value = 1 / 0');
-    await expect(page.locator('.assistant-validation-detail')).toContainText('bootstrap only');
+    await page.locator('.assistant-step-details summary').filter({ hasText: 'Validation' }).click();
+    await expect(page.getByTestId('assistant-validation-detail')).toContainText('bootstrap only');
     await expect(page.locator('.assistant-error.inline').last()).toContainText('division by zero');
     await expect(page.getByTestId('assistant-accept-all')).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Accept step' })).toBeDisabled();

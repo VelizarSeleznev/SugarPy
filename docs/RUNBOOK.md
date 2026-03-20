@@ -47,21 +47,23 @@ If those env vars are not set, the assistant can still be configured from the in
 assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
-- The assistant uses a photo-first drawer with a secondary typed-chat section.
+- The assistant drawer now opens as a compact hub with the typed composer visible immediately.
+- `Add photo`, `Recent chats`, and `Settings` are hidden behind on-demand sections instead of staying expanded by default.
 - The default assistant flow is now staged and teaching-first.
   - The assistant first inspects the notebook and builds a structured plan.
   - It then generates a draft preview with per-step validation results in the drawer.
   - The live notebook, autosave state, and export payload stay unchanged until `Accept all` or `Accept step`.
   - `Reject draft` discards the staged draft without resetting the chat.
   - Failed validation keeps the proposed draft visible and marks the affected step as blocked instead of hiding what the model tried to do.
+  - Validation detail, technical activity, and source previews are collapsed by default inside assistant replies.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The header primary assistant entry is `Import from photo`.
   - The drawer accepts multiple images, drag-and-drop, clipboard image paste, and PDF uploads.
+  - Photo import stays collapsed until the user opens it or already has queued files.
   - PDF files are rendered into ordered page previews in the browser before extraction.
   - The drawer keeps queued items until the user removes one item or clears the whole set.
   - The user can add an optional import instruction before extraction.
-  - The typed assistant is still available inside the drawer as a secondary flow.
   - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
   - Photo-import math extraction is now held to CAS-native output: if the draft still contains handwritten/textbook syntax that would require post-processing, the planner is asked to revise the Math-cell source before the draft is shown.
   - The intended output balance for photo import is: short Markdown headings and one brief human-readable idea note per problem, with the actual derivation kept in CAS-only Math cells.
@@ -73,6 +75,7 @@ Assistant UX notes:
 - Assistant requests use an inactivity timeout so a stalled model call fails with an explicit timeout instead of spinning forever.
 - The default visible workflow is whole-notebook + auto mode; advanced scope/preference selectors are no longer shown in the main UI.
 - Up to 5 recent chats are stored locally per notebook.
+- Recent chats stay hidden until the user opens the compact `Recent chats` section.
 - A new notebook starts with a fresh assistant chat history.
 - Assistant traces are now backend-owned and disabled by default in restricted deployments.
 - When enabled, traces are persisted outside the public web root and are redacted before writing.
