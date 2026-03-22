@@ -161,11 +161,6 @@ export function AssistantDrawer({
     return () => window.clearInterval(id);
   }, [loading]);
 
-  useEffect(() => {
-    if (!open) return;
-    window.setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [entryMode, open]);
-
   const visibleMessages = useMemo(
     () => (activeChat?.messages ?? []).filter((message) => message.status !== 'dismissed'),
     [activeChat]

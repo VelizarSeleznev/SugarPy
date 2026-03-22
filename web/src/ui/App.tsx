@@ -441,6 +441,7 @@ function App() {
   const [lastActiveCellId, setLastActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [addCellMenuOpen, setAddCellMenuOpen] = useState(false);
+  const [emptyMoreBlocksOpen, setEmptyMoreBlocksOpen] = useState(false);
   const [cellInsertMenu, setCellInsertMenu] = useState<{
     cellId: string;
     placement: 'above' | 'below';
@@ -499,6 +500,7 @@ function App() {
   const notebookStackRef = useRef<HTMLDivElement | null>(null);
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const addCellMenuRef = useRef<HTMLDivElement | null>(null);
+  const emptyMoreBlocksRef = useRef<HTMLDivElement | null>(null);
   const cellInsertMenuRef = useRef<HTMLDivElement | null>(null);
   const cellInsertMenuShellRef = useRef<HTMLDivElement | null>(null);
   const assistantDrawerRef = useRef<HTMLDivElement | null>(null);
@@ -1027,6 +1029,9 @@ function App() {
       if (addCellMenuOpen && addCellMenuRef.current && target && !addCellMenuRef.current.contains(target)) {
         setAddCellMenuOpen(false);
       }
+      if (emptyMoreBlocksOpen && emptyMoreBlocksRef.current && target && !emptyMoreBlocksRef.current.contains(target)) {
+        setEmptyMoreBlocksOpen(false);
+      }
       if (
         cellInsertMenu &&
         target &&
@@ -1071,6 +1076,7 @@ function App() {
       }
       if (headerMenuOpen) setHeaderMenuOpen(false);
       if (addCellMenuOpen) setAddCellMenuOpen(false);
+      if (emptyMoreBlocksOpen) setEmptyMoreBlocksOpen(false);
       if (cellInsertMenu) {
         setCellInsertMenu(null);
         setCellInsertMenuQuery('');
@@ -1084,7 +1090,7 @@ function App() {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [addCellMenuOpen, assistantOpen, cellInsertMenu, headerMenuOpen]);
+  }, [addCellMenuOpen, assistantOpen, cellInsertMenu, emptyMoreBlocksOpen, headerMenuOpen]);
 
   useEffect(() => {
     if (!dragState) return;
@@ -3836,27 +3842,33 @@ function App() {
                       {option.label}
                     </button>
                   ))}
-                  <button
-                    type="button"
-                    className="button secondary subtle"
-                    onClick={() => {
-                      const firstSecondary = SECONDARY_INSERT_CELL_OPTIONS[0];
-                      if (firstSecondary) insertCellAt(0, firstSecondary.type);
-                    }}
-                  >
-                    More blocks
-                  </button>
-                </div>
-                <div className="cell-empty-secondary">
-                  {SECONDARY_INSERT_CELL_OPTIONS.map((option) => (
+                  <div className="cell-empty-more-wrap" ref={emptyMoreBlocksRef}>
                     <button
-                      key={option.type}
-                      className="divider-btn secondary-discovery-btn"
-                      onClick={() => insertCellAt(0, option.type)}
+                      type="button"
+                      className="button secondary subtle"
+                      aria-label="More blocks"
+                      onClick={() => setEmptyMoreBlocksOpen((prev) => !prev)}
                     >
-                      {option.label}
+                      More blocks
                     </button>
-                  ))}
+                    {emptyMoreBlocksOpen ? (
+                      <div className="cell-empty-more-menu" data-testid="cell-empty-more-menu">
+                        {SECONDARY_INSERT_CELL_OPTIONS.map((option) => (
+                          <button
+                            key={option.type}
+                            type="button"
+                            className="menu-item"
+                            onClick={() => {
+                              setEmptyMoreBlocksOpen(false);
+                              insertCellAt(0, option.type);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             ) : null}

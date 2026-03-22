@@ -351,10 +351,12 @@ body {
   box-shadow: -18px 0 40px rgba(15, 23, 42, 0.12);
   display: flex;
   flex-direction: column;
+  pointer-events: none;
 }
 
 .assistant-drawer.open {
-  transform: translateX(0);
+  transform: none;
+  pointer-events: auto;
 }
 
 .assistant-drawer-header {
@@ -951,6 +953,10 @@ body {
   color: var(--text-main);
   line-height: 1.45;
   font-size: 13px;
+  touch-action: manipulation;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .assistant-send-btn {
@@ -1756,20 +1762,29 @@ body {
   gap: 10px;
 }
 
-.cell-empty-secondary {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-}
-
-.secondary-discovery-btn {
-  min-width: 96px;
-  color: var(--text-muted);
-}
-
 .button.secondary.subtle {
   color: var(--text-muted);
+}
+
+.cell-empty-more-wrap {
+  position: relative;
+}
+
+.cell-empty-more-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 180px;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 20;
 }
 
 .cell-empty-title {

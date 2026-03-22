@@ -575,10 +575,13 @@ test.describe('Notebook CAS outputs', () => {
     await expect(emptyActions.getByRole('button', { name: /^Code$/ })).toBeVisible();
     await expect(emptyActions.getByRole('button', { name: /^Text$/ })).toBeVisible();
     await expect(emptyActions.getByRole('button', { name: /^Math$/ })).toBeVisible();
-    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ })).toBeVisible();
-    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Stoich$/ })).toBeVisible();
+    await expect(page.getByTestId('cell-empty-more-menu')).toHaveCount(0);
 
-    await page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ }).click();
+    await emptyActions.getByRole('button', { name: /^More blocks$/ }).click();
+    await expect(page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Regression$/ })).toBeVisible();
+    await expect(page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Stoich$/ })).toBeVisible();
+
+    await page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Regression$/ }).click();
     const regressionCell = page.locator('[data-testid="cell-row-regression"]').first();
     await expect(regressionCell).toBeVisible();
     await expect(regressionCell.locator('.regression-editor')).toHaveCount(0);
@@ -603,6 +606,28 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.locator('.cell-insert-menu-item-secondary').getByText('Regression')).toBeVisible();
 
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: iPhone input accepts focus and typing', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 393, height: 852 });
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+    const prompt = page.getByTestId('assistant-prompt');
+    await expect(prompt).toBeVisible();
+    await prompt.click();
+    await prompt.fill('Mobile assistant note');
+    await expect(prompt).toHaveValue('Mobile assistant note');
   });
 
   test('Notebook chrome: active toolbar is consistent and math has a single run affordance', async ({ page }) => {
