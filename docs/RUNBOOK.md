@@ -37,7 +37,7 @@ What it does:
 Optional assistant env vars:
 ```bash
 VITE_ASSISTANT_API_KEY=... \
-VITE_ASSISTANT_MODEL=gpt-5-mini \
+VITE_ASSISTANT_MODEL=gpt-5.4-mini \
 ./scripts/run-all.sh
 ```
 
@@ -111,7 +111,7 @@ Runtime server config for restricted deployments:
 - The settings API-key input is treated as a user override for local/dev use only.
 
 Recommended assistant models:
-- `gpt-5-mini`: default OpenAI path for notebook editing.
+- `gpt-5.4-mini`: default OpenAI path for notebook editing.
 - `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
 - `gpt-5-nano`: cheapest GPT-5 option.
 - `gemini-3.1-flash-lite-preview`: Gemini fallback when you want the Google path.

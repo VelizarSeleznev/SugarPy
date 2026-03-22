@@ -215,7 +215,7 @@ export type AssistantSandboxRunner = (
   onActivity?: (item: AssistantActivity) => void
 ) => Promise<AssistantSandboxResult>;
 
-export const DEFAULT_ASSISTANT_MODEL = 'gpt-5-mini';
+export const DEFAULT_ASSISTANT_MODEL = 'gpt-5.4-mini';
 
 export const ASSISTANT_MODEL_PRESETS = [
   {

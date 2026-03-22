@@ -237,7 +237,7 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - Assistant models run directly from the frontend via OpenAI Responses, the Google Generative Language API, or an experimental Groq OpenAI-compatible path.
 - The UI stores assistant settings in browser `localStorage`.
 - The assistant drawer provides preset model choices and also allows a custom model id.
-- The model defaults to `gpt-5-mini`.
+- The model defaults to `gpt-5.4-mini`.
 - Assistant settings also expose a `Thinking level` selector.
 - The visible settings panel is opened on demand from the compact hub or the header gear button.
 - SugarPy now normalizes the available `thinkingLevel` options per model family:
@@ -259,7 +259,7 @@ Stoichiometry cells provide a worksheet-style chemistry table over a balanced re
 - On the OpenAI Responses path, trace telemetry now also records stream progress hints so a timeout can say which stream event was last observed before the request stalled.
 - On the OpenAI path, final notebook planning now prefers a native function-call submission (`submit_plan`) instead of relying only on a strict JSON text response.
 - Recommended models:
-  - `gpt-5-mini`: default OpenAI path for notebook editing.
+  - `gpt-5.4-mini`: default OpenAI path for notebook editing.
   - `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
   - `gpt-5-nano`: cheapest GPT-5 option.
   - `gemini-3.1-flash-lite-preview`: Gemini fallback.
