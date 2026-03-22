@@ -504,12 +504,14 @@ test.describe('Notebook first-run onboarding', () => {
 
   test('Rendered Math coachmark appears after running the first intro Math cell', async ({ page }) => {
     await page.goto('/');
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(3);
 
     await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
     await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
     await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Next' }).click();
 
     const firstMathCell = page.locator('[data-testid="cell-row-math"]').first();
+    await expect(firstMathCell.locator('[data-testid="run-cell"]')).toBeVisible();
     await firstMathCell.locator('[data-testid="run-cell"]').click();
     await expect(firstMathCell.getByTestId('math-output')).toBeVisible();
     await expect(page.getByTestId('onboarding-coachmark-math')).toBeVisible();
@@ -1217,8 +1219,9 @@ test.describe('Notebook CAS outputs', () => {
 )`
     );
     await expect(page.getByTestId('plotly-graph')).toBeVisible();
-    const layout = await readLastPlotLayout(page);
-    expect(layout.xRange).toEqual([-2, 2]);
+    await expect
+      .poll(async () => (await readLastPlotLayout(page)).xRange)
+      .toEqual([-2, 2]);
     await expectNoGlobalErrors(page, guards);
   });
 
