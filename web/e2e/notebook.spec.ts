@@ -1,4 +1,9 @@
+import fs from 'node:fs';
+
 import { expect, test } from '@playwright/test';
+
+const REAL_PHOTO_IMPORT_PDF = '/Users/velizard/Downloads/PlangeometriProveRetteark.pdf';
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W4l8AAAAASUVORK5CYII=';
 
 const assistantNotebookFixtures = {
   cas_two_cells: {
@@ -394,7 +399,6 @@ const addMathCellAfterFirstCode = async (page: any) => {
 
 const openTypedAssistant = async (page: any) => {
   await page.getByTestId('assistant-photo-entry').click();
-  await page.getByTestId('assistant-open-chat').click();
   await expect(page.getByTestId('assistant-prompt')).toBeVisible();
 };
 
@@ -500,12 +504,14 @@ test.describe('Notebook first-run onboarding', () => {
 
   test('Rendered Math coachmark appears after running the first intro Math cell', async ({ page }) => {
     await page.goto('/');
+    await expect(page.locator('[data-testid="cell-row-math"]')).toHaveCount(3);
 
     await page.getByTestId('onboarding-coachmark-add').getByRole('button', { name: 'Next' }).click();
     await page.getByTestId('onboarding-coachmark-menu').getByRole('button', { name: 'Next' }).click();
     await page.getByTestId('onboarding-coachmark-drag').getByRole('button', { name: 'Next' }).click();
 
     const firstMathCell = page.locator('[data-testid="cell-row-math"]').first();
+    await expect(firstMathCell.locator('[data-testid="run-cell"]')).toBeVisible();
     await firstMathCell.locator('[data-testid="run-cell"]').click();
     await expect(firstMathCell.getByTestId('math-output')).toBeVisible();
     await expect(page.getByTestId('onboarding-coachmark-math')).toBeVisible();
@@ -571,10 +577,13 @@ test.describe('Notebook CAS outputs', () => {
     await expect(emptyActions.getByRole('button', { name: /^Code$/ })).toBeVisible();
     await expect(emptyActions.getByRole('button', { name: /^Text$/ })).toBeVisible();
     await expect(emptyActions.getByRole('button', { name: /^Math$/ })).toBeVisible();
-    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ })).toBeVisible();
-    await expect(page.locator('.cell-empty-secondary').getByRole('button', { name: /^Stoich$/ })).toBeVisible();
+    await expect(page.getByTestId('cell-empty-more-menu')).toHaveCount(0);
 
-    await page.locator('.cell-empty-secondary').getByRole('button', { name: /^Regression$/ }).click();
+    await emptyActions.getByRole('button', { name: /^More blocks$/ }).click();
+    await expect(page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Regression$/ })).toBeVisible();
+    await expect(page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Stoich$/ })).toBeVisible();
+
+    await page.getByTestId('cell-empty-more-menu').getByRole('button', { name: /^Regression$/ }).click();
     const regressionCell = page.locator('[data-testid="cell-row-regression"]').first();
     await expect(regressionCell).toBeVisible();
     await expect(regressionCell.locator('.regression-editor')).toHaveCount(0);
@@ -599,6 +608,28 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.locator('.cell-insert-menu-item-secondary').getByText('Regression')).toBeVisible();
 
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: iPhone input accepts focus and typing', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'maxTouchPoints', {
+        configurable: true,
+        get: () => 5
+      });
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        get: () =>
+          'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+      });
+    });
+    await page.setViewportSize({ width: 393, height: 852 });
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+    const prompt = page.getByTestId('assistant-prompt');
+    await expect(prompt).toBeVisible();
+    await prompt.click();
+    await prompt.fill('Mobile assistant note');
+    await expect(prompt).toHaveValue('Mobile assistant note');
   });
 
   test('Notebook chrome: active toolbar is consistent and math has a single run affordance', async ({ page }) => {
@@ -1188,8 +1219,9 @@ test.describe('Notebook CAS outputs', () => {
 )`
     );
     await expect(page.getByTestId('plotly-graph')).toBeVisible();
-    const layout = await readLastPlotLayout(page);
-    expect(layout.xRange).toEqual([-2, 2]);
+    await expect
+      .poll(async () => (await readLastPlotLayout(page)).xRange)
+      .toEqual([-2, 2]);
     await expectNoGlobalErrors(page, guards);
   });
 
@@ -1508,35 +1540,106 @@ test.describe('Notebook CAS outputs', () => {
 
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
+    await expect(page.getByTestId('assistant-prompt')).toBeVisible();
     await page.getByTestId('assistant-settings-toggle').click();
     await expect(page.getByTestId('assistant-api-key')).toHaveAttribute('placeholder', 'Using shared key by default');
     await expect(page.getByText('Shared server key is active unless you enter your own key here.')).toBeVisible();
-    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
 
-    await page.getByTestId('assistant-photo-input').setInputFiles({
-      name: 'photo.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W4l8AAAAASUVORK5CYII=',
-        'base64'
-      )
-    });
+    await page.getByTestId('assistant-photo-input').setInputFiles([
+      {
+        name: 'photo-1.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+      },
+      {
+        name: 'photo-2.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+      }
+    ]);
 
-    await expect(page.getByTestId('assistant-photo-import')).toBeVisible();
-    await expect(page.getByTestId('assistant-photo-preview')).toBeVisible();
-    await expect(page.getByTestId('assistant-photo-instructions')).toHaveValue('');
-    await expect(page.locator('.assistant-photo-meta')).toContainText('photo.png');
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
+    await expect(page.getByTestId('assistant-photo-strip')).toContainText('photo-1.png');
+    await expect(page.getByTestId('assistant-photo-strip')).toContainText('photo-2.png');
     await expectNoGlobalErrors(page, guards);
   });
 
-  test('Assistant drawer: photo-first entry opens the drawer and typed chat stays secondary', async ({ page }) => {
+  test('Assistant drawer: adding files, drop import, paste import, remove item, and clear all work together', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+
+    await page.getByTestId('assistant-photo-input').setInputFiles({
+      name: 'selected.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+    });
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(1);
+
+    await page.evaluate((base64) => {
+      const dropzone = document.querySelector('[data-testid="assistant-attachment-zone"]');
+      if (!dropzone) throw new Error('Attachment zone not found');
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const file = new File([bytes], 'dropped.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      dropzone.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer }));
+    }, TINY_PNG_BASE64);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
+
+    await page.evaluate((base64) => {
+      const dropzone = document.querySelector('[data-testid="assistant-attachment-zone"]');
+      if (!dropzone) throw new Error('Attachment zone not found');
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const file = new File([bytes], 'pasted.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      dropzone.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: transfer }));
+    }, TINY_PNG_BASE64);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(3);
+
+    await page.getByTestId('assistant-photo-remove').nth(1).click();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(2);
+    await page.getByTestId('assistant-photo-remove').nth(1).click();
+    await page.getByTestId('assistant-photo-remove').nth(0).click();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(0);
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: local real PDF renders five preview pages when available', async ({ page }) => {
+    test.skip(!fs.existsSync(REAL_PHOTO_IMPORT_PDF), 'Local PDF fixture is not available on this machine.');
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await page.getByTestId('assistant-photo-entry').click();
+    await page.getByTestId('assistant-photo-input').setInputFiles(REAL_PHOTO_IMPORT_PDF);
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(5);
+    await expect(page.locator('.assistant-attachment-meta').first()).toContainText('Page 1');
+    await expect(page.locator('.assistant-attachment-meta').nth(4)).toContainText('Page 5');
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Assistant drawer: composer stays visible and attachments stack above input', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('assistant-photo-entry').click();
     await expect(page.locator('.assistant-drawer.open')).toBeVisible();
-    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
-    await expect(page.getByTestId('assistant-prompt')).toHaveCount(0);
-    await page.getByTestId('assistant-open-chat').click();
     await expect(page.getByTestId('assistant-prompt')).toBeVisible();
+    await expect(page.getByTestId('assistant-import-photo')).toBeVisible();
+    await page.getByTestId('assistant-photo-input').setInputFiles({
+      name: 'selected.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(TINY_PNG_BASE64, 'base64')
+    });
+    await expect(page.getByTestId('assistant-photo-strip')).toBeVisible();
+    await expect(page.getByTestId('assistant-photo-preview')).toHaveCount(1);
+  });
+
+  test('Assistant drawer: recent chats stay hidden until the user opens them', async ({ page }) => {
+    await page.goto('/');
+    await openTypedAssistant(page);
+    await page.getByRole('button', { name: 'New chat' }).click();
+    await expect(page.getByTestId('assistant-recent-panel')).toHaveCount(0);
+    await page.getByTestId('assistant-recent-toggle').click();
+    await expect(page.getByTestId('assistant-recent-panel')).toBeVisible();
   });
 
   test('Assistant preview: failed validation keeps the proposed draft visible and blocks acceptance', async ({ page }) => {
@@ -1702,8 +1805,10 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.getByTestId('assistant-preview')).toBeVisible();
     await expect(page.getByTestId('assistant-draft-failure-banner')).toContainText('not changed');
     await expect(page.getByTestId('assistant-step-status')).toContainText('Failed');
+    await page.locator('.assistant-step-details summary').filter({ hasText: 'Draft preview' }).click();
     await expect(page.locator('.assistant-op-source code')).toContainText('value = 1 / 0');
-    await expect(page.locator('.assistant-validation-detail')).toContainText('bootstrap only');
+    await page.locator('.assistant-step-details summary').filter({ hasText: 'Validation' }).click();
+    await expect(page.getByTestId('assistant-validation-detail')).toContainText('bootstrap only');
     await expect(page.locator('.assistant-error.inline').last()).toContainText('division by zero');
     await expect(page.getByTestId('assistant-accept-all')).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Accept step' })).toBeDisabled();

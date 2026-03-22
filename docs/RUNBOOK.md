@@ -37,7 +37,7 @@ What it does:
 Optional assistant env vars:
 ```bash
 VITE_ASSISTANT_API_KEY=... \
-VITE_ASSISTANT_MODEL=gpt-5-mini \
+VITE_ASSISTANT_MODEL=gpt-5.4-mini \
 ./scripts/run-all.sh
 ```
 
@@ -47,19 +47,26 @@ If those env vars are not set, the assistant can still be configured from the in
 assistant drawer and the values are stored locally in the browser.
 
 Assistant UX notes:
-- The assistant uses a photo-first drawer with a secondary typed-chat section.
+- The assistant drawer now opens as a compact hub with the typed composer visible immediately.
+- `Add photo`, `Recent chats`, and `Settings` are hidden behind on-demand sections instead of staying expanded by default.
 - The default assistant flow is now staged and teaching-first.
   - The assistant first inspects the notebook and builds a structured plan.
   - It then generates a draft preview with per-step validation results in the drawer.
   - The live notebook, autosave state, and export payload stay unchanged until `Accept all` or `Accept step`.
   - `Reject draft` discards the staged draft without resetting the chat.
   - Failed validation keeps the proposed draft visible and marks the affected step as blocked instead of hiding what the model tried to do.
+  - Validation detail, technical activity, and source previews are collapsed by default inside assistant replies.
 - Model and API key live under the collapsed `Settings` section.
 - `Settings` also expose `Thinking level`.
 - The header primary assistant entry is `Import from photo`.
-  - The drawer lets the user replace/cancel the image and add an optional import instruction before extraction.
-  - The typed assistant is still available inside the drawer as a secondary flow.
+  - The drawer accepts multiple images, drag-and-drop, clipboard image paste, and PDF uploads.
+  - Photo import stays collapsed until the user opens it or already has queued files.
+  - PDF files are rendered into ordered page previews in the browser before extraction.
+  - The drawer keeps queued items until the user removes one item or clears the whole set.
+  - The user can add an optional import instruction before extraction.
   - Photo import currently uses the OpenAI path, so it requires either a browser OpenAI key override or a shared server OpenAI key.
+  - Photo-import math extraction is now held to CAS-native output: if the draft still contains handwritten/textbook syntax that would require post-processing, the planner is asked to revise the Math-cell source before the draft is shown.
+  - The intended output balance for photo import is: short Markdown headings and one brief human-readable idea note per problem, with the actual derivation kept in CAS-only Math cells.
 - The available `Thinking level` values are filtered by model family:
   - `GPT-5.1 Codex mini`: `dynamic`, `low`, `medium`, `high`
   - `GPT-5.x / GPT-5 mini / GPT-5 nano`: `dynamic`, `minimal`, `low`, `medium`, `high`
@@ -68,6 +75,7 @@ Assistant UX notes:
 - Assistant requests use an inactivity timeout so a stalled model call fails with an explicit timeout instead of spinning forever.
 - The default visible workflow is whole-notebook + auto mode; advanced scope/preference selectors are no longer shown in the main UI.
 - Up to 5 recent chats are stored locally per notebook.
+- Recent chats stay hidden until the user opens the compact `Recent chats` section.
 - A new notebook starts with a fresh assistant chat history.
 - Assistant traces are now backend-owned and disabled by default in restricted deployments.
 - When enabled, traces are persisted outside the public web root and are redacted before writing.
@@ -103,7 +111,7 @@ Runtime server config for restricted deployments:
 - The settings API-key input is treated as a user override for local/dev use only.
 
 Recommended assistant models:
-- `gpt-5-mini`: default OpenAI path for notebook editing.
+- `gpt-5.4-mini`: default OpenAI path for notebook editing.
 - `gpt-5.1-codex-mini`: optional Codex-path fallback for comparison and live regression.
 - `gpt-5-nano`: cheapest GPT-5 option.
 - `gemini-3.1-flash-lite-preview`: Gemini fallback when you want the Google path.

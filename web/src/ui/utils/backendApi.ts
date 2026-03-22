@@ -69,7 +69,7 @@ export type SugarPyNotebookRuntime = {
 };
 
 const resolveApiRoot = () => {
-  const configured = (import.meta.env.VITE_SUGARPY_API_URL || '').trim();
+  const configured = (import.meta.env?.VITE_SUGARPY_API_URL || '').trim();
   if (configured) {
     return configured.replace(/\/?$/, '/');
   }

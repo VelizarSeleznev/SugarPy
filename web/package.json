@@ -19,6 +19,7 @@
     "@jupyterlab/services": "^7.0.0",
     "katex": "^0.16.11",
     "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^5.5.207",
     "plotly.js-dist-min": "^3.4.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
