@@ -18,6 +18,10 @@
   - Runnable assistant draft steps are validated in isolation before the user can accept them.
   - The live notebook is not mutated until an explicit accept action applies the chosen draft steps.
 - The frontend talks only to SugarPy-owned `/api/*` endpoints.
+- Notebook export now also includes a backend-owned Maple worksheet path:
+  - the frontend posts the normalized notebook payload to `/api/export/maple`
+  - backend translation/rendering lives in `src/sugarpy/maple_export/`
+  - the browser only handles download; it does not build Maple XML itself
 - The browser no longer uses Jupyter `ContentsManager` or browser-managed kernels for notebook execution/persistence.
 - Frontend has two page entrypoints:
   - `/` for the notebook app (restricted backend runtime).

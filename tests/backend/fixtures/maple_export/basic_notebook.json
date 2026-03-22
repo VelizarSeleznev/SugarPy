@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "nb-maple-basic",
+  "name": "Fixture Notebook",
+  "trigMode": "deg",
+  "defaultMathRenderMode": "exact",
+  "updatedAt": "2026-03-22T00:00:00Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "markdown",
+      "source": "# Algebra\n\n## Quadratics\n\nSolve the equation with Maple."
+    },
+    {
+      "id": "cell-2",
+      "type": "math",
+      "source": "solve(x^2 = 2, x)",
+      "mathOutput": {
+        "normalized_source": "solve(x^2 = 2, x)"
+      }
+    }
+  ]
+}

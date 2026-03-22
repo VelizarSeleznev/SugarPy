@@ -112,6 +112,24 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function apiBlobRequest(path: string, init?: RequestInit): Promise<{ blob: Blob; filename?: string | null }> {
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    credentials: 'same-origin',
+    headers: buildApiHeaders(init?.headers)
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed with ${response.status}`);
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  return {
+    blob: await response.blob(),
+    filename: match?.[1] || null
+  };
+}
+
 export const fetchRuntimeConfig = () => apiRequest<SugarPyRuntimeConfig>('config');
 
 export const loadServerAutosave = (notebookId: string) =>
@@ -129,6 +147,12 @@ export const loadNotebookDocument = (notebookId: string) =>
 export const saveNotebookDocument = (payload: Record<string, unknown>) =>
   apiRequest<Record<string, unknown>>(`notebooks/${encodeURIComponent(String(payload.id || 'notebook'))}`, {
     method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+
+export const exportMapleWorksheet = (payload: Record<string, unknown>) =>
+  apiBlobRequest('export/maple', {
+    method: 'POST',
     body: JSON.stringify(payload)
   });
 

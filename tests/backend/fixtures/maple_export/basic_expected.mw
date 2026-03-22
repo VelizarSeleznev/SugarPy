@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Worksheet xmlns="http://www.maplesoft.com/worksheet" source="SugarPy" version="1.0">
+  <Group view="presentation" hide-input="false" hide-output="false" inline-output="false" drawlabel="true" sugarpy-kind="worksheet-title">
+    <Input>
+      <Text-field alignment="left" style="Text" layout="Normal">Fixture Notebook</Text-field>
+    </Input>
+  </Group>
+  <Group view="presentation" hide-input="false" hide-output="false" inline-output="false" drawlabel="true" sugarpy-kind="title">
+    <Input>
+      <Text-field alignment="left" style="Title" layout="Normal">Algebra</Text-field>
+    </Input>
+  </Group>
+  <Group view="presentation" hide-input="false" hide-output="false" inline-output="false" drawlabel="true" sugarpy-kind="section">
+    <Input>
+      <Text-field alignment="left" style="Section" layout="Normal">Quadratics</Text-field>
+    </Input>
+  </Group>
+  <Group view="presentation" hide-input="false" hide-output="false" inline-output="false" drawlabel="true" sugarpy-kind="text">
+    <Input>
+      <Text-field alignment="left" style="Text" layout="Normal">Solve the equation with Maple.</Text-field>
+    </Input>
+  </Group>
+  <Group view="presentation" hide-input="false" hide-output="false" inline-output="false" drawlabel="true" sugarpy-kind="maple-input">
+    <Input>
+      <Text-field alignment="left" style="Maple Input" layout="Normal" prompt="&gt; ">solve(x^2 = 2, x);</Text-field>
+    </Input>
+  </Group>
+</Worksheet>

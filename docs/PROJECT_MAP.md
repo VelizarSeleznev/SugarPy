@@ -8,6 +8,7 @@ SugarPy is a local notebook toolkit:
 
 ## Top-level layout
 - `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading, restricted server API).
+  Maple worksheet export lives under `src/sugarpy/maple_export/`.
 - `web/src/`: frontend app code.
   Assistant orchestration lives under `web/src/ui/utils/assistant.ts`.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
@@ -30,6 +31,7 @@ SugarPy is a local notebook toolkit:
 - `scripts/test-all.sh`: full Python + frontend + UI checks.
 - `scripts/ui-check.sh`: Playwright smoke UI checks (`@smoke`).
 - `web/e2e/notebook.spec.ts`: browser E2E, including assistant regression coverage.
+- Notebook file menu also supports backend-generated Maple worksheet export (`.mw`).
 - `scripts/sync-functions.sh`: syncs user function file (`~/.sugarpy/user_functions.py`) into runtime location.
 - `scripts/start-work.sh`: refreshes `master`, then creates or resumes a `codex/*` work branch; stale branches already merged into `master` are recreated from fresh `master`.
 - `scripts/checkpoint.sh`: commits and pushes the current work branch to GitHub.
@@ -38,6 +40,7 @@ SugarPy is a local notebook toolkit:
 ## Specs
 - Product-level feature inventory and AI assistant proposal: `docs/PRODUCT_GUIDE.md`.
 - Math cell behavior and syntax: `docs/MATH_CELL_SPEC.md`.
+- Maple worksheet export subset: `docs/MAPLE_EXPORT.md`.
 - Notebook authoring guidelines (large tasks): `docs/ASSIGNMENT_GUIDELINES.md`.
 - Testing policy and maintenance rules: `docs/TESTING_PRINCIPLES.md`.
 - Demo deployment guide: `docs/DEPLOY_DEMO.md`.

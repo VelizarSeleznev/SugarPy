@@ -223,3 +223,28 @@ Notes:
 - Python `def` blocks directly inside Math cells (use `f(args) := expr` form instead)
 - Full Maple grammar compatibility
 - Matrices, piecewise, units-specific syntax
+
+## Maple export subset
+When a notebook is exported to Maple `.mw`, Math cells use a smaller subset than the interactive SugarPy Math runtime.
+
+Supported Maple-export patterns in MVP:
+- direct expressions and equations that stay safe as plain Maple input text
+- simple assignments `name := expr`
+- simple function assignments `f(x) := expr`
+- `solve(...)`
+- `simplify(...)`
+- `expand(...)`
+- `factor(...)`
+- `diff(...)`
+- `integrate(...)` rewritten as `int(...)`
+- `plot(...)`
+- `N(...)` rewritten as `evalf(...)`
+
+Unsupported Math-cell constructs in Maple export degrade to warning/text blocks instead of guessed Maple input, including:
+- unpack or complex `:=` assignments such as `a, b := ...`
+- `Eq(...)`
+- `linsolve(...)`
+- `render_decimal(...)`
+- `render_exact(...)`
+- `set_decimal_places(...)`
+- `subs(...)`

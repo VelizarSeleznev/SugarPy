@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "nb-maple-unsafe-math",
+  "name": "Unsafe Math",
+  "trigMode": "deg",
+  "defaultMathRenderMode": "exact",
+  "updatedAt": "2026-03-22T00:00:00Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "math",
+      "source": "render_decimal(solve(x^2 = 2, x))",
+      "mathOutput": {
+        "normalized_source": "render_decimal(solve(x^2 = 2, x))"
+      }
+    }
+  ]
+}

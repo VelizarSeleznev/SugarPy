@@ -18,6 +18,8 @@ from tornado import web
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 from tornado.ioloop import IOLoop, PeriodicCallback
 
+from sugarpy.maple_export.render_mw import render_maple_worksheet_xml
+from sugarpy.maple_export.translate import translate_notebook_to_maple_ir
 from sugarpy.runtime_manager import RuntimeManager
 
 
@@ -259,6 +261,15 @@ def _normalize_trace_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if isinstance(detail, str) and "Bearer " in detail:
                 event["detail"] = "[redacted]"
     return redacted
+
+
+def export_maple_worksheet_payload(payload: dict[str, Any]) -> tuple[str, bytes]:
+    normalized = _normalize_notebook_payload(payload)
+    worksheet = translate_notebook_to_maple_ir(normalized)
+    xml_bytes = render_maple_worksheet_xml(worksheet)
+    raw_name = str(normalized.get("name") or normalized.get("id") or "worksheet")
+    filename = f"{_safe_identifier(raw_name, 'worksheet')}.mw"
+    return filename, xml_bytes
 
 
 def _node_name(node: ast.AST) -> str:
@@ -1099,6 +1110,17 @@ class AutosaveByIdHandler(SugarPyAPIHandler):
         self.finish(payload)
 
 
+class MapleExportHandler(SugarPyAPIHandler):
+    async def post(self) -> None:
+        payload = self.get_json_body() or {}
+        if not isinstance(payload, dict):
+            raise web.HTTPError(400, reason="JSON body must be an object")
+        filename, xml_bytes = export_maple_worksheet_payload(payload)
+        self.set_header("Content-Type", "application/xml; charset=utf-8")
+        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.finish(xml_bytes)
+
+
 class RuntimeStatusHandler(SugarPyAPIHandler):
     async def get(self, notebook_id: str) -> None:
         self.finish(await _runtime_manager().get_runtime_status(notebook_id))
@@ -1272,6 +1294,7 @@ def _load_jupyter_server_extension(server_app: Any) -> None:
         (r"/sugarpy/api/notebooks/(.+)", NotebookHandler),
         (r"/sugarpy/api/autosave", AutosaveHandler),
         (r"/sugarpy/api/autosave/(.+)", AutosaveByIdHandler),
+        (r"/sugarpy/api/export/maple", MapleExportHandler),
         (r"/sugarpy/api/runtime/(.+)/interrupt", RuntimeInterruptHandler),
         (r"/sugarpy/api/runtime/(.+)/restart", RuntimeRestartHandler),
         (r"/sugarpy/api/runtime/(.+)/delete", RuntimeDeleteHandler),

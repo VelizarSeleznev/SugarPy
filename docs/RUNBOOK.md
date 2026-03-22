@@ -155,6 +155,7 @@ Assistant regression checks:
 - On startup, SugarPy restores the newest version between local autosave and server autosave.
 - If browser storage is unavailable or full, SugarPy skips local autosave and continues with server autosave instead of failing to load.
 - Manual **Save to Server** now writes the normalized SugarPy notebook document through the backend API and refreshes server autosave.
+- The notebook file menu includes `Export Maple (.mw)`, which sends the normalized notebook payload to the backend and downloads a backend-rendered Maple worksheet XML file.
 - Notebook actions are available from the top-right `⋮` menu in the fixed header.
 - The `⋮` menu now closes immediately after actions fire and scrolls internally on smaller screens instead of extending off-screen.
 - On narrow layouts, the header action row collapses to compact square icon buttons instead of stretching full-width labels.
@@ -187,6 +188,13 @@ Assistant regression checks:
 ## Open the standalone wiki page
 - Open `http://localhost:5173/wiki`
 - This page is static and does not require a kernel connection.
+
+## Export a Maple worksheet
+- Start the app with `./scripts/run-all.sh`
+- Open a SugarPy notebook in the UI
+- Use `⋮` -> `Export Maple (.mw)`
+- The browser downloads a backend-generated `.mw` file for the current notebook
+- Current MVP intentionally exports only Markdown and Math cells as first-class Maple content; other SugarPy cell types degrade to warning/text blocks
 
 ## Open the demo notebook
 - Open `notebooks/CoreFeaturesDemo.ipynb` in Jupyter and run top-to-bottom.

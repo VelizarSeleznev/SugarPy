@@ -37,6 +37,7 @@ import {
 import {
   deleteNotebookRuntime,
   executeNotebookCell,
+  exportMapleWorksheet,
   fetchRuntimeConfig,
   interruptNotebookRuntime,
   restartNotebookRuntime,
@@ -3463,6 +3464,24 @@ function App() {
     downloadBlob(filename, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
   };
 
+  const handleDownloadMapleWorksheet = async () => {
+    setHeaderMenuOpen(false);
+    const payload = serializeSugarPy({
+      id: notebookId,
+      name: notebookName,
+      trigMode,
+      defaultMathRenderMode,
+      cells
+    });
+    try {
+      const { blob, filename } = await exportMapleWorksheet(payload as unknown as Record<string, unknown>);
+      const fallbackBaseName = (notebookName || 'Untitled').trim().replace(/\.mw$/i, '') || 'Untitled';
+      downloadBlob(filename || `${fallbackBaseName}.mw`, blob);
+    } catch (_err) {
+      window.alert('Failed to export Maple worksheet.');
+    }
+  };
+
   const handleSaveToServer = async () => {
     setHeaderMenuOpen(false);
     const payload = serializeSugarPy({
@@ -3750,6 +3769,7 @@ function App() {
                   <div className="menu-section-label">File</div>
                   <button className="menu-item" onClick={handleSaveToServer}>Save to Server</button>
                   <button className="menu-item" onClick={handleExportPdf}>Export PDF</button>
+                  <button className="menu-item" onClick={() => void handleDownloadMapleWorksheet()}>Export Maple (.mw)</button>
                   <button className="menu-item" onClick={handleDownloadIpynb}>Download .ipynb</button>
                   <button className="menu-item" onClick={handleDownloadSugarPy}>Download .sugarpy</button>
                   <button className="menu-item" onClick={handleImportClick}>Import notebook</button>

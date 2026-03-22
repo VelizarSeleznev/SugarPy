@@ -1299,6 +1299,47 @@ test.describe('Notebook CAS outputs', () => {
     await expect(page.locator('.header-menu')).toBeHidden();
   });
 
+  test('Notebook menu: Export Maple (.mw) downloads backend-generated worksheet', async ({ page }) => {
+    await page.route('**/api/export/maple', async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="fixture-export.mw"'
+        },
+        body: '<?xml version="1.0" encoding="utf-8"?><Worksheet />'
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'More actions' }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Export Maple (.mw)' }).click()
+    ]);
+
+    expect(await download.suggestedFilename()).toBe('fixture-export.mw');
+    await expect(page.locator('.header-menu')).toBeHidden();
+  });
+
+  test('Notebook menu: Export Maple (.mw) shows concise failure alert on backend error', async ({ page }) => {
+    await page.route('**/api/export/maple', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'text/plain',
+        body: 'export failed'
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'More actions' }).click();
+    const dialogPromise = page.waitForEvent('dialog');
+    await page.getByRole('button', { name: 'Export Maple (.mw)' }).click();
+    const dialog = await dialogPromise;
+    expect(dialog.message()).toBe('Failed to export Maple worksheet.');
+    await dialog.dismiss();
+  });
+
   test('Math equation: x^2 = 2 renders in Math cell', async ({ page }) => {
     const guards = attachBrowserErrorGuards(page);
     await seedNotebookFixture(page, assistantNotebookFixtures.math_equation_rendered);

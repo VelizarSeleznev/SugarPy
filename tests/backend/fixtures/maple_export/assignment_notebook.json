@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "id": "nb-maple-assignment",
+  "name": "Assignments",
+  "trigMode": "deg",
+  "defaultMathRenderMode": "exact",
+  "updatedAt": "2026-03-22T00:00:00Z",
+  "cells": [
+    {
+      "id": "cell-1",
+      "type": "math",
+      "source": "a := 5"
+    },
+    {
+      "id": "cell-2",
+      "type": "math",
+      "source": "f(x) := x^2 + 1"
+    },
+    {
+      "id": "cell-3",
+      "type": "math",
+      "source": "a, b := solve(x^2 = 2, x)"
+    }
+  ]
+}

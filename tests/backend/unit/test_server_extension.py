@@ -279,16 +279,20 @@ def test_load_jupyter_server_extension_starts_background_runtime_cleanup(monkeyp
     monkeypatch.setattr(server_extension, "PeriodicCallback", FakePeriodicCallback)
     monkeypatch.setattr(server_extension, "_runtime_cleanup_interval_ms", lambda: 4321)
 
+    fake_web_app = FakeWebApp()
     server_extension._load_jupyter_server_extension(
         SimpleNamespace(
-            web_app=FakeWebApp(),
+            web_app=fake_web_app,
             io_loop=FakeIOLoop(),
         )
     )
 
+    handler_paths = [route for _host, handlers in fake_web_app.handlers for route, _handler in handlers]
+
     assert callback_holder["interval"] == 4321
     assert callback_holder["started"] is True
     assert cleanup_calls == ["orphans", "idle"]
+    assert "/sugarpy/api/export/maple" in handler_paths
 
     callback_holder["callback"]()
     assert cleanup_calls == ["orphans", "idle", "orphans", "idle"]
