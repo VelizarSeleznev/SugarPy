@@ -6,7 +6,6 @@ import { AssistantDrawer, AssistantDrawerSection } from './components/AssistantD
 import { OnboardingCoachmark } from './components/OnboardingCoachmark';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { buildSuggestions } from './utils/suggestUtils';
-import { extractFunctionNames } from './utils/functionParse';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
@@ -77,6 +76,12 @@ import {
   saveCoachmarksDismissed,
   saveTutorialNotebookId
 } from './utils/onboarding';
+import {
+  extractCodeSymbols,
+  extractMathSymbols,
+  mergeEditorCompletions,
+  type EditorCompletionItem
+} from './utils/editorSymbols';
 
 export type CellModel = {
   id: string;
@@ -469,24 +474,47 @@ function App() {
   const [coachmarkStep, setCoachmarkStep] = useState<CoachmarkStep>(() =>
     loadCoachmarksDismissed() ? 'done' : 'add'
   );
-  const mathSuggestions = useMemo(
+  const mathBuiltins = useMemo<EditorCompletionItem[]>(
     () => [
-      { label: 'sqrt', detail: 'square root' },
-      { label: 'sin', detail: 'sine' },
-      { label: 'cos', detail: 'cosine' },
-      { label: 'tan', detail: 'tangent' },
-      { label: 'asin', detail: 'inverse sine' },
-      { label: 'acos', detail: 'inverse cosine' },
-      { label: 'atan', detail: 'inverse tangent' },
-      { label: 'log', detail: 'logarithm (base e by default)' },
-      { label: 'ln', detail: 'natural log' },
-      { label: 'exp', detail: 'exponential' },
-      { label: 'abs', detail: 'absolute value' },
-      { label: 'pi', detail: 'pi constant' },
-      { label: 'e', detail: 'Euler constant' },
-      { label: 'render_decimal', detail: 'render expression as decimal (with optional places)' },
-      { label: 'render_exact', detail: 'render expression in exact symbolic form' },
-      { label: 'set_decimal_places', detail: 'set default decimal places for render_decimal' },
+      { label: 'sqrt', detail: 'square root', type: 'function', snippet: 'sqrt(${})', boost: 130 },
+      { label: 'sin', detail: 'sine', type: 'function', snippet: 'sin(${})', boost: 130 },
+      { label: 'cos', detail: 'cosine', type: 'function', snippet: 'cos(${})', boost: 130 },
+      { label: 'tan', detail: 'tangent', type: 'function', snippet: 'tan(${})', boost: 130 },
+      { label: 'asin', detail: 'inverse sine', type: 'function', snippet: 'asin(${})', boost: 130 },
+      { label: 'acos', detail: 'inverse cosine', type: 'function', snippet: 'acos(${})', boost: 130 },
+      { label: 'atan', detail: 'inverse tangent', type: 'function', snippet: 'atan(${})', boost: 130 },
+      { label: 'log', detail: 'logarithm (base e by default)', type: 'function', snippet: 'log(${})', boost: 130 },
+      { label: 'ln', detail: 'natural log', type: 'function', snippet: 'ln(${})', boost: 130 },
+      { label: 'exp', detail: 'exponential', type: 'function', snippet: 'exp(${})', boost: 130 },
+      { label: 'abs', detail: 'absolute value', type: 'function', snippet: 'abs(${})', boost: 130 },
+      { label: 'solve', detail: 'solve equations', type: 'function', snippet: 'solve(__CURSOR__, x)', boost: 150 },
+      { label: 'expand', detail: 'expand expression', type: 'function', snippet: 'expand(${})', boost: 130 },
+      { label: 'factor', detail: 'factor expression', type: 'function', snippet: 'factor(${})', boost: 130 },
+      { label: 'N', detail: 'decimal evaluation', type: 'function', snippet: 'N(${})', boost: 130 },
+      { label: 'plot', detail: 'plot expression or equations', type: 'function', snippet: 'plot(${})', boost: 130 },
+      {
+        label: 'render_decimal',
+        detail: 'render expression as decimal (with optional places)',
+        type: 'function',
+        snippet: 'render_decimal(${})',
+        boost: 130
+      },
+      {
+        label: 'render_exact',
+        detail: 'render expression in exact symbolic form',
+        type: 'function',
+        snippet: 'render_exact(${})',
+        boost: 130
+      },
+      {
+        label: 'set_decimal_places',
+        detail: 'set default decimal places for render_decimal',
+        type: 'function',
+        snippet: 'set_decimal_places(${})',
+        boost: 130
+      },
+      { label: 'pi', detail: 'pi constant', type: 'constant', boost: 100 },
+      { label: 'e', detail: 'Euler constant', type: 'constant', boost: 100 }
     ],
     []
   );
@@ -533,24 +561,61 @@ function App() {
   } | null>(null);
   const slashData = useMemo(() => {
     const map = new Map<string, FunctionEntry>();
-    const list: { label: string; detail?: string }[] = [];
+    const list: EditorCompletionItem[] = [];
     allFunctions.forEach((fn) => {
       const name = getCommandName(fn);
       if (!name || map.has(name)) return;
       map.set(name, fn);
-      list.push({ label: name, detail: fn.signature ?? fn.description });
+      list.push({ label: name, detail: fn.signature ?? fn.description, type: 'function', boost: 100 });
     });
     return { map, list };
   }, [allFunctions]);
   const slashCommands = slashData.list;
   const slashCommandMap = slashData.map;
-  const codeSuggestions = useMemo(
-    () => [
-      ...buildSuggestions(allFunctions),
-      ...userFunctions.map((name) => ({ label: name, detail: 'user function' }))
-    ],
-    [allFunctions, userFunctions]
+  const builtinCodeSuggestions = useMemo<EditorCompletionItem[]>(
+    () =>
+      buildSuggestions(allFunctions).map((item) => ({
+        ...item,
+        type: 'function',
+        boost: 120
+      })),
+    [allFunctions]
   );
+  const userFunctionSuggestions = useMemo<EditorCompletionItem[]>(
+    () =>
+      userFunctions.map((name) => ({
+        label: name,
+        detail: 'user function',
+        type: 'function',
+        snippet: `${name}(\${})`,
+        boost: 180
+      })),
+    [userFunctions]
+  );
+
+  const getNotebookSymbolSuggestions = (cellId: string): EditorCompletionItem[] => {
+    const currentIndex = cells.findIndex((entry) => entry.id === cellId);
+    if (currentIndex < 0) return [];
+    const priorCells = cells.slice(0, currentIndex);
+    const collected = priorCells.flatMap((entry) => {
+      if (entry.type === 'math') {
+        if (!entry.mathOutput || entry.mathOutput.error) return [];
+        return extractMathSymbols(entry.source, 220);
+      }
+      if (entry.type === 'code') {
+        if (entry.execCount === null || entry.execCount === undefined) return [];
+        return extractCodeSymbols(entry.source, 220);
+      }
+      return [];
+    });
+    return mergeEditorCompletions(collected);
+  };
+
+  const getCodeSuggestions = (cellId: string) =>
+    mergeEditorCompletions(getNotebookSymbolSuggestions(cellId), builtinCodeSuggestions, userFunctionSuggestions);
+
+  const getMathSuggestions = (cellId: string) =>
+    mergeEditorCompletions(getNotebookSymbolSuggestions(cellId), mathBuiltins, userFunctionSuggestions);
   const tutorialMathCardReady = useMemo(
     () =>
       cells.some(
@@ -1391,7 +1456,9 @@ function App() {
       if (showOutput) {
         applyExecutionResult(cellId, response, countExecution);
       }
-      const defs = extractFunctionNames(code);
+      const defs = extractCodeSymbols(code, 180)
+        .filter((item) => item.type === 'function')
+        .map((item) => item.label);
       if (defs.length > 0) {
         setUserFunctions((prev) => Array.from(new Set([...prev, ...defs])));
       }
@@ -3985,10 +4052,10 @@ function App() {
                         onClearOutput={() => clearCellOutput(cell.id)}
                         onToggleMathView={() => toggleMathView(cell.id)}
                         onShowMathRendered={() => showMathRenderedView(cell.id)}
-                        suggestions={codeSuggestions}
+                        suggestions={getCodeSuggestions(cell.id)}
                         slashCommands={slashCommands}
                         onSlashCommand={(command) => handleSlashCommand(cell.id, command)}
-                        mathSuggestions={mathSuggestions}
+                        mathSuggestions={getMathSuggestions(cell.id)}
                         trigMode={trigMode}
                         kernelReady={!!activeKernel}
                         onSetMathRenderMode={(mode) => {
