@@ -48,6 +48,10 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      - name: Build notebook runtime image
+        run: |
+          ./scripts/build-runtime-image.sh
+
       - name: Full project checks
         env:
           CI: "1"
