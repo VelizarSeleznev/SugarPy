@@ -182,6 +182,12 @@ Assistant regression checks:
 - If focus leaves the notebook, SugarPy keeps the last clicked cell as the insertion anchor with a soft highlight until the user clicks outside again to clear it.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).
+- Code and Math cells now share the same CodeMirror editor QoL layer:
+  - syntax highlighting
+  - autocomplete from current-cell symbols, previously executed notebook symbols, and built-in helpers
+  - auto-closing brackets/quotes
+  - bracket matching
+  - snippet-style function insertion from completions
 - The same compact selected-cell action bar is used across desktop and touch layouts.
 
 ## Open the standalone wiki page
