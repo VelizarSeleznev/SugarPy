@@ -223,16 +223,21 @@ See `docs/DEPLOY_STATE.md` for the current working deployment snapshot on server
   ```bash
   ./scripts/checkpoint.sh "Describe the completed slice"
   ```
-- Cut a release only when the branch is ready:
-  ```bash
-  ./scripts/release.sh
-  ```
-
-GitHub Actions also provide the merge gate for `master`:
+- Default merge path:
+  1. push the work branch
+  2. open a PR into `master`
+  3. wait for GitHub Actions `checks`
+  4. merge only after `checks` is green
 - `.github/workflows/deploy.yml` now runs the `checks` job on pull requests targeting `master`.
-- The same workflow runs `./scripts/check all` on GitHub-hosted runners, including browser coverage, so merge readiness no longer depends only on the local machine state.
+- The same workflow runs `./scripts/check all` on GitHub-hosted runners, including browser coverage, so merge readiness no longer depends on the local machine state.
 - The `deploy` job still runs only after a push to `master`, on the self-hosted `sugarpy-prod` runner.
-- To make this an enforced merge gate, enable branch protection in GitHub and require the `checks` status before merging into `master`.
+- To make this an enforced merge gate, keep branch protection enabled on `master` and require the `checks` status before merging.
+
+## Fallback local release
+Use local release only when you explicitly want an operator-driven release from the current machine:
+```bash
+./scripts/release.sh
+```
 
 What the release command does:
 - Requires a clean worktree.
