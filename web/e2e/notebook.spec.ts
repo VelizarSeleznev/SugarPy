@@ -216,11 +216,13 @@ const addCodeCellToEmptyNotebook = async (page: any) => {
     const emptyStateCodeButton = emptyState.locator('.cell-empty-actions').getByRole('button', { name: /^Code$/ });
     if (await emptyStateCodeButton.count()) {
       await emptyStateCodeButton.first().click();
+      await expect(page.locator('[data-testid="cell-row-code"]').first()).toBeVisible();
       return;
     }
     const legacyEmptyStateButton = emptyState.getByRole('button', { name: 'Add code cell' });
     if (await legacyEmptyStateButton.count()) {
       await legacyEmptyStateButton.first().click();
+      await expect(page.locator('[data-testid="cell-row-code"]').first()).toBeVisible();
       return;
     }
   }
@@ -229,6 +231,7 @@ const addCodeCellToEmptyNotebook = async (page: any) => {
   if (await headerAddButton.count()) {
     await headerAddButton.click();
     await page.locator('.add-cell-menu').getByRole('button', { name: /^Code$/ }).click();
+    await expect(page.locator('[data-testid="cell-row-code"]').first()).toBeVisible();
   }
 };
 
@@ -418,6 +421,18 @@ const setMathInLastCell = async (page: any, source: string) => {
       const active = document.activeElement as HTMLElement | null;
       active?.blur?.();
     });
+  }
+};
+
+const readEditorText = async (editor: any) =>
+  editor.evaluate((node: HTMLElement) => (node.textContent || '').replace(/\u200b/g, ''));
+
+const resetToBlankNotebook = async (page: any) => {
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('button', { name: 'New Notebook' }).click();
+  await expect(page.locator('.cell-empty')).toBeVisible();
+  if (await page.locator('.header-menu').isVisible().catch(() => false)) {
+    await page.locator('body').click({ position: { x: 8, y: 8 } });
   }
 };
 
@@ -707,6 +722,76 @@ test.describe('Notebook CAS outputs', () => {
     await page.locator('[data-testid="cell-row-code"]').first().click();
     await expect(mathCell.getByTestId('math-output')).toBeVisible();
     await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Notebook editor QoL: code cells autocomplete notebook symbols and auto-close brackets', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.clear();
+      localStorage.setItem('sugarpy:onboarding:seen:v1', '1');
+    });
+    await page.goto('/');
+    await resetToBlankNotebook(page);
+
+    await addCodeCellToEmptyNotebook(page);
+    await setCodeInFirstCell(page, 'alpha = 7');
+
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Code$/ }).click();
+
+    const secondCodeCell = page.locator('[data-testid="cell-row-code"]').last();
+    const secondEditor = secondCodeCell.locator('.cm-content').first();
+    await secondEditor.click();
+    await page.keyboard.type('beta = 3\nbet');
+    await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+    await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('beta');
+    await page.locator('.cm-tooltip-autocomplete').getByText('beta', { exact: true }).click();
+    await expect.poll(() => readEditorText(secondEditor)).toContain('beta = 3beta');
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('al');
+    await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+    await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('alpha');
+
+    await page.getByTestId('add-cell-button').click();
+    await page.locator('.add-cell-menu').getByRole('button', { name: /^Code$/ }).click();
+    const bracketCellEditor = page.locator('[data-testid="cell-row-code"]').last().locator('.cm-content').first();
+    await bracketCellEditor.click();
+    await page.keyboard.type('(');
+    await expect.poll(() => readEditorText(bracketCellEditor)).toBe('()');
+  });
+
+  test('Notebook editor QoL: math cells autocomplete shared symbols, insert solve snippet, and still render', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.clear();
+      localStorage.setItem('sugarpy:onboarding:seen:v1', '1');
+    });
+    await page.goto('/');
+    await resetToBlankNotebook(page);
+
+    await addCodeCellToEmptyNotebook(page);
+    await setCodeInFirstCell(page, 'alpha = 7');
+    await addMathCellAfterFirstCode(page);
+
+    const mathCell = page.locator('[data-testid="cell-row-math"]').last();
+    const mathEditor = mathCell.locator('.cm-content').first();
+    await mathEditor.click();
+    await page.keyboard.type('offset := 3\noff');
+    await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+    await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('offset');
+    await page.locator('.cm-tooltip-autocomplete').getByText('offset', { exact: true }).click();
+    await expect.poll(() => readEditorText(mathEditor)).toContain('offset := 3offset');
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('al');
+    await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+    await expect(page.locator('.cm-tooltip-autocomplete')).toContainText('alpha');
+
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.type('sol');
+    await expect(page.locator('.cm-tooltip-autocomplete')).toBeVisible();
+    await page.locator('.cm-tooltip-autocomplete').getByText('solve', { exact: true }).click();
+    await page.keyboard.type('x^2 = alpha');
+    await expect.poll(() => readEditorText(mathEditor)).toBe('solve(x^2 = alpha, x)');
+    await mathCell.locator('.cm-editor').first().press('Shift+Enter');
+    await expect(mathCell.getByTestId('math-output')).toBeVisible();
   });
 
   test('Notebook chrome: cell rail insert menu supports search and above/below placement', async ({ page }) => {

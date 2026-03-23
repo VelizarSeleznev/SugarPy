@@ -23,6 +23,8 @@ SugarPy is a local notebook toolkit:
 - Visual math regression fixture: `notebooks/Roundabout_Visual_Check.sugarpy`
 - Notebook UI uses a compact fixed top header, touch-friendly cell gestures, and inline
   insert controls for `Code | Text | Math`, plus secondary `More blocks` discovery for `Stoich` and `Regression`, and a desktop left-rail insert and drag rail for each cell.
+- Code and Math cells share a CodeMirror editor layer with syntax highlighting, autocomplete,
+  bracket matching, auto-closing pairs, and snippet-style function insertion tuned for notebook work.
 
 ## Key scripts
 - `scripts/run-all.sh`: starts Jupyter backend and Vite dev server together.

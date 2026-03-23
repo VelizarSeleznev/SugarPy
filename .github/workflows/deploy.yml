@@ -1,18 +1,23 @@
-name: Deploy SugarPy
+name: CI and Deploy SugarPy
 
 on:
+  pull_request:
+    branches:
+      - master
   push:
     branches:
       - master
   workflow_dispatch:
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   checks:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,14 +42,21 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Frontend build
+      - name: Install frontend dependencies and Playwright browser
         working-directory: web
         run: |
           npm ci
-          npm run build
+          npx playwright install --with-deps chromium
+
+      - name: Full project checks
+        env:
+          CI: "1"
+        run: |
+          ./scripts/check all
 
   deploy:
     runs-on: [self-hosted, sugarpy-prod]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: checks
     steps:
       - name: Checkout

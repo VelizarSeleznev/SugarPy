@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import katex from 'katex';
 import { CodeEditor } from './CodeEditor';
+import type { EditorCompletionItem } from '../utils/editorSymbols';
+import { extractMathSymbols } from '../utils/editorSymbols';
+import { sugarPyMathLanguage } from '../utils/mathLanguage';
 
 type Props = {
   value: string;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
-  completions?: { label: string; detail?: string }[];
+  completions?: EditorCompletionItem[];
   output?: {
     render_cache?: {
       exact: { steps: string[]; value?: string | null };
@@ -549,6 +552,8 @@ export function MathEditor({
             runNow(val);
           }}
           completions={completions ?? []}
+          extractSymbols={extractMathSymbols}
+          language={sugarPyMathLanguage}
           placeholderText="Type math..."
           autoFocus={active}
           shortcutItems={shortcutItems}

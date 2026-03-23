@@ -138,6 +138,11 @@ Expected behavior:
 - Tapping/clicking the card reopens the raw CAS editor.
 - The editor provides a compact shortcut bar for common CAS inserts
   (`^2`, `sqrt(...)`, `solve(...)`, `expand(...)`, `N(...)`, `plot(...)`).
+- The raw Math editor also provides syntax highlighting, bracket matching, auto-closing
+  brackets/quotes, and autocomplete for built-in CAS helpers plus symbols from the current
+  Math cell and previously executed Code/Math cells in the notebook.
+- Function-style autocomplete inserts callable snippets with cursor placement, for example
+  `sqrt(...)`, `solve(..., x)`, and `plot(...)`.
 - When the rendered source would duplicate the result verbatim (for example simple assignments
   like `A := [1, 2]`), the source preview is omitted and only the useful result remains visible.
 - `Exact` / `Decimal` and `Deg` / `Rad` are first-class Math quick actions on the cell toolbar.

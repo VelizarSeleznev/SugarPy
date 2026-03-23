@@ -1,6 +1,30 @@
-import { CompletionContext } from '@codemirror/autocomplete';
+import { CompletionContext, snippet } from '@codemirror/autocomplete';
+import type { EditorView } from '@codemirror/view';
 
-export function buildCompletionSource(list: { label: string; detail?: string }[]) {
+import { type EditorCompletionItem, mergeEditorCompletions } from './editorSymbols';
+
+const toSnippetTemplate = (value: string) => value.replace('__CURSOR__', '${}');
+
+const applyCompletion = (
+  view: EditorView,
+  item: EditorCompletionItem,
+  from: number,
+  to: number
+) => {
+  if (item.snippet) {
+    snippet(toSnippetTemplate(item.snippet))(view, null, from, to);
+    return;
+  }
+  view.dispatch({
+    changes: { from, to, insert: item.label },
+    selection: { anchor: from + item.label.length }
+  });
+};
+
+export function buildCompletionSource(
+  list: EditorCompletionItem[],
+  extractSymbols?: (source: string) => EditorCompletionItem[]
+) {
   return (context: CompletionContext) => {
     const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
     if (word && word.from > 0) {
@@ -8,18 +32,26 @@ export function buildCompletionSource(list: { label: string; detail?: string }[]
       if (prev === '/') return null;
     }
     if (!word && !context.explicit) return null;
+    const currentSource = context.state.doc.sliceString(0, context.pos);
+    const dynamicItems = extractSymbols ? extractSymbols(currentSource) : [];
+    const items = mergeEditorCompletions(dynamicItems, list);
     return {
       from: word ? word.from : context.pos,
-      options: list.map((item) => ({
+      options: items.map((item) => ({
         label: item.label,
         detail: item.detail,
-        type: 'function'
+        type: item.type ?? 'function',
+        boost: item.boost ?? 0,
+        apply: item.snippet
+          ? (view: EditorView, _completion: unknown, from: number, to: number) =>
+              applyCompletion(view, item, from, to)
+          : undefined
       }))
     };
   };
 }
 
-export function buildSlashCompletionSource(list: { label: string; detail?: string }[]) {
+export function buildSlashCompletionSource(list: EditorCompletionItem[]) {
   return (context: CompletionContext) => {
     const doc = context.state.doc.toString();
     const trimmed = doc.trim();
@@ -37,7 +69,8 @@ export function buildSlashCompletionSource(list: { label: string; detail?: strin
       options: list.map((item) => ({
         label: item.label,
         detail: item.detail,
-        type: 'function'
+        type: item.type ?? 'function',
+        boost: item.boost ?? 0
       }))
     };
   };

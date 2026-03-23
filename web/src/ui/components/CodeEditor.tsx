@@ -3,24 +3,47 @@ import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { python } from '@codemirror/lang-python';
-import { acceptCompletion, autocompletion } from '@codemirror/autocomplete';
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  snippetKeymap
+} from '@codemirror/autocomplete';
+import { HighlightStyle, bracketMatching, syntaxHighlighting } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 
 import { buildCompletionSource, buildSlashCompletionSource } from '../utils/completion';
+import type { EditorCompletionItem } from '../utils/editorSymbols';
 
 type Props = {
   value: string;
   onChange: (value: string) => void;
   onRun: (value: string) => void;
-  completions: { label: string; detail?: string }[];
-  slashCommands?: { label: string; detail?: string }[];
+  completions: EditorCompletionItem[];
+  slashCommands?: EditorCompletionItem[];
   onSlashCommand?: (command: string) => boolean;
   language?: any;
   placeholderText?: string;
   autoFocus?: boolean;
   shortcutItems?: { label: string; snippet: string }[];
+  extractSymbols?: (source: string) => EditorCompletionItem[];
 };
 
 const CURSOR_MARKER = '__CURSOR__';
+
+const editorHighlightStyle = HighlightStyle.define([
+  { tag: [tags.keyword, tags.controlKeyword, tags.definitionKeyword, tags.moduleKeyword], color: '#7c3aed', fontWeight: '700' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.special(tags.variableName)], color: '#0f62fe', fontWeight: '700' },
+  { tag: [tags.variableName, tags.name], color: '#243244' },
+  { tag: [tags.propertyName, tags.className, tags.typeName, tags.definition(tags.variableName)], color: '#0f766e', fontWeight: '600' },
+  { tag: [tags.number, tags.integer, tags.float, tags.bool, tags.atom], color: '#b45309', fontWeight: '700' },
+  { tag: [tags.string, tags.special(tags.string)], color: '#c2410c' },
+  { tag: [tags.comment, tags.meta], color: '#8b95a7', fontStyle: 'italic' },
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: '#c026d3', fontWeight: '600' },
+  { tag: [tags.bracket, tags.squareBracket, tags.paren, tags.angleBracket], color: '#2563eb', fontWeight: '700' },
+  { tag: tags.invalid, color: '#dc2626', backgroundColor: 'rgba(254, 226, 226, 0.95)', borderRadius: '4px' }
+]);
 
 export function CodeEditor({
   value,
@@ -32,7 +55,8 @@ export function CodeEditor({
   language,
   placeholderText,
   autoFocus,
-  shortcutItems = []
+  shortcutItems = [],
+  extractSymbols
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -82,8 +106,12 @@ export function CodeEditor({
             }
           ])
         ),
-        keymap.of([...defaultKeymap, indentWithTab]),
+        keymap.of([...closeBracketsKeymap, ...defaultKeymap, indentWithTab]),
+        keymap.of(snippetKeymap),
         (language || python()),
+        syntaxHighlighting(editorHighlightStyle),
+        closeBrackets(),
+        bracketMatching(),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': { height: 'auto' },
@@ -93,7 +121,7 @@ export function CodeEditor({
           autocompletion({
             override: [
               ...(slashCommands.length > 0 ? [buildSlashCompletionSource(slashCommands)] : []),
-              buildCompletionSource(completions)
+              buildCompletionSource(completions, extractSymbols)
             ]
           })
         ),
@@ -143,12 +171,12 @@ export function CodeEditor({
         autocompletion({
           override: [
             ...(slashCommands.length > 0 ? [buildSlashCompletionSource(slashCommands)] : []),
-            buildCompletionSource(completions)
+            buildCompletionSource(completions, extractSymbols)
           ]
         })
       )
     });
-  }, [completions, slashCommands]);
+  }, [completions, slashCommands, extractSymbols]);
 
   const insertSnippet = (snippet: string) => {
     const view = viewRef.current;

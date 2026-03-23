@@ -182,6 +182,12 @@ Assistant regression checks:
 - If focus leaves the notebook, SugarPy keeps the last clicked cell as the insertion anchor with a soft highlight until the user clicks outside again to clear it.
 - Math cells collapse into rendered Math cards after execution; tap/click a card to reopen the raw CAS editor.
 - Math editor includes a compact shortcut bar for common CAS inserts (`^2`, `sqrt`, `solve`, `expand`, `N`, `plot`).
+- Code and Math cells now share the same CodeMirror editor QoL layer:
+  - syntax highlighting
+  - autocomplete from current-cell symbols, previously executed notebook symbols, and built-in helpers
+  - auto-closing brackets/quotes
+  - bracket matching
+  - snippet-style function insertion from completions
 - The same compact selected-cell action bar is used across desktop and touch layouts.
 
 ## Open the standalone wiki page
@@ -221,6 +227,12 @@ See `docs/DEPLOY_STATE.md` for the current working deployment snapshot on server
   ```bash
   ./scripts/release.sh
   ```
+
+GitHub Actions also provide the merge gate for `master`:
+- `.github/workflows/deploy.yml` now runs the `checks` job on pull requests targeting `master`.
+- The same workflow runs `./scripts/check all` on GitHub-hosted runners, including browser coverage, so merge readiness no longer depends only on the local machine state.
+- The `deploy` job still runs only after a push to `master`, on the self-hosted `sugarpy-prod` runner.
+- To make this an enforced merge gate, enable branch protection in GitHub and require the `checks` status before merging into `master`.
 
 What the release command does:
 - Requires a clean worktree.

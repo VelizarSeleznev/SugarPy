@@ -9,6 +9,8 @@ import { StoichState } from '../utils/stoichTypes';
 import { RegressionState } from '../utils/regressionTypes';
 import { CellWrapper, CellMenuAction } from './CellWrapper';
 import { OutputArea } from './OutputArea';
+import type { EditorCompletionItem } from '../utils/editorSymbols';
+import { extractCodeSymbols } from '../utils/editorSymbols';
 
 type Props = {
   cell: CellModel;
@@ -32,10 +34,10 @@ type Props = {
   onClearOutput: () => void;
   onToggleMathView: () => void;
   onShowMathRendered: () => void;
-  suggestions: { label: string; detail?: string }[];
-  slashCommands: { label: string; detail?: string }[];
+  suggestions: EditorCompletionItem[];
+  slashCommands: EditorCompletionItem[];
   onSlashCommand: (command: string) => boolean;
-  mathSuggestions: { label: string; detail?: string }[];
+  mathSuggestions: EditorCompletionItem[];
   trigMode: 'deg' | 'rad';
   kernelReady: boolean;
   onSetMathRenderMode: (mode: 'exact' | 'decimal') => void;
@@ -213,6 +215,7 @@ export function NotebookCell({
               onChange={onChange}
               onRun={onRun}
               completions={suggestions}
+              extractSymbols={extractCodeSymbols}
               slashCommands={slashCommands}
               onSlashCommand={onSlashCommand}
               placeholderText="Type code..."
