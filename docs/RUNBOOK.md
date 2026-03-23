@@ -228,6 +228,12 @@ See `docs/DEPLOY_STATE.md` for the current working deployment snapshot on server
   ./scripts/release.sh
   ```
 
+GitHub Actions also provide the merge gate for `master`:
+- `.github/workflows/deploy.yml` now runs the `checks` job on pull requests targeting `master`.
+- The same workflow runs `./scripts/check all` on GitHub-hosted runners, including browser coverage, so merge readiness no longer depends only on the local machine state.
+- The `deploy` job still runs only after a push to `master`, on the self-hosted `sugarpy-prod` runner.
+- To make this an enforced merge gate, enable branch protection in GitHub and require the `checks` status before merging into `master`.
+
 What the release command does:
 - Requires a clean worktree.
 - Runs `./scripts/test-all.sh` unless `SKIP_TESTS=1` is set.
