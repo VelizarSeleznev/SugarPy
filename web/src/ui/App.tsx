@@ -6,6 +6,21 @@ import { AssistantDrawer, AssistantDrawerSection } from './components/AssistantD
 import { OnboardingCoachmark } from './components/OnboardingCoachmark';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { applyAssistantOperations } from './assistant/patches';
+import {
+  hydrateAssistantRuntimeConfig as hydrateAssistantRuntimeConfigRequest,
+  persistAssistantTrace as persistAssistantTraceRequest,
+  type AssistantRuntimeConfig
+} from './assistant/runtime';
+import {
+  createAssistantChat,
+  getActiveAssistantChat,
+  previewAssistantLabel,
+  updateAssistantChats,
+  updateAssistantMessages,
+  type AssistantChatMessage,
+  type AssistantChatSession,
+  type AssistantRunTrace
+} from './assistant/session';
 import type { AssistantOperation } from './assistant/types';
 import { buildSuggestions } from './utils/suggestUtils';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
@@ -23,6 +38,7 @@ import {
   updateStoichStateInDocument,
   type AssistantSnapshot
 } from './notebook/document';
+import { useNotebookPersistence } from './notebook/useNotebookPersistence';
 import { useUserPreferences } from './preferences/useUserPreferences';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
@@ -55,25 +71,11 @@ import {
   fetchRuntimeConfig,
   interruptNotebookRuntime,
   restartNotebookRuntime,
-  loadServerAutosave as loadServerAutosaveRequest,
-  persistAssistantTraceToServer,
-  saveNotebookDocument,
-  saveServerAutosave as saveServerAutosaveRequest,
   SugarPyRuntimeConfig
 } from './utils/backendApi';
 import {
   createNotebookId,
-  deserializeIpynb,
-  deserializeSugarPy,
-  downloadBlob,
-  loadFromLocalStorage,
-  loadLastOpenId,
-  pruneLocalNotebookSnapshots,
   removeStorageItem,
-  readFileAsText,
-  saveToLocalStorage,
-  serializeIpynb,
-  serializeSugarPy,
   writeStorageItem
 } from './utils/notebookIO';
 import {
@@ -83,14 +85,9 @@ import {
 } from './utils/assistantImport';
 import { buildAssistantImportSummary } from './utils/assistantImportSummary';
 import {
-  FIRST_RUN_NOTEBOOK_NAME,
-  getFirstRunNotebookCells,
-  hasSeenOnboarding,
   loadCoachmarksDismissed,
   loadTutorialNotebookId,
-  markOnboardingSeen,
   saveCoachmarksDismissed,
-  saveTutorialNotebookId
 } from './utils/onboarding';
 import {
   extractCodeSymbols,
@@ -189,14 +186,6 @@ const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:model';
 const ASSISTANT_THINKING_STORAGE = 'sugarpy:assistant:thinking';
 const ASSISTANT_SCOPE: 'notebook' = 'notebook';
 const ASSISTANT_PREFERENCE: 'auto' = 'auto';
-type AssistantRuntimeConfig = {
-  model?: string;
-  providers?: {
-    openai?: boolean;
-    gemini?: boolean;
-    groq?: boolean;
-  };
-};
 
 type AssistantPhotoImport = {
   items: AssistantImportItem[];
@@ -211,12 +200,6 @@ const MAX_ASSISTANT_IMPORT_PDF_PAGES = 8;
 const MAX_ASSISTANT_IMPORT_ITEMS = 16;
 const ASSISTANT_PHOTO_IMPORT_MODEL = 'gpt-5.4-mini';
 
-const getNotebookExecCounter = (cells: CellModel[]) =>
-  cells.reduce((max, cell) => {
-    if (typeof cell.execCount !== 'number' || Number.isNaN(cell.execCount)) return max;
-    return Math.max(max, cell.execCount);
-  }, 0);
-
 const matchesAssistantProvider = (apiKey: string, model: string) => {
   const trimmed = apiKey.trim();
   if (!trimmed) return false;
@@ -229,94 +212,6 @@ const matchesAssistantProvider = (apiKey: string, model: string) => {
     return trimmed.startsWith('gsk_');
   }
   return trimmed.startsWith('AIza');
-};
-
-type AssistantChatMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  createdAt: string;
-  status?: 'loading' | 'ready' | 'error' | 'stopped' | 'applied' | 'dismissed';
-  activity?: AssistantActivity[];
-  plan?: AssistantPlan | null;
-  draftRun?: AssistantDraftRun | null;
-  error?: string;
-  requestPrompt?: string;
-};
-
-type AssistantChatSession = {
-  id: string;
-  title: string;
-  messages: AssistantChatMessage[];
-  updatedAt: string;
-};
-
-type AssistantRunTrace = {
-  id: string;
-  chatId: string;
-  messageId: string;
-  notebookId: string;
-  notebookName: string;
-  prompt: string;
-  model: string;
-  thinkingLevel: AssistantThinkingLevel;
-  startedAt: string;
-  finishedAt?: string;
-  durationMs?: number;
-  status: 'running' | 'completed' | 'error' | 'stopped';
-  error?: string;
-  context: {
-    cellCount: number;
-    activeCellId: string | null;
-    defaults: {
-      trigMode: 'deg' | 'rad';
-      renderMode: 'exact' | 'decimal';
-    };
-  };
-  conversationHistory: AssistantConversationEntry[];
-  photoImport?: {
-    instructions: string;
-    items: Array<{
-      index: number;
-      fileName: string;
-      displayName: string;
-      pageNumber: number | null;
-      mimeType: string;
-    }>;
-  };
-  activity: AssistantActivity[];
-  network: AssistantNetworkEvent[];
-  responses: AssistantResponseTrace[];
-  sandboxExecutions: AssistantSandboxExecutionTrace[];
-  draftValidations: Array<{
-    stepId: string;
-    stepTitle: string;
-    operationIndex: number;
-    cellType: AssistantCellKind;
-    request: AssistantSandboxRequest;
-    summary: AssistantValidationSummary;
-  }>;
-  result?: {
-    summary: string;
-    warningCount: number;
-    operationCount: number;
-  };
-};
-
-const previewAssistantLabel = (value: string, fallback: string) => {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  if (!compact) return fallback;
-  return compact.length <= 36 ? compact : `${compact.slice(0, 35)}…`;
-};
-
-const createAssistantChat = (title = 'New chat'): AssistantChatSession => {
-  const now = new Date().toISOString();
-  return {
-    id: `assistant-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    title,
-    messages: [],
-    updatedAt: now
-  };
 };
 
 const getAssistantTraceStorageKey = (id: string) => `${ASSISTANT_TRACE_STORAGE_PREFIX}${id}`;
@@ -596,6 +491,17 @@ function App() {
       setLastActiveCellId(cellId);
     }
   };
+  const persistAssistantTrace = (trace: AssistantRunTrace) =>
+    persistAssistantTraceRequest({
+      trace,
+      storageKey: getAssistantTraceStorageKey(trace.notebookId),
+      readOptionalStorageItem,
+      writeStorageItem: (key, value) => {
+        writeStorageItem(key, value);
+      },
+      pendingRef: assistantTracePendingRef,
+      flushRef: assistantTraceFlushRef
+    });
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
 
   const connectBackend = async () => {
@@ -882,119 +788,6 @@ function App() {
     }
   };
 
-  const buildSnapshot = (
-    nextCells: CellModel[],
-    nextTrigMode: 'deg' | 'rad',
-    nextDefaultMathRenderMode: 'exact' | 'decimal',
-    nextName: string,
-    nextId: string
-  ) =>
-    JSON.stringify({
-      id: nextId,
-      name: nextName,
-      trigMode: nextTrigMode,
-      defaultMathRenderMode: nextDefaultMathRenderMode,
-      cells: nextCells.map(({ isRunning, ...rest }) => rest)
-    });
-
-  const loadAssistantRuntimeConfig = async (): Promise<AssistantRuntimeConfig | null> => {
-    try {
-      const parsed = await fetchRuntimeConfig();
-      setRuntimeConfig(parsed);
-      const runtimeModel = typeof parsed.model === 'string' ? parsed.model.trim() : '';
-      return {
-        model: runtimeModel || undefined,
-        providers: parsed.providers
-      };
-    } catch (_err) {
-      return null;
-    }
-  };
-
-  const persistAssistantTrace = async (trace: AssistantRunTrace) => {
-    const localKey = `${getAssistantTraceStorageKey(trace.notebookId)}`;
-    try {
-      const existingRaw = readOptionalStorageItem(localKey);
-      const existing = existingRaw ? JSON.parse(existingRaw) : [];
-      const next = Array.isArray(existing)
-        ? [
-            trace,
-            ...existing.filter((entry: any) => entry && typeof entry === 'object' && entry.id !== trace.id)
-          ].slice(0, 25)
-        : [trace];
-      writeStorageItem(localKey, JSON.stringify(next));
-    } catch (_err) {
-      // ignore local trace persistence failures
-    }
-
-    assistantTracePendingRef.current.set(trace.id, trace);
-    if (assistantTraceFlushRef.current.has(trace.id)) {
-      return;
-    }
-
-    const flushTrace = async () => {
-      while (assistantTracePendingRef.current.has(trace.id)) {
-        const nextTrace = assistantTracePendingRef.current.get(trace.id);
-        assistantTracePendingRef.current.delete(trace.id);
-        if (!nextTrace) continue;
-        try {
-          await persistAssistantTraceToServer(nextTrace as unknown as Record<string, unknown>);
-        } catch (_err) {
-          // trace persistence must never block assistant execution
-        }
-      }
-    };
-
-    const flushPromise = flushTrace().finally(() => {
-      assistantTraceFlushRef.current.delete(trace.id);
-      const pendingTrace = assistantTracePendingRef.current.get(trace.id);
-      if (pendingTrace) {
-        void persistAssistantTrace(pendingTrace);
-      }
-    });
-    assistantTraceFlushRef.current.set(trace.id, flushPromise);
-    await flushPromise;
-  };
-
-  const loadServerAutosave = async (id: string) => {
-    try {
-      const parsed = await loadServerAutosaveRequest(id);
-      return parsed && (parsed as any).version === 1 ? parsed : null;
-    } catch (_err) {
-      return null;
-    }
-  };
-
-  const saveServerAutosave = async (params: {
-    id: string;
-    name: string;
-    trigMode: 'deg' | 'rad';
-    defaultMathRenderMode: 'exact' | 'decimal';
-    cells: CellModel[];
-    silent?: boolean;
-  }) => {
-    try {
-      if (!params.silent) {
-        setSyncMessage('Saving to server...');
-      }
-      const payload = serializeSugarPy({
-        id: params.id,
-        name: params.name,
-        trigMode: params.trigMode,
-        defaultMathRenderMode: params.defaultMathRenderMode,
-        cells: params.cells
-      });
-      await saveServerAutosaveRequest(payload as unknown as Record<string, unknown>);
-      if (!params.silent) {
-        setSyncMessage('Saved to server autosave.');
-      }
-      return payload;
-    } catch (err) {
-      setSyncMessage('Server autosave failed.');
-      return null;
-    }
-  };
-
   useEffect(() => {
     if (cells.length === 0) {
       setActiveCellId(null);
@@ -1195,82 +988,6 @@ function App() {
         window.cancelAnimationFrame(dragScrollFrameRef.current);
         dragScrollFrameRef.current = null;
       }
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const hydrate = async () => {
-      const lastId = loadLastOpenId();
-      pruneLocalNotebookSnapshots(lastId);
-      let selected: ReturnType<typeof loadFromLocalStorage> | Awaited<ReturnType<typeof loadServerAutosave>> = null;
-
-      if (lastId) {
-        const localStored = loadFromLocalStorage(lastId);
-        const serverStored = await loadServerAutosave(lastId);
-
-        const pickNewest = () => {
-          if (localStored && serverStored) {
-            const localTs = Date.parse(localStored.updatedAt ?? '') || 0;
-            const serverTs = Date.parse(serverStored.updatedAt ?? '') || 0;
-            return serverTs > localTs ? serverStored : localStored;
-          }
-          return serverStored ?? localStored ?? null;
-        };
-
-        selected = pickNewest();
-      }
-
-      if (!selected && !hasSeenOnboarding()) {
-        const nextId = createNotebookId();
-        const nextCells = getFirstRunNotebookCells().map((cell, index) => createCell(cell.type, cell.source, index + 1));
-        const seeded = serializeSugarPy({
-          id: nextId,
-          name: FIRST_RUN_NOTEBOOK_NAME,
-          trigMode: 'deg',
-          defaultMathRenderMode: 'exact',
-          cells: nextCells
-        });
-        saveToLocalStorage(seeded);
-        markOnboardingSeen();
-        saveTutorialNotebookId(nextId);
-        setTutorialNotebookId(nextId);
-        selected = seeded;
-        if (!loadCoachmarksDismissed()) {
-          setCoachmarkStep('add');
-        }
-      }
-
-      if (!selected || cancelled) {
-        hydrated.current = true;
-        return;
-      }
-
-      const decoded = deserializeSugarPy(selected);
-      const nextCells = decoded.cells;
-      setNotebookId(decoded.id);
-      setNotebookName(decoded.name);
-      setTrigMode(decoded.trigMode);
-      setDefaultMathRenderMode(decoded.defaultMathRenderMode);
-      setCells(nextCells);
-      setExecCounter(getNotebookExecCounter(nextCells));
-      activateCell(nextCells[0]?.id ?? null);
-      setLastSavedAt(selected.updatedAt ?? null);
-      lastSnapshot.current = buildSnapshot(
-        nextCells,
-        decoded.trigMode,
-        decoded.defaultMathRenderMode,
-        decoded.name,
-        decoded.id
-      );
-      hydrated.current = true;
-    };
-
-    hydrate().catch(() => {
-      hydrated.current = true;
-    });
-    return () => {
-      cancelled = true;
     };
   }, []);
 
@@ -2138,16 +1855,7 @@ function App() {
   };
 
   const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
-    setAssistantChats((prev) =>
-      prev.map((chat) => {
-        if (chat.id !== chatId) return chat;
-        const next = updater(chat);
-        return {
-          ...next,
-          updatedAt: new Date().toISOString()
-        };
-      })
-    );
+    setAssistantChats((prev) => updateAssistantChats(prev, chatId, updater));
   };
 
   const updateAssistantMessage = (
@@ -2155,10 +1863,7 @@ function App() {
     messageId: string,
     updater: (message: AssistantChatMessage) => AssistantChatMessage
   ) => {
-    updateAssistantChat(chatId, (chat) => ({
-      ...chat,
-      messages: chat.messages.map((message) => (message.id === messageId ? updater(message) : message))
-    }));
+    setAssistantChats((prev) => updateAssistantMessages(prev, chatId, messageId, updater));
   };
 
   const ensureAssistantChat = () => {
@@ -2180,10 +1885,7 @@ function App() {
     return nextChat.id;
   };
 
-  const activeAssistantChat =
-    assistantChats.find((chat) => chat.id === assistantActiveChatId) ??
-    assistantChats[0] ??
-    null;
+  const activeAssistantChat = getActiveAssistantChat(assistantChats, assistantActiveChatId);
   const assistantDefaultProviderAvailable = useMemo(() => {
     const configuredModel = (
       runtimeConfig?.model?.trim() ||
@@ -2412,7 +2114,7 @@ function App() {
     const envModel = (import.meta.env.VITE_ASSISTANT_MODEL || '').trim();
     if (storedKey) return null;
     assistantRuntimeConfigAttemptedRef.current = true;
-    const nextRuntimeConfig = await loadAssistantRuntimeConfig();
+    const nextRuntimeConfig = await hydrateAssistantRuntimeConfigRequest(setRuntimeConfig);
     if (!nextRuntimeConfig) return null;
     if (!storedModel && !envModel && nextRuntimeConfig.model) {
       setAssistantModel(nextRuntimeConfig.model);
@@ -3182,111 +2884,47 @@ function App() {
     await runAssistant(fallbackPrompt, { chatId: assistantActiveChatId, reviseFromMessageId: messageId });
   };
 
-  useEffect(() => {
-    if (!hydrated.current) return;
-    const snapshot = buildSnapshot(cells, trigMode, defaultMathRenderMode, notebookName, notebookId);
-    if (snapshot === lastSnapshot.current) return;
-    setDirty(true);
-    if (autosaveTimer.current) {
-      window.clearTimeout(autosaveTimer.current);
-    }
-    autosaveTimer.current = window.setTimeout(() => {
-      const payload = serializeSugarPy({
-        id: notebookId,
-        name: notebookName,
-        trigMode,
-        defaultMathRenderMode,
-        cells
-      });
-      const saved = saveToLocalStorage(payload);
-      if (!saved.ok) {
-        if (!localAutosaveWarningShown.current) {
-          console.warn(`Local autosave skipped: ${saved.reason}`);
-          localAutosaveWarningShown.current = true;
-        }
-      } else {
-        localAutosaveWarningShown.current = false;
-      }
-      setLastSavedAt(payload.updatedAt);
-      lastSnapshot.current = snapshot;
-      setDirty(false);
-    }, 800);
-
-    if (autosaveServerTimer.current) {
-      window.clearTimeout(autosaveServerTimer.current);
-    }
-    autosaveServerTimer.current = window.setTimeout(() => {
-      saveServerAutosave({
-        id: notebookId,
-        name: notebookName,
-        trigMode,
-        defaultMathRenderMode,
-        cells,
-        silent: true
-      }).then((saved) => {
-        if (!saved) return;
-        setLastSavedAt(saved.updatedAt);
-      });
-    }, 1500);
-  }, [cells, trigMode, defaultMathRenderMode, notebookName, notebookId]);
-
-  useEffect(() => {
-    const flush = () => {
-      if (!hydrated.current) return;
-      const payload = serializeSugarPy({
-        id: notebookId,
-        name: notebookName,
-        trigMode,
-        defaultMathRenderMode,
-        cells
-      });
-      const saved = saveToLocalStorage(payload);
-      if (!saved.ok && !localAutosaveWarningShown.current) {
-        console.warn(`Local autosave skipped during flush: ${saved.reason}`);
-        localAutosaveWarningShown.current = true;
-      }
-      setLastSavedAt(payload.updatedAt);
-      saveServerAutosave({
-        id: notebookId,
-        name: notebookName,
-        trigMode,
-        defaultMathRenderMode,
-        cells,
-        silent: true
-      }).then(() => undefined);
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') flush();
-    };
-    window.addEventListener('beforeunload', flush);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      window.removeEventListener('beforeunload', flush);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [cells, trigMode, defaultMathRenderMode, notebookName, notebookId]);
-
   const confirmDiscard = () => {
     if (!dirty) return true;
     return window.confirm('There are unsaved changes. Continue without saving?');
   };
 
-  const handleNewNotebook = () => {
-    if (!confirmDiscard()) return;
-    setHeaderMenuOpen(false);
-    const nextId = createNotebookId();
-    const nextCells: CellModel[] = [];
-    setNotebookId(nextId);
-    setNotebookName('Untitled');
-    setTrigMode('deg');
-    setDefaultMathRenderMode('exact');
-    setCells(nextCells);
-    setExecCounter(0);
-    activateCell(nextCells[0]?.id ?? null);
-    setLastSavedAt(null);
-    lastSnapshot.current = buildSnapshot(nextCells, 'deg', 'exact', 'Untitled', nextId);
-    setDirty(false);
-  };
+  const {
+    handleNewNotebook,
+    handleDownloadSugarPy,
+    handleDownloadIpynb,
+    handleSaveToServer,
+    handleImportClick,
+    handleImportFile,
+    handleExportPdf
+  } = useNotebookPersistence({
+    notebookId,
+    notebookName,
+    trigMode,
+    defaultMathRenderMode,
+    cells,
+    createCell,
+    activateCell,
+    setNotebookId,
+    setNotebookName,
+    setTrigMode,
+    setDefaultMathRenderMode,
+    setCells,
+    setExecCounter,
+    setLastSavedAt,
+    setDirty,
+    setSyncMessage,
+    confirmDiscard,
+    closeMenus: () => setHeaderMenuOpen(false),
+    hydratedRef: hydrated,
+    lastSnapshotRef: lastSnapshot,
+    localAutosaveWarningShownRef: localAutosaveWarningShown,
+    autosaveTimerRef: autosaveTimer,
+    autosaveServerTimerRef: autosaveServerTimer,
+    fileInputRef,
+    onTutorialNotebookSeeded: setTutorialNotebookId,
+    onShowCoachmarks: () => setCoachmarkStep('add')
+  });
 
   const dismissCoachmarks = () => {
     setCoachmarkStep('done');
@@ -3320,145 +2958,6 @@ function App() {
     setHeaderMenuOpen(false);
   };
 
-  const handleDownloadSugarPy = () => {
-    setHeaderMenuOpen(false);
-    const payload = serializeSugarPy({
-      id: notebookId,
-      name: notebookName,
-      trigMode,
-      defaultMathRenderMode,
-      cells
-    });
-    const rawName = (notebookName || 'Untitled').trim();
-    const normalizedName = rawName.replace(/\.sugarpy(?:\.json)?$/i, '');
-    const filename = `${normalizedName}.sugarpy`;
-    downloadBlob(filename, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
-  };
-
-  const handleDownloadIpynb = () => {
-    setHeaderMenuOpen(false);
-    const payload = serializeIpynb({
-      id: notebookId,
-      name: notebookName,
-      trigMode,
-      defaultMathRenderMode,
-      cells
-    });
-    const filename = `${notebookName || 'Untitled'}.ipynb`;
-    downloadBlob(filename, new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
-  };
-
-  const handleSaveToServer = async () => {
-    setHeaderMenuOpen(false);
-    const payload = serializeSugarPy({
-      id: notebookId,
-      name: notebookName,
-      trigMode,
-      defaultMathRenderMode,
-      cells
-    });
-    try {
-      await saveNotebookDocument(payload as unknown as Record<string, unknown>);
-      await saveServerAutosave({
-        id: notebookId,
-        name: notebookName,
-        trigMode,
-        defaultMathRenderMode,
-        cells,
-        silent: true
-      });
-      const snapshot = buildSnapshot(cells, trigMode, defaultMathRenderMode, notebookName, notebookId);
-      lastSnapshot.current = snapshot;
-      setLastSavedAt(new Date().toISOString());
-      setDirty(false);
-    } catch (err) {
-      window.alert('Failed to save to the server.');
-    }
-  };
-
-  const handleImportClick = () => {
-    setHeaderMenuOpen(false);
-    fileInputRef.current?.click();
-  };
-
-  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (!confirmDiscard()) return;
-    try {
-      const text = await readFileAsText(file);
-      let next: {
-        id: string;
-        name: string;
-        trigMode: 'deg' | 'rad';
-        defaultMathRenderMode: 'exact' | 'decimal';
-        cells: CellModel[];
-      } | null = null;
-      if (file.name.endsWith('.ipynb')) {
-        next = deserializeIpynb(JSON.parse(text));
-      } else {
-        const parsed = JSON.parse(text);
-        if (parsed?.version === 1) {
-          next = deserializeSugarPy(parsed);
-        }
-      }
-      if (!next) {
-        window.alert('Unsupported notebook format.');
-        return;
-      }
-      const safeCells = next.cells.length > 0 ? next.cells : [createCell('code')];
-      setNotebookId(next.id);
-      setNotebookName(next.name || 'Untitled');
-      setTrigMode(next.trigMode);
-      setDefaultMathRenderMode(next.defaultMathRenderMode);
-      setCells(safeCells);
-      setExecCounter(getNotebookExecCounter(safeCells));
-      activateCell(safeCells[0]?.id ?? null);
-      const payload = serializeSugarPy({
-        id: next.id,
-        name: next.name || 'Untitled',
-        trigMode: next.trigMode,
-        defaultMathRenderMode: next.defaultMathRenderMode,
-        cells: safeCells
-      });
-      const saved = saveToLocalStorage(payload);
-      if (!saved.ok && !localAutosaveWarningShown.current) {
-        console.warn(`Local autosave skipped after import: ${saved.reason}`);
-        localAutosaveWarningShown.current = true;
-      }
-      setLastSavedAt(payload.updatedAt);
-      lastSnapshot.current = buildSnapshot(
-        safeCells,
-        next.trigMode,
-        next.defaultMathRenderMode,
-        next.name || 'Untitled',
-        next.id
-      );
-      setDirty(false);
-    } catch (err) {
-      window.alert('Failed to import notebook.');
-    } finally {
-      event.target.value = '';
-    }
-  };
-
-  const handleExportPdf = () => {
-    setHeaderMenuOpen(false);
-    const body = document.body;
-    body.classList.add('print-mode');
-
-    const cleanup = () => {
-      body.classList.remove('print-mode');
-      window.removeEventListener('afterprint', cleanup);
-    };
-
-    window.addEventListener('afterprint', cleanup, { once: true });
-
-    // Let layout settle before opening print preview so print CSS is applied consistently.
-    window.setTimeout(() => {
-      window.print();
-    }, 50);
-  };
 
   const draggedCell = dragState ? cells.find((cell) => cell.id === dragState.cellId) ?? null : null;
   const draggedCellLabel = draggedCell

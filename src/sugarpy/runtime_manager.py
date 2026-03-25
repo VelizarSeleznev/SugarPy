@@ -917,3 +917,31 @@ class RuntimeManager:
                 return "unavailable", "Docker-backed runtime is unavailable because Docker is not accessible."
             return requested, None
         return ("docker", None) if docker_available else ("inprocess", None)
+
+
+from . import runtime_manager_backends as _runtime_manager_backends
+
+DEFAULT_RUNTIME_IMAGE = _runtime_manager_backends.DEFAULT_RUNTIME_IMAGE
+DEFAULT_RUNTIME_BACKEND = _runtime_manager_backends.DEFAULT_RUNTIME_BACKEND
+DEFAULT_IDLE_TIMEOUT_S = _runtime_manager_backends.DEFAULT_IDLE_TIMEOUT_S
+DEFAULT_RUNTIME_START_TIMEOUT_S = _runtime_manager_backends.DEFAULT_RUNTIME_START_TIMEOUT_S
+DEFAULT_EXEC_TIMEOUT_S = _runtime_manager_backends.DEFAULT_EXEC_TIMEOUT_S
+CONTAINER_WORKDIR = _runtime_manager_backends.CONTAINER_WORKDIR
+RUNTIME_CONTAINER_PREFIX = _runtime_manager_backends.RUNTIME_CONTAINER_PREFIX
+MAX_STREAM_TEXT_LENGTH = _runtime_manager_backends.MAX_STREAM_TEXT_LENGTH
+MAX_MIME_TEXT_LENGTH = _runtime_manager_backends.MAX_MIME_TEXT_LENGTH
+MAX_MIME_OBJECT_ENTRIES = _runtime_manager_backends.MAX_MIME_OBJECT_ENTRIES
+RESTRICTED_DOCKER_ONLY_PROFILES = _runtime_manager_backends.RESTRICTED_DOCKER_ONLY_PROFILES
+KernelExecutor = _runtime_manager_backends.KernelExecutor
+RuntimeSession = _runtime_manager_backends.RuntimeSession
+_utc_now = _runtime_manager_backends._utc_now
+_safe_identifier = _runtime_manager_backends._safe_identifier
+_reserve_kernel_ports = _runtime_manager_backends._reserve_kernel_ports
+_container_user_flag = _runtime_manager_backends._container_user_flag
+_run_command = _runtime_manager_backends._run_command
+_truncate_text = _runtime_manager_backends._truncate_text
+_truncate_mime_value = _runtime_manager_backends._truncate_mime_value
+RuntimeRecord = _runtime_manager_backends.RuntimeRecord
+DockerCommandError = _runtime_manager_backends.DockerCommandError
+DockerKernelRuntime = _runtime_manager_backends.DockerKernelRuntime
+InProcessKernelRuntime = _runtime_manager_backends.InProcessKernelRuntime

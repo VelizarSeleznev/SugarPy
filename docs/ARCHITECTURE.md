@@ -4,7 +4,7 @@
 - Frontend (`web/`) is a React + Vite app.
 - Backend runtime is a local Jupyter Server launched from `scripts/launch.sh`.
 - Python domain logic lives in `src/sugarpy/`.
-- Restricted backend API and execution/storage enforcement live in `src/sugarpy/server_extension.py`.
+- Restricted backend API enters through `src/sugarpy/server_extension.py`, which now delegates config, storage, execution, sandbox, proxy, and security work to `src/sugarpy/server/`.
 - Assistant orchestration for model calls and structured notebook edits still enters through `web/src/ui/utils/assistant.ts`.
   - Shared assistant operation contracts and patch application helpers now live under `web/src/ui/assistant/`.
   - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
@@ -12,6 +12,9 @@
 - Frontend cell behavior is being normalized behind registry-backed cell definitions under `web/src/ui/cells/`.
   - Existing `code`, `markdown`, `math`, `stoich`, and `regression` cells now share common definition hooks for normalization, editable snapshots, and assistant patch application.
   - Assistant bulk edits target user-editable cell document/config state instead of reaching directly into runtime-only fields.
+- Notebook document and persistence concerns are being moved out of `web/src/ui/App.tsx` into `web/src/ui/notebook/`.
+  - `document.ts` owns cell/document normalization helpers and assistant-facing notebook snapshots.
+  - `useNotebookPersistence.ts` owns notebook hydration, local/server autosave, import/export, and new-notebook lifecycle effects.
 - Local themes and user presentation settings live outside notebook content under `web/src/ui/preferences/` and `web/src/ui/theme/`.
   - Theme presets and token overrides are applied locally in the browser and are intended to remain user-scoped rather than notebook-scoped.
 - Shared assistant keys can be held server-side by the Jupyter extension in `src/sugarpy/server_extension.py`.
@@ -54,10 +57,12 @@
   - Runtime control is exposed through SugarPy-owned API routes for status, interrupt, restart, and delete; the UI uses those routes instead of talking to kernels directly.
   - Docker-backed interrupt tries the Jupyter kernel `interrupt_request` first and only falls back to a container-level signal/restart if the kernel does not become responsive again.
   - Docker-backed live runtimes isolate notebook execution from the server process and filesystem.
+  - Runtime orchestration still enters through `src/sugarpy/runtime_manager.py`, but backend-specific helpers now live in `src/sugarpy/runtime_manager_backends.py`.
 - The assistant sandbox remains a separate backend-owned ephemeral execution path backed by the same runtime manager and Docker isolation model as live notebook execution.
 - Math cell evaluation pipeline:
   - `sugarpy.math_parser.parse_math_input` classifies input as expression/equation/assignment.
   - `sugarpy.math_parser.parse_sympy_expression` parses CAS input with `^` and implicit multiplication.
+  - Shared parser helpers are split into `src/sugarpy/math_parser_helpers.py` so parser-only logic can evolve without further growing the public parser entry module.
   - `sugarpy.math_cell.render_math_cell` evaluates with shared `ip.user_ns` namespace and returns normalized output payload (`kind`, `steps`, `value`, `error`).
   - `sugarpy.math_cell.display_math_cell` emits structured frontend payload via
     `application/vnd.sugarpy.math+json` (`display_data` channel).
