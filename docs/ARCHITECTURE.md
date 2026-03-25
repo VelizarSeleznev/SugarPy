@@ -5,9 +5,15 @@
 - Backend runtime is a local Jupyter Server launched from `scripts/launch.sh`.
 - Python domain logic lives in `src/sugarpy/`.
 - Restricted backend API and execution/storage enforcement live in `src/sugarpy/server_extension.py`.
-- Assistant orchestration for model calls and structured notebook edits lives in `web/src/ui/utils/assistant.ts`.
+- Assistant orchestration for model calls and structured notebook edits still enters through `web/src/ui/utils/assistant.ts`.
+  - Shared assistant operation contracts and patch application helpers now live under `web/src/ui/assistant/`.
   - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
   - Photo import requests may attach an ordered set of browser-prepared image inputs, including PDF pages rendered client-side into page previews before the OpenAI request is sent.
+- Frontend cell behavior is being normalized behind registry-backed cell definitions under `web/src/ui/cells/`.
+  - Existing `code`, `markdown`, `math`, `stoich`, and `regression` cells now share common definition hooks for normalization, editable snapshots, and assistant patch application.
+  - Assistant bulk edits target user-editable cell document/config state instead of reaching directly into runtime-only fields.
+- Local themes and user presentation settings live outside notebook content under `web/src/ui/preferences/` and `web/src/ui/theme/`.
+  - Theme presets and token overrides are applied locally in the browser and are intended to remain user-scoped rather than notebook-scoped.
 - Shared assistant keys can be held server-side by the Jupyter extension in `src/sugarpy/server_extension.py`.
   - The frontend only learns provider availability and default model, not the server key value.
   - Assistant provider requests are proxied through SugarPy-owned backend routes instead of browser-to-provider direct calls when shared keys are configured.

@@ -9,7 +9,9 @@ SugarPy is a local notebook toolkit:
 ## Top-level layout
 - `src/sugarpy/`: Python package code (startup hooks, chemistry/math helpers, catalog loading, restricted server API).
 - `web/src/`: frontend app code.
-  Assistant orchestration lives under `web/src/ui/utils/assistant.ts`.
+  - Assistant orchestration still enters through `web/src/ui/utils/assistant.ts`, but shared assistant types/patch helpers now also live under `web/src/ui/assistant/`.
+  - Cell definitions and the registry-backed notebook foundation live under `web/src/ui/cells/`.
+  - Local preferences and theme infrastructure live under `web/src/ui/preferences/` and `web/src/ui/theme/`.
 - `web/public/functions.json`: built-in function catalog for autocomplete and function library UI.
 - `scripts/`: run/test/dev automation scripts.
 - `deploy/`: demo deployment examples (Nginx + systemd).

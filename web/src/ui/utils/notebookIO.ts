@@ -1,4 +1,5 @@
-import { CellModel, CellOutput } from '../App';
+import type { CellOutput, CellRecord } from '../cells/types';
+import { normalizeCellRecord } from '../cells/registry';
 
 export type SugarPyNotebookV1 = {
   version: 1;
@@ -6,7 +7,7 @@ export type SugarPyNotebookV1 = {
   name: string;
   trigMode: 'deg' | 'rad';
   defaultMathRenderMode?: 'exact' | 'decimal';
-  cells: Array<Omit<CellModel, 'isRunning'>>;
+  cells: Array<Omit<CellRecord, 'isRunning'>>;
   updatedAt: string;
 };
 
@@ -24,7 +25,7 @@ export type LocalStorageSaveResult =
       reason: 'storage-unavailable' | 'quota-exceeded' | 'write-failed';
     };
 
-const normalizeCells = (cells: CellModel[]): Array<Omit<CellModel, 'isRunning'>> =>
+const normalizeCells = (cells: CellRecord[]): Array<Omit<CellRecord, 'isRunning'>> =>
   cells.map(({ isRunning, ...rest }) => rest);
 
 const asText = (value: unknown) => {
@@ -134,7 +135,7 @@ export const serializeSugarPy = (params: {
   name: string;
   trigMode: 'deg' | 'rad';
   defaultMathRenderMode: 'exact' | 'decimal';
-  cells: CellModel[];
+  cells: CellRecord[];
 }): SugarPyNotebookV1 => ({
   version: 1,
   id: params.id,
@@ -145,31 +146,31 @@ export const serializeSugarPy = (params: {
   updatedAt: new Date().toISOString()
 });
 
-export const deserializeSugarPy = (data: SugarPyNotebookV1) => ({
-  id: data.id,
-  name: data.name,
-  trigMode: data.trigMode,
-  defaultMathRenderMode: data.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
-  cells: data.cells.map((cell) => ({
-    ...cell,
-    output: normalizeOutput((cell as any).output),
-    ui: {
-      outputCollapsed: cell.ui?.outputCollapsed ?? false,
-      ...(cell.type === 'math'
-        ? {
-            mathView:
-              cell.ui?.mathView === 'rendered' || cell.mathOutput
-                ? 'rendered'
-                : 'source'
-          }
-        : {})
-    },
-    isRunning: false
-  }))
-});
+export const deserializeSugarPy = (data: SugarPyNotebookV1) => {
+  const defaults = {
+    trigMode: data.trigMode,
+    defaultMathRenderMode: data.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact'
+  } as const;
+  return {
+    id: data.id,
+    name: data.name,
+    trigMode: defaults.trigMode,
+    defaultMathRenderMode: defaults.defaultMathRenderMode,
+    cells: data.cells.map((cell) =>
+      normalizeCellRecord(
+        {
+          ...cell,
+          output: normalizeOutput((cell as any).output),
+          isRunning: false
+        },
+        defaults
+      )
+    )
+  };
+};
 
-const stripRuntimeOutputs = (cell: Omit<CellModel, 'isRunning'>): Omit<CellModel, 'isRunning'> => {
-  const nextCell: Omit<CellModel, 'isRunning'> = { ...cell };
+const stripRuntimeOutputs = (cell: Omit<CellRecord, 'isRunning'>): Omit<CellRecord, 'isRunning'> => {
+  const nextCell: Omit<CellRecord, 'isRunning'> = { ...cell };
   delete nextCell.output;
   delete nextCell.mathOutput;
   delete nextCell.stoichOutput;
@@ -228,7 +229,7 @@ const formatCoeffLabel = (value?: number | null) => {
   return formatSig(value);
 };
 
-const stoichToMarkdown = (cell: CellModel) => {
+const stoichToMarkdown = (cell: CellRecord) => {
   const output = cell.stoichOutput;
   const reaction = output?.balanced ?? cell.stoichState?.reaction ?? '';
   const lines = ['### Stoichiometry Table', '', reaction, ''];
@@ -263,7 +264,7 @@ const stoichToMarkdown = (cell: CellModel) => {
   return lines.join('\n');
 };
 
-const regressionToMarkdown = (cell: CellModel) => {
+const regressionToMarkdown = (cell: CellRecord) => {
   const state = cell.regressionState;
   const output = cell.regressionOutput;
   const lines = ['### Regression', ''];
@@ -294,7 +295,7 @@ export const serializeIpynb = (params: {
   name: string;
   trigMode: 'deg' | 'rad';
   defaultMathRenderMode: 'exact' | 'decimal';
-  cells: CellModel[];
+  cells: CellRecord[];
 }) => {
   const cells = params.cells.map((cell) => {
     if (cell.type === 'stoich') {
@@ -391,7 +392,11 @@ export const serializeIpynb = (params: {
 
 export const deserializeIpynb = (data: any) => {
   const metadata = data?.metadata?.sugarpy ?? {};
-  const cells: CellModel[] = (data?.cells ?? []).map((cell: any, idx: number) => {
+  const defaults = {
+    trigMode: metadata.trigMode === 'rad' ? 'rad' : 'deg',
+    defaultMathRenderMode: metadata.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact'
+  } as const;
+  const cells: CellRecord[] = (data?.cells ?? []).map((cell: any, idx: number) => {
     const sugarpy = cell?.metadata?.sugarpy;
     if (sugarpy?.type === 'stoich') {
       return {
@@ -502,9 +507,9 @@ export const deserializeIpynb = (data: any) => {
   return {
     id: metadata.id ?? createNotebookId(),
     name: metadata.name ?? 'Untitled',
-    trigMode: metadata.trigMode === 'rad' ? 'rad' : 'deg',
-    defaultMathRenderMode: metadata.defaultMathRenderMode === 'decimal' ? 'decimal' : 'exact',
-    cells
+    trigMode: defaults.trigMode,
+    defaultMathRenderMode: defaults.defaultMathRenderMode,
+    cells: cells.map((cell) => normalizeCellRecord(cell, defaults))
   };
 };
 

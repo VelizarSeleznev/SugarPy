@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import createPlotlyComponent from 'react-plotly.js/factory';
 import Plotly from 'plotly.js-dist-min';
 import katex from 'katex';
-import { CellOutput } from '../App';
+import type { CellOutput } from '../cells/types';
 
 const Plot = createPlotlyComponent(Plotly as any);
 

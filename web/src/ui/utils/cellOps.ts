@@ -1,18 +1,18 @@
-import { CellModel } from '../App';
+import type { CellRecord } from '../cells/types';
 
-export function insertCellAbove(cells: CellModel[], id: string, newCell: CellModel) {
+export function insertCellAbove(cells: CellRecord[], id: string, newCell: CellRecord) {
   const idx = cells.findIndex((c) => c.id === id);
   if (idx === -1) return [...cells, newCell];
   return [...cells.slice(0, idx), newCell, ...cells.slice(idx)];
 }
 
-export function insertCellBelow(cells: CellModel[], id: string, newCell: CellModel) {
+export function insertCellBelow(cells: CellRecord[], id: string, newCell: CellRecord) {
   const idx = cells.findIndex((c) => c.id === id);
   if (idx === -1) return [...cells, newCell];
   return [...cells.slice(0, idx + 1), newCell, ...cells.slice(idx + 1)];
 }
 
-export function moveCellUp(cells: CellModel[], id: string) {
+export function moveCellUp(cells: CellRecord[], id: string) {
   const idx = cells.findIndex((c) => c.id === id);
   if (idx <= 0) return cells;
   const next = [...cells];
@@ -22,7 +22,7 @@ export function moveCellUp(cells: CellModel[], id: string) {
   return next;
 }
 
-export function moveCellDown(cells: CellModel[], id: string) {
+export function moveCellDown(cells: CellRecord[], id: string) {
   const idx = cells.findIndex((c) => c.id === id);
   if (idx === -1 || idx >= cells.length - 1) return cells;
   const next = [...cells];
@@ -32,7 +32,7 @@ export function moveCellDown(cells: CellModel[], id: string) {
   return next;
 }
 
-export function moveCellToIndex(cells: CellModel[], id: string, index: number) {
+export function moveCellToIndex(cells: CellRecord[], id: string, index: number) {
   const currentIndex = cells.findIndex((cell) => cell.id === id);
   if (currentIndex === -1) return cells;
 
@@ -44,6 +44,6 @@ export function moveCellToIndex(cells: CellModel[], id: string, index: number) {
   return next;
 }
 
-export function deleteCell(cells: CellModel[], id: string) {
+export function deleteCell(cells: CellRecord[], id: string) {
   return cells.filter((c) => c.id !== id);
 }

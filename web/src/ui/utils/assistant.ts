@@ -5,11 +5,13 @@ import type {
   AssistantSandboxResult
 } from './assistantSandbox.ts';
 import { buildAssistantProxyBaseUrl } from './backendApi';
+import type { AssistantOperation } from '../assistant/types';
+import type { CellKind } from '../cells/types';
 
 export type AssistantScope = 'notebook' | 'active';
 export type AssistantPreference = 'auto' | 'cas' | 'python' | 'explain';
 
-export type AssistantCellKind = 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
+export type AssistantCellKind = CellKind;
 
 export type NotebookCellSnapshot = {
   id: string;
@@ -30,38 +32,6 @@ export type NotebookAssistantContext = {
   cells: NotebookCellSnapshot[];
   activeCellId: string | null;
 };
-
-export type AssistantOperation =
-  | {
-      type: 'insert_cell';
-      index: number;
-      cellType: AssistantCellKind;
-      source: string;
-      reason?: string;
-    }
-  | {
-      type: 'update_cell';
-      cellId: string;
-      source: string;
-      reason?: string;
-    }
-  | {
-      type: 'delete_cell';
-      cellId: string;
-      reason?: string;
-    }
-  | {
-      type: 'move_cell';
-      cellId: string;
-      index: number;
-      reason?: string;
-    }
-  | {
-      type: 'set_notebook_defaults';
-      trigMode?: 'deg' | 'rad';
-      renderMode?: 'exact' | 'decimal';
-      reason?: string;
-    };
 
 export type AssistantPlan = {
   summary: string;
@@ -828,7 +798,16 @@ const PLAN_SCHEMA = {
         properties: {
           type: {
             type: 'STRING',
-            enum: ['insert_cell', 'update_cell', 'delete_cell', 'move_cell', 'set_notebook_defaults']
+            enum: [
+              'insert_cell',
+              'update_cell',
+              'patch_cell',
+              'replace_cell_editable',
+              'delete_cell',
+              'move_cell',
+              'set_notebook_defaults',
+              'patch_user_preferences'
+            ]
           },
           index: { type: 'NUMBER' },
           cellType: {
@@ -836,6 +815,9 @@ const PLAN_SCHEMA = {
             enum: ['code', 'markdown', 'math', 'stoich', 'regression']
           },
           source: { type: 'STRING' },
+          document: { type: 'OBJECT' },
+          config: { type: 'OBJECT' },
+          patch: { type: 'OBJECT' },
           cellId: { type: 'STRING' },
           trigMode: {
             type: 'STRING',
@@ -870,7 +852,16 @@ const OPENAI_PLAN_SCHEMA = {
         properties: {
           type: {
             type: 'string',
-            enum: ['insert_cell', 'update_cell', 'delete_cell', 'move_cell', 'set_notebook_defaults']
+            enum: [
+              'insert_cell',
+              'update_cell',
+              'patch_cell',
+              'replace_cell_editable',
+              'delete_cell',
+              'move_cell',
+              'set_notebook_defaults',
+              'patch_user_preferences'
+            ]
           },
           index: {
             type: ['number', 'null']
@@ -881,6 +872,15 @@ const OPENAI_PLAN_SCHEMA = {
           },
           source: {
             type: ['string', 'null']
+          },
+          document: {
+            type: ['object', 'null']
+          },
+          config: {
+            type: ['object', 'null']
+          },
+          patch: {
+            type: ['object', 'null']
           },
           cellId: {
             type: ['string', 'null']
@@ -897,7 +897,19 @@ const OPENAI_PLAN_SCHEMA = {
             type: ['string', 'null']
           }
         },
-        required: ['type', 'index', 'cellType', 'source', 'cellId', 'trigMode', 'renderMode', 'reason'],
+        required: [
+          'type',
+          'index',
+          'cellType',
+          'source',
+          'document',
+          'config',
+          'patch',
+          'cellId',
+          'trigMode',
+          'renderMode',
+          'reason'
+        ],
         additionalProperties: false
       }
     }
@@ -1039,11 +1051,26 @@ const truncateText = (value: string, limit: number) => {
   return `${value.slice(0, Math.max(0, limit - 1))}…`;
 };
 
+const getOperationSource = (operation: AssistantOperation) => {
+  if (operation.type === 'insert_cell' || operation.type === 'update_cell') {
+    return operation.source;
+  }
+  if (operation.type === 'replace_cell_editable') {
+    return typeof operation.document?.source === 'string' ? operation.document.source : '';
+  }
+  if (operation.type === 'patch_cell') {
+    return typeof operation.patch.document?.source === 'string' ? operation.patch.document.source : '';
+  }
+  return '';
+};
+
 const planHasPythonCodeOperations = (plan: AssistantPlan) =>
   plan.operations.some(
     (operation) =>
       (operation.type === 'insert_cell' && operation.cellType === 'code' && operation.source.trim()) ||
-      (operation.type === 'update_cell' && operation.source.trim())
+      (operation.type === 'update_cell' && operation.source.trim()) ||
+      ((operation.type === 'patch_cell' || operation.type === 'replace_cell_editable') &&
+        getOperationSource(operation).trim())
   );
 
 const planHasRunnableValidationOperations = (plan: AssistantPlan) =>
@@ -1052,7 +1079,9 @@ const planHasRunnableValidationOperations = (plan: AssistantPlan) =>
       (operation.type === 'insert_cell' &&
         (operation.cellType === 'code' || operation.cellType === 'math') &&
         operation.source.trim()) ||
-      (operation.type === 'update_cell' && operation.source.trim())
+      (operation.type === 'update_cell' && operation.source.trim()) ||
+      ((operation.type === 'patch_cell' || operation.type === 'replace_cell_editable') &&
+        getOperationSource(operation).trim())
   );
 
 const planUsesSolveInMathCells = (plan: AssistantPlan) =>
@@ -1099,16 +1128,22 @@ const MATH_ASSISTANT_SPEC = [
 
 const planHasUnsupportedMathSyntax = (plan: AssistantPlan) =>
   plan.operations.some(
-    (operation) =>
-      operation.type === 'insert_cell' &&
-      operation.cellType === 'math' &&
-      getUnsupportedMathPatterns(operation.source).length > 0
+    (operation) => {
+      const source = getOperationSource(operation);
+      const targetsMath =
+        (operation.type === 'insert_cell' && operation.cellType === 'math') ||
+        operation.type === 'update_cell' ||
+        operation.type === 'patch_cell' ||
+        operation.type === 'replace_cell_editable';
+      return targetsMath && getUnsupportedMathPatterns(source).length > 0;
+    }
   );
 
 const collectUnsupportedMathWarnings = (plan: AssistantPlan) =>
   plan.operations.flatMap((operation) => {
-    if (operation.type !== 'insert_cell' || operation.cellType !== 'math') return [];
-    const unsupported = getUnsupportedMathPatterns(operation.source);
+    const source = getOperationSource(operation);
+    if (!source) return [];
+    const unsupported = getUnsupportedMathPatterns(source);
     if (unsupported.length === 0) return [];
     return [`Unsupported Math-cell syntax detected: ${unsupported.join(', ')}.`];
   });
@@ -1199,7 +1234,9 @@ const buildPlanFromParts = (metadata: {
 
 const isRunnableOperation = (operation: AssistantOperation) =>
   (operation.type === 'insert_cell' && operation.cellType !== 'markdown') ||
-  operation.type === 'update_cell';
+  operation.type === 'update_cell' ||
+  operation.type === 'patch_cell' ||
+  operation.type === 'replace_cell_editable';
 
 const describeStepOperation = (operation: AssistantOperation) => {
   if (operation.reason?.trim()) return operation.reason.trim();
@@ -1211,7 +1248,10 @@ const describeStepOperation = (operation: AssistantOperation) => {
     const preview = previewText(operation.source, 80);
     return `Update cell${preview ? `: ${preview}` : ''}`;
   }
+  if (operation.type === 'patch_cell') return 'Patch editable cell data';
+  if (operation.type === 'replace_cell_editable') return 'Replace editable cell data';
   if (operation.type === 'set_notebook_defaults') return 'Update notebook defaults';
+  if (operation.type === 'patch_user_preferences') return 'Update local user preferences';
   if (operation.type === 'move_cell') return 'Reorder a cell';
   return 'Delete a cell';
 };
@@ -1236,7 +1276,7 @@ const buildPlanSteps = (operations: AssistantOperation[]) => {
 
   operations.forEach((operation) => {
     const currentHasRunnable = current.some(isRunnableOperation);
-    if (operation.type === 'set_notebook_defaults') {
+    if (operation.type === 'set_notebook_defaults' || operation.type === 'patch_user_preferences') {
       flush();
       current = [operation];
       flush();
@@ -3840,6 +3880,32 @@ const normalizePlan = (raw: any): AssistantPlan => {
           reason: item?.reason ? String(item.reason) : undefined
         };
       }
+      if (type === 'patch_cell') {
+        return {
+          type,
+          cellId: String(item?.cellId ?? ''),
+          patch:
+            item?.patch && typeof item.patch === 'object'
+              ? JSON.parse(JSON.stringify(item.patch))
+              : { document: {}, config: {} },
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'replace_cell_editable') {
+        return {
+          type,
+          cellId: String(item?.cellId ?? ''),
+          document:
+            item?.document && typeof item.document === 'object'
+              ? JSON.parse(JSON.stringify(item.document))
+              : {},
+          config:
+            item?.config && typeof item.config === 'object'
+              ? JSON.parse(JSON.stringify(item.config))
+              : {},
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
       if (type === 'delete_cell') {
         return {
           type,
@@ -3861,6 +3927,16 @@ const normalizePlan = (raw: any): AssistantPlan => {
           trigMode: item?.trigMode === 'rad' ? 'rad' : item?.trigMode === 'deg' ? 'deg' : undefined,
           renderMode:
             item?.renderMode === 'decimal' ? 'decimal' : item?.renderMode === 'exact' ? 'exact' : undefined,
+          reason: item?.reason ? String(item.reason) : undefined
+        };
+      }
+      if (type === 'patch_user_preferences') {
+        return {
+          type,
+          patch:
+            item?.patch && typeof item.patch === 'object'
+              ? JSON.parse(JSON.stringify(item.patch))
+              : {},
           reason: item?.reason ? String(item.reason) : undefined
         };
       }
@@ -3978,7 +4054,10 @@ export async function planNotebookChanges(params: {
     'You are generating a structured SugarPy notebook change set.',
     COMPACT_REFERENCE,
     'Return only operations that can be applied safely and deterministically.',
-    'Use only these operation types: insert_cell, update_cell, delete_cell, move_cell, set_notebook_defaults.',
+    'Use only these operation types: insert_cell, update_cell, patch_cell, replace_cell_editable, delete_cell, move_cell, set_notebook_defaults, patch_user_preferences.',
+    'Prefer patch_cell for structured cell data such as regression points, labels, model choice, stoich reaction inputs, and Math-cell config.',
+    'Use replace_cell_editable when a single bulk replacement of document/config is clearer than many small edits.',
+    'Never patch runtime outputs, errors, traces, or transient UI-only state.',
     'Prefer submitting the full plan in one submit_plan call.',
     'Use step-by-step planning tool calls only if you truly cannot produce the full plan in one response.',
     'For stoich cells, store the reaction text in source.',

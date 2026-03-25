@@ -1,5 +1,5 @@
 import React from 'react';
-import { CellModel } from '../App';
+import type { CellRecord } from '../cells/types';
 import { CodeEditor } from './CodeEditor';
 import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
@@ -13,7 +13,7 @@ import type { EditorCompletionItem } from '../utils/editorSymbols';
 import { extractCodeSymbols } from '../utils/editorSymbols';
 
 type Props = {
-  cell: CellModel;
+  cell: CellRecord;
   isActive: boolean;
   isLastActive: boolean;
   onActivate: () => void;
@@ -44,14 +44,14 @@ type Props = {
   onSetMathTrigMode: (mode: 'deg' | 'rad') => void;
 };
 
-const statusFromCell = (cell: CellModel) => {
+const statusFromCell = (cell: CellRecord) => {
   if (cell.isRunning) return '*';
   if (cell.type === 'markdown' || cell.type === 'stoich' || cell.type === 'regression') return '';
   if (cell.execCount === null || cell.execCount === undefined) return '';
   return String(cell.execCount);
 };
 
-const hasOutput = (cell: CellModel) => !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.regressionOutput);
+const hasOutput = (cell: CellRecord) => !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.regressionOutput);
 
 const TrashIcon = () => (
   <svg

@@ -5,8 +5,13 @@ import { NotebookCell } from './components/NotebookCell';
 import { AssistantDrawer, AssistantDrawerSection } from './components/AssistantDrawer';
 import { OnboardingCoachmark } from './components/OnboardingCoachmark';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { applyAssistantOperations } from './assistant/patches';
+import type { AssistantOperation } from './assistant/types';
 import { buildSuggestions } from './utils/suggestUtils';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
+import { createCellRecord } from './cells/registry';
+import type { CellOutput, CellRecord } from './cells/types';
+import { useUserPreferences } from './preferences/useUserPreferences';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
 import {
@@ -22,7 +27,6 @@ import {
   DEFAULT_ASSISTANT_MODEL,
   detectAssistantProvider,
   normalizeThinkingLevel,
-  AssistantOperation,
   AssistantPlan,
   AssistantThinkingLevel,
   planNotebookChanges
@@ -83,69 +87,8 @@ import {
   type EditorCompletionItem
 } from './utils/editorSymbols';
 
-export type CellModel = {
-  id: string;
-  source: string;
-  output?: CellOutput;
-  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
-  execCount?: number;
-  isRunning?: boolean;
-  mathOutput?: {
-    render_cache?: {
-      exact: { steps: string[]; value?: string | null };
-      decimal: { steps: string[]; value?: string | null };
-    } | null;
-    kind: 'expression' | 'equation' | 'assignment';
-    steps: string[];
-    value?: string;
-    error?: string;
-    warnings?: string[];
-    normalized_source?: string;
-    equation_latex?: string | null;
-    assigned?: string | null;
-    mode: 'deg' | 'rad';
-    plotly_figure?: unknown;
-    trace?: Array<{
-      line_start: number;
-      source: string;
-      kind: 'expression' | 'equation' | 'assignment';
-      steps: string[];
-      value?: string | null;
-      plotly_figure?: unknown;
-      render_cache?: {
-        exact: { steps: string[]; value?: string | null };
-        decimal: { steps: string[]; value?: string | null };
-      } | null;
-    }>;
-  };
-  mathRenderMode?: 'exact' | 'decimal';
-  mathTrigMode?: 'deg' | 'rad';
-  stoichState?: StoichState;
-  stoichOutput?: StoichOutput;
-  regressionState?: RegressionState;
-  regressionOutput?: RegressionOutput;
-  assistantMeta?: {
-    runId: string;
-    stepId: string;
-    status: 'draft' | 'validating' | 'applied' | 'failed';
-    isRunnable: boolean;
-  };
-  ui?: {
-    outputCollapsed?: boolean;
-    mathView?: 'source' | 'rendered';
-  };
-};
-
-export type CellOutput =
-  | {
-      type: 'mime';
-      data: Record<string, unknown>;
-    }
-  | {
-      type: 'error';
-      ename: string;
-      evalue: string;
-    };
+export type CellModel = CellRecord;
+export type { CellOutput };
 
 type InsertCellType = 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
 
@@ -425,6 +368,7 @@ const PhotoImportIcon = () => (
 );
 
 function App() {
+  const { patchPreferences } = useUserPreferences();
   const [assistantEntryMode, setAssistantEntryMode] = useState<'photo-import' | 'chat'>('photo-import');
   const [assistantDrawerSection, setAssistantDrawerSection] = useState<AssistantDrawerSection>('hub');
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
@@ -1701,41 +1645,14 @@ function App() {
     type: 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
     source = '',
     indexSeed?: number
-  ): CellModel => {
-    const idSuffix = indexSeed ? `${indexSeed}-${Date.now()}` : `${Date.now()}`;
-    if (type === 'stoich') {
-      return {
-        id: `cell-${idSuffix}`,
-        source,
-        type,
-        stoichState: createStoichState(),
-        ui: {
-          outputCollapsed: false
-        }
-      };
-    }
-    if (type === 'regression') {
-      return {
-        id: `cell-${idSuffix}`,
-        source,
-        type,
-        regressionState: createRegressionState(),
-        ui: {
-          outputCollapsed: false
-        }
-      };
-    }
-    return {
-      id: `cell-${idSuffix}`,
-      source,
-      type,
-      ...(type === 'math' ? { mathRenderMode: defaultMathRenderMode, mathTrigMode: trigMode } : {}),
-      ui: {
-        outputCollapsed: false,
-        ...(type === 'math' ? { mathView: 'source' as const } : {})
-      }
-    };
-  };
+  ): CellModel =>
+    createCellRecord(type, {
+      trigMode,
+      defaultMathRenderMode
+    }, {
+      id: `cell-${indexSeed ? `${indexSeed}-` : ''}${Date.now()}`,
+      source
+    });
 
   const getInsertionAnchorId = () => activeCellId || lastActiveCellId;
 
@@ -1905,8 +1822,23 @@ function App() {
     lastActiveCellIdRef.current = snapshot.lastActiveCellId;
   };
 
+  const getAssistantOperationSource = (operation: AssistantOperation) => {
+    if (operation.type === 'insert_cell' || operation.type === 'update_cell') return operation.source;
+    if (operation.type === 'replace_cell_editable') {
+      return typeof operation.document?.source === 'string' ? operation.document.source : '';
+    }
+    if (operation.type === 'patch_cell') {
+      const document = operation.patch.document as Record<string, unknown> | undefined;
+      return typeof document?.source === 'string' ? document.source : '';
+    }
+    return '';
+  };
+
   const isRunnableAssistantOperation = (operation: AssistantOperation) =>
-    (operation.type === 'insert_cell' && operation.cellType !== 'markdown') || operation.type === 'update_cell';
+    (operation.type === 'insert_cell' && operation.cellType !== 'markdown') ||
+    operation.type === 'update_cell' ||
+    operation.type === 'patch_cell' ||
+    operation.type === 'replace_cell_editable';
 
   const isReplayableSandboxCell = (cell: AssistantSandboxNotebookCell) =>
     (cell.type === 'code' || cell.type === 'math') && cell.source.trim().length > 0;
@@ -1942,12 +1874,18 @@ function App() {
         return `Add ${operation.cellType} cell at ${operation.index + 1}`;
       case 'update_cell':
         return `Update cell ${operation.cellId}`;
+      case 'patch_cell':
+        return `Patch cell ${operation.cellId}`;
+      case 'replace_cell_editable':
+        return `Replace editable state for cell ${operation.cellId}`;
       case 'delete_cell':
         return `Delete cell ${operation.cellId}`;
       case 'move_cell':
         return `Move cell ${operation.cellId} to ${operation.index + 1}`;
       case 'set_notebook_defaults':
         return 'Update notebook defaults';
+      case 'patch_user_preferences':
+        return 'Update local preferences';
       default:
         return operation.type;
     }
@@ -2037,6 +1975,15 @@ function App() {
         )
       };
     }
+    if (operation.type === 'patch_cell' || operation.type === 'replace_cell_editable') {
+      const nextSource = getAssistantOperationSource(operation);
+      if (!nextSource) return { cells: nextCells };
+      return {
+        cells: nextCells.map((cell) =>
+          cell.id === operation.cellId ? { ...cell, source: nextSource } : cell
+        )
+      };
+    }
     if (operation.type === 'delete_cell') {
       return { cells: nextCells.filter((cell) => cell.id !== operation.cellId) };
     }
@@ -2083,22 +2030,35 @@ function App() {
           if (operation.renderMode) workingRenderMode = operation.renderMode;
           continue;
         }
+        if (operation.type === 'patch_user_preferences') {
+          continue;
+        }
 
         if (!isRunnableAssistantOperation(operation)) {
           workingCells = applyDraftOperationToSandboxCells(workingCells, operation).cells;
           continue;
         }
 
-        const sandboxSource = operation.source;
+        const sandboxSource = getAssistantOperationSource(operation);
         const replayableCellIds = workingCells
           .filter((cell) => {
             if (!isReplayableSandboxCell(cell)) return false;
-            return operation.type !== 'update_cell' || cell.id !== operation.cellId;
+            return (
+              (operation.type !== 'update_cell' &&
+                operation.type !== 'patch_cell' &&
+                operation.type !== 'replace_cell_editable') ||
+              cell.id !== operation.cellId
+            );
           })
           .map((cell) => cell.id);
         const usesReplayContext =
           replayableCellIds.length > 0 &&
-          (operation.type === 'update_cell' || steps.some((entry) => entry.isRunnable));
+          (
+            operation.type === 'update_cell' ||
+            operation.type === 'patch_cell' ||
+            operation.type === 'replace_cell_editable' ||
+            steps.some((entry) => entry.isRunnable)
+          );
         const request: AssistantSandboxRequest =
           operation.type === 'insert_cell' && operation.cellType === 'math'
             ? {
@@ -2110,7 +2070,10 @@ function App() {
                 selectedCellIds: usesReplayContext ? replayableCellIds : [],
                 timeoutMs: 5000
               }
-            : operation.type === 'update_cell' && workingCells.find((cell) => cell.id === operation.cellId)?.type === 'math'
+            : (operation.type === 'update_cell' ||
+                operation.type === 'patch_cell' ||
+                operation.type === 'replace_cell_editable') &&
+              workingCells.find((cell) => cell.id === operation.cellId)?.type === 'math'
               ? {
                   target: 'math',
                   source: sandboxSource,
@@ -2169,8 +2132,8 @@ function App() {
         warnings,
         errors,
         sourcePreview: step.operations
-          .filter((operation) => 'source' in operation && operation.source)
-          .map((operation) => operation.source)
+          .map((operation) => getAssistantOperationSource(operation))
+          .filter(Boolean)
           .join('\n\n'),
         changes: step.operations.map(describeAssistantOperationChange),
         isRunnable: step.operations.some(isRunnableAssistantOperation)
@@ -3171,95 +3134,24 @@ function App() {
     let nextActiveCellId = activeCellIdRef.current;
     let nextLastActiveCellId = lastActiveCellIdRef.current;
 
-    const makeStoichCell = (source: string, indexSeed?: number) => {
-      const cell = createCell('stoich', '', indexSeed);
-      return {
-        ...cell,
-        stoichState: createStoichState(source)
-      };
-    };
-
-    const makeRegressionCell = (indexSeed?: number) => createCell('regression', '', indexSeed);
-
-    const createFromOperation = (operation: Extract<AssistantOperation, { type: 'insert_cell' }>) => {
-      if (operation.cellType === 'stoich') {
-        return makeStoichCell(operation.source, operation.index + 1);
-      }
-      if (operation.cellType === 'regression') {
-        return makeRegressionCell(operation.index + 1);
-      }
-      return createCell(operation.cellType, operation.source, operation.index + 1);
-    };
-
-    stepsToApply.forEach((step) => {
-      step.operations.forEach((operation) => {
-        if (operation.type === 'insert_cell') {
-          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-          const nextCell = createFromOperation(operation);
-          nextCells = [...nextCells.slice(0, bounded), nextCell, ...nextCells.slice(bounded)];
-          nextActiveCellId = nextCell.id;
-          nextLastActiveCellId = nextCell.id;
-          return;
-        }
-        if (operation.type === 'update_cell') {
-          nextCells = nextCells.map((cell) => {
-            if (cell.id !== operation.cellId) return cell;
-            if (cell.type === 'stoich') {
-              return {
-                ...cell,
-                source: '',
-                stoichState: createStoichState(operation.source),
-                stoichOutput: undefined
-              };
-            }
-            if (cell.type === 'regression') {
-              return {
-                ...cell,
-                regressionOutput: undefined,
-                assistantMeta: undefined
-              };
-            }
-            return {
-              ...cell,
-              source: operation.source,
-              output: undefined,
-              mathOutput: cell.type === 'math' ? undefined : cell.mathOutput,
-              stoichOutput: cell.type === 'stoich' ? undefined : cell.stoichOutput,
-              regressionOutput: cell.type === 'regression' ? undefined : cell.regressionOutput,
-              assistantMeta: undefined
-            };
-          });
-          nextActiveCellId = operation.cellId;
-          nextLastActiveCellId = operation.cellId;
-          return;
-        }
-        if (operation.type === 'delete_cell') {
-          nextCells = nextCells.filter((cell) => cell.id !== operation.cellId);
-          if (nextActiveCellId === operation.cellId) {
-            nextActiveCellId = nextCells[0]?.id ?? null;
-          }
-          if (nextLastActiveCellId === operation.cellId) {
-            nextLastActiveCellId = nextActiveCellId ?? nextCells[0]?.id ?? null;
-          }
-          return;
-        }
-        if (operation.type === 'move_cell') {
-          const index = nextCells.findIndex((cell) => cell.id === operation.cellId);
-          if (index === -1) return;
-          const [cell] = nextCells.splice(index, 1);
-          const bounded = Math.max(0, Math.min(operation.index, nextCells.length));
-          nextCells.splice(bounded, 0, { ...cell, assistantMeta: undefined });
-          nextCells = [...nextCells];
-          nextActiveCellId = operation.cellId;
-          nextLastActiveCellId = operation.cellId;
-          return;
-        }
-        if (operation.type === 'set_notebook_defaults') {
-          if (operation.trigMode) nextTrigMode = operation.trigMode;
-          if (operation.renderMode) nextRenderMode = operation.renderMode;
-        }
-      });
+    const applied = applyAssistantOperations({
+      cells: nextCells,
+      operations: stepsToApply.flatMap((step) => step.operations),
+      defaults: {
+        trigMode: nextTrigMode,
+        defaultMathRenderMode: nextRenderMode
+      },
+      activeCellId: nextActiveCellId,
+      lastActiveCellId: nextLastActiveCellId
     });
+    nextCells = applied.cells.map((cell) => ({ ...cell, assistantMeta: undefined }));
+    nextTrigMode = applied.defaults.trigMode;
+    nextRenderMode = applied.defaults.defaultMathRenderMode;
+    nextActiveCellId = applied.activeCellId;
+    nextLastActiveCellId = applied.lastActiveCellId;
+    if (applied.preferencesPatch) {
+      patchPreferences(applied.preferencesPatch as never);
+    }
 
     setCells(nextCells);
     setTrigMode(nextTrigMode);
