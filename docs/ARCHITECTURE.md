@@ -6,7 +6,8 @@
 - Python domain logic lives in `src/sugarpy/`.
 - Restricted backend API enters through `src/sugarpy/server_extension.py`, which now delegates config, storage, execution, sandbox, proxy, and security work to `src/sugarpy/server/`.
 - Assistant orchestration for model calls and structured notebook edits still enters through `web/src/ui/utils/assistant.ts`.
-  - Shared assistant operation contracts and patch application helpers now live under `web/src/ui/assistant/`.
+  - `assistant.ts` is now a thinner orchestration entrypoint over focused assistant modules in `web/src/ui/assistant/`.
+  - Assistant prompts, transport clients, inspection/tool-loop logic, schemas, patch helpers, validation helpers, and session/runtime support are split into separate modules instead of being embedded in one file.
   - OpenAI Responses requests use a stream-activity timeout: new SSE chunks reset the timer, but stalled streams are aborted.
   - Photo import requests may attach an ordered set of browser-prepared image inputs, including PDF pages rendered client-side into page previews before the OpenAI request is sent.
 - Frontend cell behavior is being normalized behind registry-backed cell definitions under `web/src/ui/cells/`.
