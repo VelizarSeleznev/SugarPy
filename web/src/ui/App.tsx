@@ -22,6 +22,15 @@ import {
   type AssistantRunTrace
 } from './assistant/session';
 import type { AssistantOperation } from './assistant/types';
+import {
+  buildValidationSummary,
+  cloneSandboxCells,
+  createValidationRequest,
+  describeAssistantOperationChange,
+  getAssistantOperationSource,
+  isReplayableSandboxCell,
+  isRunnableAssistantOperation
+} from './assistant/validation';
 import { buildSuggestions } from './utils/suggestUtils';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
 import type { CellOutput, CellRecord } from './cells/types';
@@ -39,6 +48,7 @@ import {
   type AssistantSnapshot
 } from './notebook/document';
 import { useNotebookPersistence } from './notebook/useNotebookPersistence';
+import { useNotebookRuntime } from './notebook/useNotebookRuntime';
 import { useUserPreferences } from './preferences/useUserPreferences';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
@@ -65,14 +75,7 @@ import {
   buildAssistantBootstrapCode,
   runAssistantSandbox as runIsolatedAssistantSandbox
 } from './utils/assistantSandbox';
-import {
-  deleteNotebookRuntime,
-  executeNotebookCell,
-  fetchRuntimeConfig,
-  interruptNotebookRuntime,
-  restartNotebookRuntime,
-  SugarPyRuntimeConfig
-} from './utils/backendApi';
+import { SugarPyRuntimeConfig } from './utils/backendApi';
 import {
   createNotebookId,
   removeStorageItem,
@@ -216,14 +219,6 @@ const matchesAssistantProvider = (apiKey: string, model: string) => {
 
 const getAssistantTraceStorageKey = (id: string) => `${ASSISTANT_TRACE_STORAGE_PREFIX}${id}`;
 
-const isCanceledFutureError = (error: unknown) => {
-  if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('Canceled future for execute_request message before replies were done');
-};
-
-const CELL_EXECUTION_TIMEOUT_MS = 20_000;
-
 const readOptionalStorageItem = (key: string) => {
   try {
     return window.localStorage.getItem(key);
@@ -284,7 +279,6 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string>('');
-  const [runtimeNotice, setRuntimeNotice] = useState<string>('');
   const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [lastActiveCellId, setLastActiveCellId] = useState<string | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
@@ -503,79 +497,47 @@ function App() {
       flushRef: assistantTraceFlushRef
     });
   const assistantBootstrapCode = useMemo(() => buildAssistantBootstrapCode(allFunctions), [allFunctions]);
-
-  const connectBackend = async () => {
-    if (connectingRef.current) return;
-    connectingRef.current = true;
-    setStatus('connecting');
-    setStatusDetail('Checking restricted runtime...');
-    setErrorMsg('');
-    try {
-      const config = await fetchRuntimeConfig();
-      setRuntimeConfig(config);
-      setStatus('connected');
-      setStatusDetail(config.mode ? `Mode: ${config.mode}` : 'Restricted runtime ready');
-      setErrorMsg('');
-    } catch (err) {
-      setStatus('error');
-      setStatusDetail('');
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to connect to SugarPy backend.');
-    } finally {
-      connectingRef.current = false;
-    }
-  };
-
-  const activeKernel = status === 'connected';
-  const hasRunningCells = cells.some((cell) => !!cell.isRunning);
   const isDraggingCells = !!dragState;
-
-  const clearRunningState = (message: string) => {
-    setCells((prev) =>
-      prev.map((cell) => {
-        if (!cell.isRunning) return cell;
-        const nextCell: CellModel = { ...cell, isRunning: false };
-        if (cell.type === 'math') {
-          nextCell.mathOutput = {
-            kind: cell.mathOutput?.kind ?? 'expression',
-            steps: [],
-            error: message,
-            mode: cell.mathTrigMode ?? trigModeRef.current,
-            warnings: []
-          };
-          return nextCell;
-        }
-        if (cell.type === 'stoich') {
-          nextCell.stoichOutput = {
-            ok: false,
-            error: message,
-            species: []
-          };
-          return nextCell;
-        }
-        if (cell.type === 'regression') {
-          nextCell.regressionOutput = {
-            ok: false,
-            model: cell.regressionState?.model ?? 'auto',
-            error: message,
-            points: [],
-            invalid_rows: []
-          };
-          return nextCell;
-        }
-        nextCell.output = {
-          type: 'error',
-          ename: 'ExecutionStopped',
-          evalue: message
-        };
-        return nextCell;
-      })
-    );
-    setIsRunningAll(false);
-  };
-
-  const showRuntimeResetNotice = (message: string) => {
-    setRuntimeNotice(message);
-  };
+  const {
+    runtimeNotice,
+    connectBackend,
+    activeKernel,
+    hasRunningCells,
+    stopNotebookRuntimeExecution,
+    handleRestartNotebookRuntime,
+    handleDeleteNotebookRuntime,
+    runCell,
+    runMathCell,
+    runStoichCell,
+    runRegressionCell,
+    runAllCells
+  } = useNotebookRuntime({
+    status,
+    notebookId,
+    trigMode,
+    defaultMathRenderMode,
+    cells,
+    execCounter,
+    setCells,
+    setExecCounter,
+    setUserFunctions,
+    setStatus,
+    setStatusDetail,
+    setErrorMsg,
+    setSyncMessage,
+    setIsRunningAll,
+    isRunningAll,
+    setRuntimeConfig,
+    cellsRef,
+    trigModeRef,
+    renderModeRef,
+    connectingRef,
+    connectOnceRef: connectOnce,
+    stopRunAllRequestedRef,
+    executionGenerationRef,
+    closeMenus: () => setHeaderMenuOpen(false),
+    activateCell
+  });
 
   const getDragInsertionIndex = (clientY: number) => {
     const stack = notebookStackRef.current;
@@ -729,65 +691,6 @@ function App() {
     return !!target.closest('.cell-row-shell, .cell-shell, .cell-gutter, .cell-main');
   };
 
-  const invalidateActiveExecutions = () => {
-    executionGenerationRef.current += 1;
-    stopRunAllRequestedRef.current = true;
-  };
-
-  const stopNotebookRuntimeExecution = async () => {
-    invalidateActiveExecutions();
-    try {
-      const runtime = await interruptNotebookRuntime(notebookId);
-      const restartedAfterInterrupt = runtime.sessionState === 'restarted-after-interrupt';
-      const message = runtime.interrupted
-        ? restartedAfterInterrupt
-          ? 'Execution interrupted. Runtime restarted to clear the busy kernel.'
-          : 'Execution interrupted.'
-        : runtime.error || 'Runtime interrupt was requested.';
-      clearRunningState(message);
-      if (restartedAfterInterrupt) {
-        showRuntimeResetNotice('Runtime restarted after interrupt. Previous outputs may be stale; rerun setup cells or use Run All.');
-      }
-      setSyncMessage(
-        runtime.interrupted
-          ? restartedAfterInterrupt
-            ? 'Runtime interrupted and restarted.'
-            : 'Runtime interrupt sent.'
-          : message
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to interrupt runtime.';
-      clearRunningState(message);
-      setSyncMessage(message);
-    }
-  };
-
-  const handleRestartNotebookRuntime = async () => {
-    invalidateActiveExecutions();
-    setHeaderMenuOpen(false);
-    try {
-      await restartNotebookRuntime(notebookId);
-      clearRunningState('Runtime restarted. Rerun setup cells or use Run All.');
-      showRuntimeResetNotice('Runtime restarted. Previous outputs belong to the old kernel; rerun setup cells or use Run All.');
-      setSyncMessage('Runtime restarted.');
-    } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : 'Failed to restart runtime.');
-    }
-  };
-
-  const handleDeleteNotebookRuntime = async () => {
-    invalidateActiveExecutions();
-    setHeaderMenuOpen(false);
-    try {
-      await deleteNotebookRuntime(notebookId);
-      clearRunningState('Runtime deleted. The next execution will start a fresh runtime.');
-      showRuntimeResetNotice('Runtime deleted. The next run will start a fresh kernel, so existing outputs may be stale.');
-      setSyncMessage('Runtime deleted.');
-    } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : 'Failed to delete runtime.');
-    }
-  };
-
   useEffect(() => {
     if (cells.length === 0) {
       setActiveCellId(null);
@@ -802,12 +705,6 @@ function App() {
       setLastActiveCellId(activeCellId && cells.some((cell) => cell.id === activeCellId) ? activeCellId : cells[0].id);
     }
   }, [cells, activeCellId, lastActiveCellId]);
-
-  useEffect(() => {
-    if (connectOnce.current) return;
-    connectOnce.current = true;
-    connectBackend().catch(() => undefined);
-  }, []);
 
   useEffect(() => {
     const updateEligibility = () => {
@@ -991,377 +888,6 @@ function App() {
     };
   }, []);
 
-  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich' | 'regression') =>
-    cellsRef.current.map((cell) =>
-      cell.id === cellId
-        ? {
-            ...cell,
-            type,
-            source,
-            ...(type === 'stoich'
-              ? {
-                  stoichState: {
-                    reaction: cell.stoichState?.reaction ?? source,
-                    inputs: cell.stoichState?.inputs ?? {}
-                  }
-                }
-              : type === 'regression'
-                ? {
-                    regressionState: cell.regressionState ?? createRegressionState()
-                  }
-              : {})
-          }
-        : cell
-    );
-
-  const applyExecutionResult = (cellId: string, response: SugarPyExecutionResponse, countExecution = true) => {
-    const shouldAnnounceFreshRuntime = response.freshRuntime && execCounter > 0;
-    const updateCellState = (nextExecCount?: number) => {
-      setCells((prev) =>
-        prev.map((cell) => {
-          if (cell.id !== cellId) return cell;
-          if (response.cellType === 'math') {
-            return {
-              ...cell,
-              isRunning: false,
-              execCount: nextExecCount ?? cell.execCount,
-              mathOutput: response.mathOutput as any,
-              output: response.output as any,
-              ui: {
-                ...cell.ui,
-                outputCollapsed: false,
-                mathView: 'rendered'
-              }
-            };
-          }
-          if (response.cellType === 'stoich') {
-            return {
-              ...cell,
-              isRunning: false,
-              execCount: nextExecCount ?? cell.execCount,
-              stoichOutput: response.stoichOutput as any,
-              ui: {
-                ...cell.ui,
-                outputCollapsed: false
-              }
-            };
-          }
-          if (response.cellType === 'regression') {
-            return {
-              ...cell,
-              isRunning: false,
-              execCount: nextExecCount ?? cell.execCount,
-              regressionOutput: response.regressionOutput as any,
-              output: response.output as any,
-              ui: {
-                ...cell.ui,
-                outputCollapsed: false
-              }
-            };
-          }
-          return {
-            ...cell,
-            isRunning: false,
-            execCount: nextExecCount ?? cell.execCount,
-            output: response.output as any,
-            ui: {
-              ...cell.ui,
-              outputCollapsed: false
-            }
-          };
-        })
-      );
-    };
-    setRuntimeNotice('');
-    if (countExecution && response.execCountIncrement) {
-      setExecCounter((prev) => {
-        const next = prev + 1;
-        updateCellState(next);
-        return next;
-      });
-    } else {
-      updateCellState();
-    }
-    if (shouldAnnounceFreshRuntime) {
-      setSyncMessage('Fresh runtime started. Rerun setup cells or use Run All.');
-      showRuntimeResetNotice('Fresh runtime started. Kernel state was reset, so rerun setup cells or use Run All.');
-    }
-  };
-
-  const runCell = async (cellId: string, code: string, showOutput = true, countExecution = true) => {
-    if (!activeKernel) return;
-    const executionGeneration = executionGenerationRef.current;
-    setRuntimeNotice('');
-    setCells((prev) =>
-      prev.map((cell) =>
-        cell.id === cellId
-          ? {
-              ...cell,
-              source: code,
-              isRunning: true,
-              output: undefined,
-              ui: {
-                ...cell.ui,
-                outputCollapsed: false
-              }
-            }
-          : cell
-      )
-    );
-    try {
-      const response = await executeNotebookCell({
-        notebookId,
-        cells: buildExecutionCells(cellId, code, 'code') as Array<Record<string, unknown>>,
-        targetCellId: cellId,
-        trigMode,
-        defaultMathRenderMode,
-        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
-      });
-      if (executionGeneration !== executionGenerationRef.current) return;
-      if (showOutput) {
-        applyExecutionResult(cellId, response, countExecution);
-      }
-      const defs = extractCodeSymbols(code, 180)
-        .filter((item) => item.type === 'function')
-        .map((item) => item.label);
-      if (defs.length > 0) {
-        setUserFunctions((prev) => Array.from(new Set([...prev, ...defs])));
-      }
-    } catch (error) {
-      if (executionGeneration !== executionGenerationRef.current) return;
-      setCells((prev) =>
-        prev.map((cell) =>
-          cell.id === cellId
-            ? {
-                ...cell,
-                isRunning: false,
-                output: {
-                  type: 'error',
-                  ename: 'ExecutionError',
-                  evalue: error instanceof Error ? error.message : String(error)
-                }
-              }
-            : cell
-        )
-      );
-    }
-  };
-
-  const runMathCell = async (
-    cellId: string,
-    source: string,
-    renderModeOverride?: 'exact' | 'decimal',
-    trigModeOverride?: 'deg' | 'rad',
-    preserveOutput = false
-  ) => {
-    if (!activeKernel) return;
-    const executionGeneration = executionGenerationRef.current;
-    setRuntimeNotice('');
-    const cell = cells.find((entry) => entry.id === cellId);
-    const renderMode =
-      renderModeOverride ??
-      (cell?.mathRenderMode === 'decimal' ? 'decimal' : defaultMathRenderMode);
-    const mode = trigModeOverride ?? cell?.mathTrigMode ?? trigMode;
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId
-          ? {
-              ...c,
-              isRunning: true,
-              ...(preserveOutput ? {} : { mathOutput: undefined, output: undefined }),
-              ui: {
-                ...c.ui,
-                outputCollapsed: false
-              }
-            }
-          : c
-      )
-    );
-    try {
-      const response = await executeNotebookCell({
-        notebookId,
-        cells: buildExecutionCells(cellId, source, 'math') as Array<Record<string, unknown>>,
-        targetCellId: cellId,
-        trigMode,
-        defaultMathRenderMode,
-        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
-      });
-      if (executionGeneration !== executionGenerationRef.current) return;
-      applyExecutionResult(cellId, response, true);
-    } catch (error) {
-      if (executionGeneration !== executionGenerationRef.current) return;
-      setCells((prev) =>
-        prev.map((c) =>
-          c.id === cellId
-            ? {
-                ...c,
-                isRunning: false,
-                mathOutput: {
-                  kind: 'expression',
-                  steps: [],
-                  error: isCanceledFutureError(error) ? 'Kernel execution was canceled.' : String(error),
-                  mode,
-                  warnings: []
-                }
-              }
-            : c
-        )
-      );
-    }
-  };
-
-  const runStoichCell = async (cellId: string, state: StoichState) => {
-    if (!activeKernel) return;
-    const executionGeneration = executionGenerationRef.current;
-    setRuntimeNotice('');
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId
-          ? {
-              ...c,
-              isRunning: true,
-              ui: {
-                ...c.ui,
-                outputCollapsed: false
-              }
-            }
-          : c
-      )
-    );
-    try {
-      const nextCells = cellsRef.current.map((cell) =>
-        cell.id === cellId
-          ? {
-              ...cell,
-              type: 'stoich',
-              stoichState: state
-            }
-          : cell
-      );
-      const response = await executeNotebookCell({
-        notebookId,
-        cells: nextCells as Array<Record<string, unknown>>,
-        targetCellId: cellId,
-        trigMode,
-        defaultMathRenderMode,
-        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
-      });
-      if (executionGeneration !== executionGenerationRef.current) return;
-      applyExecutionResult(cellId, response, true);
-    } catch (error) {
-      if (executionGeneration !== executionGenerationRef.current) return;
-      setCells((prev) =>
-        prev.map((c) =>
-          c.id === cellId
-            ? { ...c, isRunning: false, stoichOutput: { ok: false, error: String(error), species: [] } }
-            : c
-        )
-      );
-    }
-  };
-
-  const runRegressionCell = async (cellId: string, state: RegressionState) => {
-    if (!activeKernel) return;
-    const executionGeneration = executionGenerationRef.current;
-    setRuntimeNotice('');
-    setCells((prev) =>
-      prev.map((c) =>
-        c.id === cellId
-          ? {
-              ...c,
-              isRunning: true,
-              ui: {
-                ...c.ui,
-                outputCollapsed: false
-              }
-            }
-          : c
-      )
-    );
-    try {
-      const nextCells = cellsRef.current.map((cell) =>
-        cell.id === cellId
-          ? {
-              ...cell,
-              type: 'regression',
-              regressionState: state
-            }
-          : cell
-      );
-      const response = await executeNotebookCell({
-        notebookId,
-        cells: nextCells as Array<Record<string, unknown>>,
-        targetCellId: cellId,
-        trigMode,
-        defaultMathRenderMode,
-        timeoutMs: CELL_EXECUTION_TIMEOUT_MS
-      });
-      if (executionGeneration !== executionGenerationRef.current) return;
-      applyExecutionResult(cellId, response, true);
-    } catch (error) {
-      if (executionGeneration !== executionGenerationRef.current) return;
-      setCells((prev) =>
-        prev.map((c) =>
-          c.id === cellId
-            ? {
-                ...c,
-                isRunning: false,
-                regressionOutput: {
-                  ok: false,
-                  model: c.regressionState?.model ?? 'auto',
-                  error: String(error),
-                  points: [],
-                  invalid_rows: []
-                }
-              }
-            : c
-        )
-      );
-    }
-  };
-
-  const runAllCells = async () => {
-    if (isRunningAll) return;
-    if (!activeKernel) {
-      await connectBackend();
-      if (status !== 'connected') return;
-    }
-    stopRunAllRequestedRef.current = false;
-    setIsRunningAll(true);
-    try {
-      const queue = [...cells];
-      for (const cell of queue) {
-        if (stopRunAllRequestedRef.current) break;
-        activateCell(cell.id);
-        if (cell.type === 'markdown') continue;
-        if (cell.type === 'math') {
-          await runMathCell(
-            cell.id,
-            cell.source,
-            cell.mathRenderMode ?? defaultMathRenderMode,
-            cell.mathTrigMode ?? trigMode
-          );
-          if (stopRunAllRequestedRef.current) break;
-          continue;
-        }
-        if (cell.type === 'stoich') {
-          await runStoichCell(cell.id, cell.stoichState ?? { reaction: '', inputs: {} });
-          if (stopRunAllRequestedRef.current) break;
-          continue;
-        }
-        if (cell.type === 'regression') {
-          await runRegressionCell(cell.id, cell.regressionState ?? createRegressionState());
-          if (stopRunAllRequestedRef.current) break;
-          continue;
-        }
-        await runCell(cell.id, cell.source);
-        if (stopRunAllRequestedRef.current) break;
-      }
-    } finally {
-      setIsRunningAll(false);
-    }
-  };
-
   const createCell = (
     type: 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
     source = '',
@@ -1465,30 +991,6 @@ function App() {
     lastActiveCellIdRef.current = snapshot.lastActiveCellId;
   };
 
-  const getAssistantOperationSource = (operation: AssistantOperation) => {
-    if (operation.type === 'insert_cell' || operation.type === 'update_cell') return operation.source;
-    if (operation.type === 'replace_cell_editable') {
-      return typeof operation.document?.source === 'string' ? operation.document.source : '';
-    }
-    if (operation.type === 'patch_cell') {
-      const document = operation.patch.document as Record<string, unknown> | undefined;
-      return typeof document?.source === 'string' ? document.source : '';
-    }
-    return '';
-  };
-
-  const isRunnableAssistantOperation = (operation: AssistantOperation) =>
-    (operation.type === 'insert_cell' && operation.cellType !== 'markdown') ||
-    operation.type === 'update_cell' ||
-    operation.type === 'patch_cell' ||
-    operation.type === 'replace_cell_editable';
-
-  const isReplayableSandboxCell = (cell: AssistantSandboxNotebookCell) =>
-    (cell.type === 'code' || cell.type === 'math') && cell.source.trim().length > 0;
-
-  const cloneSandboxCells = (input: AssistantSandboxNotebookCell[]): AssistantSandboxNotebookCell[] =>
-    input.map((cell) => ({ ...cell }));
-
   const buildLiveSandboxCells = (): AssistantSandboxNotebookCell[] =>
     cellsRef.current.map((cell) => ({
       id: cell.id,
@@ -1510,88 +1012,6 @@ function App() {
       bootstrapCode: assistantBootstrapCode,
       onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
     });
-
-  const describeAssistantOperationChange = (operation: AssistantOperation) => {
-    switch (operation.type) {
-      case 'insert_cell':
-        return `Add ${operation.cellType} cell at ${operation.index + 1}`;
-      case 'update_cell':
-        return `Update cell ${operation.cellId}`;
-      case 'patch_cell':
-        return `Patch cell ${operation.cellId}`;
-      case 'replace_cell_editable':
-        return `Replace editable state for cell ${operation.cellId}`;
-      case 'delete_cell':
-        return `Delete cell ${operation.cellId}`;
-      case 'move_cell':
-        return `Move cell ${operation.cellId} to ${operation.index + 1}`;
-      case 'set_notebook_defaults':
-        return 'Update notebook defaults';
-      case 'patch_user_preferences':
-        return 'Update local preferences';
-      default:
-        return operation.type;
-    }
-  };
-
-  const describeValidationOutputKind = (source: string, result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
-    if (result.status === 'timeout') return 'timeout';
-    if (result.status === 'error') return 'error';
-    if (result.target === 'math') {
-      if (/\bplot\s*\(/.test(source) || result.mathValidation?.hasPlot) return 'plot';
-      if (/\bsolve\s*\(/.test(source)) return 'symbolic solve';
-      return result.mathValidation?.kind ?? 'math';
-    }
-    const mimeKeys = Object.keys(result.mimeData ?? {});
-    if (mimeKeys.includes('application/vnd.plotly.v1+json')) return 'plot';
-    if (mimeKeys.includes('text/latex')) return 'latex';
-    if (mimeKeys.includes('text/plain')) return 'text';
-    if (result.stdout.trim()) return 'stdout';
-    return mimeKeys[0] ?? 'code';
-  };
-
-  const describeValidationPreview = (result: Awaited<ReturnType<typeof runAssistantSandbox>>) => {
-    if (result.target === 'math') {
-      if (result.mathValidation?.error) return result.mathValidation.error;
-      if (result.mathValidation?.stepsPreview?.length) {
-        return result.mathValidation.stepsPreview.join(' | ');
-      }
-    }
-    const plain = result.mimeData?.['text/plain'];
-    if (plain) return asText(plain);
-    if (result.stdout.trim()) return result.stdout.trim();
-    if (result.stderr.trim()) return result.stderr.trim();
-    return '';
-  };
-
-  const buildValidationSummary = (
-    source: string,
-    result: Awaited<ReturnType<typeof runAssistantSandbox>>
-  ): AssistantValidationSummary => {
-    const rawPreview = describeValidationPreview(result).replace(/\s+/g, ' ').trim();
-    const contextSummary =
-      result.replayedCellIds.length > 0
-        ? `${result.contextPresetUsed} using ${result.replayedCellIds.length} prior cell${result.replayedCellIds.length === 1 ? '' : 's'}`
-        : result.executedBootstrap || result.contextPresetUsed === 'bootstrap-only'
-          ? 'bootstrap only'
-          : 'isolation only';
-    const attemptSuffix = (result.attempts?.length ?? 0) > 1 ? ` after ${result.attempts?.length} attempts` : '';
-    const errorSummary =
-      result.status === 'error'
-        ? result.mathValidation?.error || result.errorValue || result.errorName || 'Validation failed.'
-        : result.status === 'timeout'
-          ? result.errorValue || 'Validation timed out.'
-          : undefined;
-    return {
-      status: result.status,
-      outputKind: describeValidationOutputKind(source, result),
-      outputPreview: rawPreview || (result.status === 'ok' ? 'No visible output.' : ''),
-      errorSummary,
-      contextSummary: `${contextSummary}${attemptSuffix}`,
-      replayContextUsed: result.contextPresetUsed,
-      replayedCellIds: result.replayedCellIds
-    };
-  };
 
   const applyDraftOperationToSandboxCells = (
     cellsInput: AssistantSandboxNotebookCell[],
@@ -1682,57 +1102,13 @@ function App() {
           continue;
         }
 
-        const sandboxSource = getAssistantOperationSource(operation);
-        const replayableCellIds = workingCells
-          .filter((cell) => {
-            if (!isReplayableSandboxCell(cell)) return false;
-            return (
-              (operation.type !== 'update_cell' &&
-                operation.type !== 'patch_cell' &&
-                operation.type !== 'replace_cell_editable') ||
-              cell.id !== operation.cellId
-            );
-          })
-          .map((cell) => cell.id);
-        const usesReplayContext =
-          replayableCellIds.length > 0 &&
-          (
-            operation.type === 'update_cell' ||
-            operation.type === 'patch_cell' ||
-            operation.type === 'replace_cell_editable' ||
-            steps.some((entry) => entry.isRunnable)
-          );
-        const request: AssistantSandboxRequest =
-          operation.type === 'insert_cell' && operation.cellType === 'math'
-            ? {
-                target: 'math',
-                source: sandboxSource,
-                trigMode: workingTrigMode,
-                renderMode: workingRenderMode,
-                contextPreset: usesReplayContext ? 'selected-cells' : 'none',
-                selectedCellIds: usesReplayContext ? replayableCellIds : [],
-                timeoutMs: 5000
-              }
-            : (operation.type === 'update_cell' ||
-                operation.type === 'patch_cell' ||
-                operation.type === 'replace_cell_editable') &&
-              workingCells.find((cell) => cell.id === operation.cellId)?.type === 'math'
-              ? {
-                  target: 'math',
-                  source: sandboxSource,
-                  trigMode: workingTrigMode,
-                  renderMode: workingRenderMode,
-                  contextPreset: usesReplayContext ? 'selected-cells' : 'none',
-                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
-                  timeoutMs: 5000
-                }
-              : {
-                  target: 'code',
-                  code: sandboxSource,
-                  contextPreset: usesReplayContext ? 'selected-cells' : 'bootstrap-only',
-                  selectedCellIds: usesReplayContext ? replayableCellIds : [],
-                  timeoutMs: 5000
-                };
+        const { sandboxSource, request } = createValidationRequest({
+          operation,
+          workingCells,
+          steps,
+          workingTrigMode,
+          workingRenderMode
+        });
 
         onActivity?.({
           kind: 'phase',
