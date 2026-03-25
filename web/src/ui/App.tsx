@@ -9,8 +9,20 @@ import { applyAssistantOperations } from './assistant/patches';
 import type { AssistantOperation } from './assistant/types';
 import { buildSuggestions } from './utils/suggestUtils';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
-import { createCellRecord } from './cells/registry';
 import type { CellOutput, CellRecord } from './cells/types';
+import {
+  buildAssistantSandboxCells as buildNotebookAssistantSandboxCells,
+  buildNotebookAssistantContext,
+  captureAssistantSnapshot as captureNotebookAssistantSnapshot,
+  clearCellOutputInDocument,
+  createNotebookCell,
+  getCellDisplayText,
+  toggleCellOutputCollapsedInDocument,
+  updateCellSourceInDocument,
+  updateRegressionStateInDocument,
+  updateStoichStateInDocument,
+  type AssistantSnapshot
+} from './notebook/document';
 import { useUserPreferences } from './preferences/useUserPreferences';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
@@ -177,14 +189,6 @@ const ASSISTANT_MODEL_STORAGE = 'sugarpy:assistant:model';
 const ASSISTANT_THINKING_STORAGE = 'sugarpy:assistant:thinking';
 const ASSISTANT_SCOPE: 'notebook' = 'notebook';
 const ASSISTANT_PREFERENCE: 'auto' = 'auto';
-type AssistantSnapshot = {
-  cells: CellModel[];
-  trigMode: 'deg' | 'rad';
-  defaultMathRenderMode: 'exact' | 'decimal';
-  activeCellId: string | null;
-  lastActiveCellId: string | null;
-};
-
 type AssistantRuntimeConfig = {
   model?: string;
   providers?: {
@@ -1646,13 +1650,10 @@ function App() {
     source = '',
     indexSeed?: number
   ): CellModel =>
-    createCellRecord(type, {
+    createNotebookCell(type, {
       trigMode,
       defaultMathRenderMode
-    }, {
-      id: `cell-${indexSeed ? `${indexSeed}-` : ''}${Date.now()}`,
-      source
-    });
+    }, source, indexSeed);
 
   const getInsertionAnchorId = () => activeCellId || lastActiveCellId;
 
@@ -1673,41 +1674,11 @@ function App() {
   };
 
   const toggleCellOutputCollapsed = (cellId: string) => {
-    setCells((prev) =>
-      prev.map((cell) => {
-        if (cell.id !== cellId) return cell;
-        const nextCollapsed = !(cell.ui?.outputCollapsed ?? false);
-        return {
-          ...cell,
-          ui: {
-            ...cell.ui,
-            outputCollapsed: nextCollapsed,
-            ...(cell.type === 'math' && nextCollapsed ? { mathView: 'source' as const } : {})
-          }
-        };
-      })
-    );
+    setCells((prev) => toggleCellOutputCollapsedInDocument(prev, cellId));
   };
 
   const clearCellOutput = (cellId: string) => {
-    setCells((prev) =>
-      prev.map((cell) =>
-        cell.id === cellId
-          ? {
-              ...cell,
-              output: undefined,
-              mathOutput: undefined,
-              stoichOutput: undefined,
-              regressionOutput: undefined,
-              ui: {
-                ...cell.ui,
-                outputCollapsed: false,
-                ...(cell.type === 'math' ? { mathView: 'rendered' as const } : {})
-              }
-            }
-          : cell
-      )
-    );
+    setCells((prev) => clearCellOutputInDocument(prev, cellId));
   };
 
   const toggleMathView = (cellId: string) => {
@@ -1729,58 +1700,20 @@ function App() {
     }));
   };
 
-  const getCellDisplayText = (cell: CellModel) => {
-    if (cell.type === 'stoich') {
-      return cell.stoichState?.reaction ?? '';
-    }
-    if (cell.type === 'regression') {
-      return cell.regressionOutput?.equation_text ?? cell.regressionOutput?.error ?? '';
-    }
-    if (cell.output?.type === 'error') {
-      return `${cell.output.ename}: ${cell.output.evalue}`;
-    }
-    if (cell.mathOutput?.error) {
-      return cell.mathOutput.error;
-    }
-    if (cell.mathOutput?.steps?.length) {
-      return cell.mathOutput.steps.join('\n');
-    }
-    const plain = cell.output?.type === 'mime' ? cell.output.data['text/plain'] : '';
-    return asText(plain);
+  const buildAssistantContext = () => {
+    return buildNotebookAssistantContext({
+      notebookName,
+      defaults: {
+        trigMode,
+        defaultMathRenderMode
+      },
+      activeCellId,
+      cells
+    });
   };
 
-  const buildAssistantContext = () => ({
-    notebookName,
-    defaultTrigMode: trigMode,
-    defaultMathRenderMode,
-    activeCellId,
-    cells: cells.map((cell) => ({
-      id: cell.id,
-      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
-      source: cell.source,
-      mathRenderMode: cell.mathRenderMode,
-      mathTrigMode: cell.mathTrigMode,
-      stoichReaction: cell.stoichState?.reaction ?? '',
-      hasOutput: !!(cell.output || cell.mathOutput || cell.stoichOutput || cell.regressionOutput),
-      outputPreview: getCellDisplayText(cell),
-      hasError: !!(
-        cell.output?.type === 'error' ||
-        cell.mathOutput?.error ||
-        (cell.stoichOutput && cell.stoichOutput.ok === false) ||
-        (cell.regressionOutput && cell.regressionOutput.ok === false)
-      )
-    }))
-  });
-
   const buildAssistantSandboxCells = (): AssistantSandboxNotebookCell[] =>
-    cells.map((cell) => ({
-      id: cell.id,
-      type: cell.type ?? 'code',
-      source: cell.type === 'stoich' ? cell.stoichState?.reaction ?? '' : cell.source,
-      mathTrigMode: cell.mathTrigMode,
-      mathRenderMode: cell.mathRenderMode,
-      contextSource: 'notebook'
-    }));
+    buildNotebookAssistantSandboxCells(cells);
 
   const runAssistantSandbox = async (
     request: AssistantSandboxRequest,
@@ -1793,21 +1726,14 @@ function App() {
       onActivity: (label, detail) => onActivity?.({ kind: 'phase', label, detail })
     });
 
-  const captureAssistantSnapshot = (): AssistantSnapshot => ({
-    cells: cellsRef.current.map((cell) => ({
-      ...cell,
-      mathOutput: cell.mathOutput ? JSON.parse(JSON.stringify(cell.mathOutput)) : undefined,
-      stoichState: cell.stoichState ? JSON.parse(JSON.stringify(cell.stoichState)) : undefined,
-      stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
-      regressionState: cell.regressionState ? JSON.parse(JSON.stringify(cell.regressionState)) : undefined,
-      regressionOutput: cell.regressionOutput ? JSON.parse(JSON.stringify(cell.regressionOutput)) : undefined,
-      output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
-    })),
-    trigMode: trigModeRef.current,
-    defaultMathRenderMode: renderModeRef.current,
-    activeCellId: activeCellIdRef.current,
-    lastActiveCellId: lastActiveCellIdRef.current
-  });
+  const captureAssistantSnapshot = (): AssistantSnapshot =>
+    captureNotebookAssistantSnapshot({
+      cells: cellsRef.current,
+      trigMode: trigModeRef.current,
+      defaultMathRenderMode: renderModeRef.current,
+      activeCellId: activeCellIdRef.current,
+      lastActiveCellId: lastActiveCellIdRef.current
+    });
 
   const restoreAssistantSnapshot = (snapshot: AssistantSnapshot) => {
     setCells(snapshot.cells);
@@ -2200,15 +2126,15 @@ function App() {
   };
 
   const updateCell = (cellId: string, source: string) => {
-    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, source } : c)));
+    setCells((prev) => updateCellSourceInDocument(prev, cellId, source));
   };
 
   const updateStoichState = (cellId: string, state: StoichState) => {
-    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, stoichState: state } : c)));
+    setCells((prev) => updateStoichStateInDocument(prev, cellId, state));
   };
 
   const updateRegressionState = (cellId: string, state: RegressionState) => {
-    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, regressionState: state } : c)));
+    setCells((prev) => updateRegressionStateInDocument(prev, cellId, state));
   };
 
   const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
