@@ -49,6 +49,10 @@ _PLOT_KWARG_NAMES = {
     "overscan",
     "equal_axes",
     "showlegend",
+    "xscale",
+    "yscale",
+    "x_scale",
+    "y_scale",
     "var",
 }
 _BLOCKED_IDENTIFIERS = {

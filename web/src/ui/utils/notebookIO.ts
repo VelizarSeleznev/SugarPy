@@ -289,6 +289,25 @@ const regressionToMarkdown = (cell: CellModel) => {
   return lines.join('\n');
 };
 
+const dataToMarkdown = (cell: CellModel) => {
+  const state = cell.dataState;
+  const lines = ['### Data', ''];
+  lines.push(`Name: ${state?.name ?? 'data'}`, '');
+  lines.push(`X label: ${state?.labels?.x ?? 'x'}`);
+  lines.push(`Y label: ${state?.labels?.y ?? 'y'}`, '');
+  lines.push('| x | y |', '| --- | --- |');
+  const points = state?.points ?? [];
+  if (points.length === 0) {
+    lines.push('|  |  |');
+  } else {
+    points.forEach((point) => {
+      if (!point.x && !point.y) return;
+      lines.push(`| ${point.x} | ${point.y} |`);
+    });
+  }
+  return lines.join('\n');
+};
+
 export const serializeIpynb = (params: {
   id: string;
   name: string;
@@ -321,6 +340,18 @@ export const serializeIpynb = (params: {
           }
         },
         source: toLines(regressionToMarkdown(cell))
+      };
+    }
+    if (cell.type === 'data') {
+      return {
+        cell_type: 'markdown',
+        metadata: {
+          sugarpy: {
+            type: 'data',
+            dataState: cell.dataState ?? null
+          }
+        },
+        source: toLines(dataToMarkdown(cell))
       };
     }
     if (cell.type === 'markdown') {
@@ -418,6 +449,23 @@ export const deserializeIpynb = (data: any) => {
           ui: { editorExpanded: false }
         },
         regressionOutput: sugarpy.regressionOutput ?? undefined,
+        ui: {
+          outputCollapsed: false
+        },
+        isRunning: false
+      };
+    }
+    if (sugarpy?.type === 'data') {
+      return {
+        id: `cell-${Date.now()}-${idx}`,
+        source: fromLines(cell?.source ?? ''),
+        type: 'data',
+        dataState: sugarpy.dataState ?? {
+          name: 'data',
+          points: [],
+          labels: { x: 'x', y: 'y' },
+          ui: { editorExpanded: true }
+        },
         ui: {
           outputCollapsed: false
         },

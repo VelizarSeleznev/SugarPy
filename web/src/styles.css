@@ -2677,6 +2677,133 @@ body {
   background: rgba(248, 250, 252, 0.75);
 }
 
+.data-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.data-toolbar,
+.data-toolbar-left,
+.data-summary,
+.data-labels {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.data-toolbar {
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.data-collapse-button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.data-collapse-button:hover {
+  background: #f3f4f6;
+  color: var(--text-main);
+}
+
+.data-name-label,
+.data-axis-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.data-name-label input,
+.data-axis-label input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.data-summary {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.data-editor {
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  padding: 8px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.data-sheet-wrap {
+  overflow-x: auto;
+}
+
+.data-sheet {
+  width: 100%;
+  min-width: 360px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #fff;
+}
+
+.data-sheet th,
+.data-sheet td {
+  border: 1px solid #dbe3ee;
+  padding: 0;
+  vertical-align: middle;
+}
+
+.data-sheet th {
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.data-row-head,
+.data-row-index {
+  width: 44px;
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.data-sheet-input {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-sheet-input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.18);
+  outline-offset: -2px;
+}
+
 .wiki-page {
   max-width: 960px;
   margin: 0 auto;

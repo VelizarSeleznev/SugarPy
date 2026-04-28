@@ -23,7 +23,7 @@ export type AssistantSandboxRequest = {
 
 export type AssistantSandboxNotebookCell = {
   id: string;
-  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
+  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression' | 'data';
   source: string;
   mathTrigMode?: 'deg' | 'rad';
   mathRenderMode?: 'exact' | 'decimal';

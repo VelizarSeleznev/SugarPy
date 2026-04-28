@@ -400,6 +400,13 @@ const addMathCellAfterFirstCode = async (page: any) => {
   await expect(page.locator('[data-testid="cell-row-math"]').last()).toBeVisible();
 };
 
+const addDataCell = async (page: any) => {
+  await addCodeCellToEmptyNotebook(page);
+  await page.getByTestId('add-cell-button').click();
+  await page.locator('.add-cell-menu').getByRole('button', { name: /^Data$/ }).click();
+  await expect(page.locator('[data-testid="cell-row-data"]').last()).toBeVisible();
+};
+
 const openTypedAssistant = async (page: any) => {
   await page.getByTestId('assistant-photo-entry').click();
   await expect(page.getByTestId('assistant-prompt')).toBeVisible();
@@ -1269,6 +1276,44 @@ test.describe('Notebook CAS outputs', () => {
     await setMathInLastCell(page, 'plot(sin(x))');
     await expect(page.getByTestId('plotly-graph')).toBeVisible();
     await expect(page.locator('[data-testid="plotly-graph"] .js-plotly-plot')).toBeVisible();
+    await expectNoGlobalErrors(page, guards);
+  });
+
+  test('Data cell points can be reused in a semi-log Math plot', async ({ page }) => {
+    const guards = attachBrowserErrorGuards(page);
+    await page.goto('/');
+    await addDataCell(page);
+
+    const dataCell = page.locator('[data-testid="cell-row-data"]').last();
+    await dataCell.locator('.data-name-label input').fill('capacitor');
+    await dataCell.locator('.data-axis-label input').nth(0).fill('Tid (ms)');
+    await dataCell.locator('.data-axis-label input').nth(1).fill('Spænding (V)');
+
+    const inputs = dataCell.locator('.data-sheet-input');
+    await inputs.nth(0).fill('0');
+    await inputs.nth(1).fill('24');
+    await inputs.nth(2).fill('1,5');
+    await inputs.nth(3).fill('14,56');
+    await inputs.nth(4).fill('4');
+    await inputs.nth(5).fill('6,33');
+    await inputs.nth(6).fill('7');
+    await inputs.nth(7).fill('2,33');
+
+    await addMathCellAfterFirstCode(page);
+    await setMathInLastCell(page, "plot(capacitor, 24*e^(-x/3), x = 0..8, y = 1..30, yscale='log')");
+
+    const plot = page.locator('[data-testid="plotly-graph"] .js-plotly-plot').last();
+    await expect(plot).toBeVisible();
+    const layout = await plot.evaluate((gd: any) => ({
+      yType: gd._fullLayout.yaxis.type,
+      xTitle: gd._fullLayout.xaxis.title.text,
+      yTitle: gd._fullLayout.yaxis.title.text,
+      traceModes: gd.data.map((trace: any) => trace.mode)
+    }));
+    expect(layout.yType).toBe('log');
+    expect(layout.xTitle).toBe('Tid (ms)');
+    expect(layout.yTitle).toBe('Spænding (V)');
+    expect(layout.traceModes).toContain('markers');
     await expectNoGlobalErrors(page, guards);
   });
 

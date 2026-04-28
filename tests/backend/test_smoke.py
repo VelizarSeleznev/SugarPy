@@ -1,10 +1,12 @@
 from unittest.mock import patch
 
+import sympy as sp
+
 from sugarpy.chem import balance_equation
 from sugarpy.library import load_catalog
 from sugarpy.math_cell import display_math_cell, render_math_cell
 from sugarpy.regression import display_regression, render_regression
-from sugarpy.startup import plot, sqrt, x, y
+from sugarpy.startup import plot, points, sqrt, x, y
 from sugarpy.stoichiometry import display_stoichiometry, render_stoichiometry
 
 
@@ -538,6 +540,24 @@ def test_plot_uses_explicit_viewport_and_equal_axes():
     assert layout["showlegend"] is False
     assert layout["yaxis"]["range"][0] < -4.0
     assert layout["yaxis"]["range"][1] > 3.0
+
+
+def test_plot_accepts_point_series_and_log_axis():
+    series = points(
+        [{"x": "0", "y": "24"}, {"x": "1,5", "y": "14,56"}, {"x": "4", "y": "6,33"}, {"x": "7", "y": "2,33"}],
+        name="capacitor",
+        x_label="Tid (ms)",
+        y_label="Spænding (V)",
+    )
+    with patch("sugarpy.startup.display"):
+        figure = plot(series, 24 * sp.E ** (-x / 3), xmin=0, xmax=8, yscale="log")
+
+    assert figure["data"][0]["mode"] == "markers"
+    assert figure["data"][0]["name"] == "capacitor"
+    assert figure["layout"]["xaxis"]["title"]["text"] == "Tid (ms)"
+    assert figure["layout"]["yaxis"]["title"]["text"] == "Spænding (V)"
+    assert figure["layout"]["yaxis"]["type"] == "log"
+    assert figure["layout"]["showlegend"] is True
 
 
 def test_math_plot_range_sugar_renders_two_implicit_circles():

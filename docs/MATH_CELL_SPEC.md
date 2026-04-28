@@ -171,6 +171,10 @@ Current plotting options:
 - `equal_axes=True` locks one unit on x to one unit on y, which is useful for circles and geometry.
 - `showlegend=True|False` overrides the default legend behavior.
 - `title='...'` adds an optional title. If omitted, SugarPy keeps the plot header visually quiet.
+- `xscale='linear'|'log'` and `yscale='linear'|'log'` control Plotly axis scaling. Log axes
+  require positive values on that axis.
+- Named point series from Data cells can be plotted together with expressions, for example
+  `plot(capacitor, 24*e^(-x/3), x = 0..8, y = 1..30, yscale='log')`.
 - In Math cells, range sugar is also supported:
   `plot(circle1, circle2, x = -10..40, y = 0..60, equal_axes = True)`.
 - Compatibility forms are also accepted:
@@ -194,6 +198,8 @@ Plot defaults:
 - Double-clicking the graph resets back to that initial view.
 - Geometric plots may widen the visible x-range slightly when `equal_axes=True` is active, so that the 1:1 aspect ratio can be preserved in the available screen space.
 - Implicit plots (`f(x, y) = 0`) are rendered as extracted line paths instead of a filled contour layer, so closed curves stay visually stable.
+- Data cells define reusable named point series before Code and Math execution. A Data cell named
+  `capacitor` can be used as `capacitor` in later `plot(...)` calls.
 
 This enables multi-step symbolic workflows directly in Math cells, for example:
 - `c1 := (x-5)^2 + (y-5)^2 - 36`

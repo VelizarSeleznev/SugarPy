@@ -124,6 +124,28 @@ def test_plot_range_sugar_and_kwargs_are_passed_as_plot_kwargs():
     }
 
 
+def test_plot_log_scale_kwargs_are_passed_as_plot_kwargs():
+    captured: dict[str, object] = {}
+
+    def plot(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"data": [], "layout": {}}
+
+    parse_sympy_expression(
+        "plot(capacitor, x^2, x = 0..8, y = 1..30, yscale = 'log')",
+        mode="deg",
+        user_ns={"plot": plot, "capacitor": object()},
+    )
+
+    assert len(captured["args"]) == 2
+    assert captured["kwargs"]["xmin"] == 0
+    assert captured["kwargs"]["xmax"] == 8
+    assert captured["kwargs"]["ymin"] == 1
+    assert captured["kwargs"]["ymax"] == 30
+    assert captured["kwargs"]["yscale"] == "log"
+
+
 def test_plot_tuple_range_args_are_rewritten_to_plot_kwargs():
     captured: dict[str, object] = {}
 

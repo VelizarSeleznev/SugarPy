@@ -88,6 +88,9 @@
 - Math/Stoich transport contract is MIME-first (no stdout marker parsing):
   - `application/vnd.sugarpy.math+json` -> `cell.mathOutput`.
   - `application/vnd.sugarpy.stoich+json` -> `cell.stoichOutput`.
+- Data cells are UI-owned reusable x/y point tables. Before Code and Math execution, the backend
+  emits a small prelude that defines each named Data cell as a `sugarpy.startup.points(...)`
+  series in the live kernel namespace so `plot(...)` can combine table points with expressions.
 - Behavior/architecture changes must include matching updates in `docs/`.
 - Keep project language in English across code, UI text, docs, tests, and logs.
 - Math cell semantics are fixed:

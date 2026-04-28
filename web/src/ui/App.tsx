@@ -9,6 +9,7 @@ import { buildSuggestions } from './utils/suggestUtils';
 import { moveCellDown, moveCellUp, moveCellToIndex, deleteCell } from './utils/cellOps';
 import { StoichOutput, StoichState } from './utils/stoichTypes';
 import { RegressionOutput, RegressionState, createRegressionState } from './utils/regressionTypes';
+import { DataState, createDataState } from './utils/dataTypes';
 import {
   AssistantActivity,
   AssistantCellKind,
@@ -87,7 +88,7 @@ export type CellModel = {
   id: string;
   source: string;
   output?: CellOutput;
-  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
+  type?: 'code' | 'markdown' | 'math' | 'stoich' | 'regression' | 'data';
   execCount?: number;
   isRunning?: boolean;
   mathOutput?: {
@@ -124,6 +125,7 @@ export type CellModel = {
   stoichOutput?: StoichOutput;
   regressionState?: RegressionState;
   regressionOutput?: RegressionOutput;
+  dataState?: DataState;
   assistantMeta?: {
     runId: string;
     stepId: string;
@@ -147,7 +149,7 @@ export type CellOutput =
       evalue: string;
     };
 
-type InsertCellType = 'code' | 'markdown' | 'math' | 'stoich' | 'regression';
+type InsertCellType = 'code' | 'markdown' | 'math' | 'stoich' | 'regression' | 'data';
 
 type InsertCellOption = {
   type: InsertCellType;
@@ -165,6 +167,12 @@ const INSERT_CELL_OPTIONS: InsertCellOption[] = [
     type: 'regression',
     label: 'Regression',
     searchTerms: 'regression fit trendline xy data table scatter',
+    priority: 'secondary'
+  },
+  {
+    type: 'data',
+    label: 'Data',
+    searchTerms: 'data points xy table scatter reusable plot',
     priority: 'secondary'
   }
 ];
@@ -1326,7 +1334,7 @@ function App() {
     };
   }, []);
 
-  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich' | 'regression') =>
+  const buildExecutionCells = (cellId: string, source: string, type: 'code' | 'math' | 'stoich' | 'regression' | 'data') =>
     cellsRef.current.map((cell) =>
       cell.id === cellId
         ? {
@@ -1344,7 +1352,11 @@ function App() {
                 ? {
                     regressionState: cell.regressionState ?? createRegressionState()
                   }
-              : {})
+                : type === 'data'
+                  ? {
+                      dataState: cell.dataState ?? createDataState()
+                    }
+                  : {})
           }
         : cell
     );
@@ -1668,7 +1680,7 @@ function App() {
       for (const cell of queue) {
         if (stopRunAllRequestedRef.current) break;
         activateCell(cell.id);
-        if (cell.type === 'markdown') continue;
+        if (cell.type === 'markdown' || cell.type === 'data') continue;
         if (cell.type === 'math') {
           await runMathCell(
             cell.id,
@@ -1698,7 +1710,7 @@ function App() {
   };
 
   const createCell = (
-    type: 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
+    type: 'code' | 'markdown' | 'math' | 'stoich' | 'regression' | 'data',
     source = '',
     indexSeed?: number
   ): CellModel => {
@@ -1720,6 +1732,17 @@ function App() {
         source,
         type,
         regressionState: createRegressionState(),
+        ui: {
+          outputCollapsed: false
+        }
+      };
+    }
+    if (type === 'data') {
+      return {
+        id: `cell-${idSuffix}`,
+        source,
+        type,
+        dataState: createDataState(),
         ui: {
           outputCollapsed: false
         }
@@ -1819,6 +1842,11 @@ function App() {
     if (cell.type === 'regression') {
       return cell.regressionOutput?.equation_text ?? cell.regressionOutput?.error ?? '';
     }
+    if (cell.type === 'data') {
+      const state = cell.dataState;
+      const count = state?.points.filter((point) => point.x.trim() && point.y.trim()).length ?? 0;
+      return `${state?.name || 'data'} (${count} points)`;
+    }
     if (cell.output?.type === 'error') {
       return `${cell.output.ename}: ${cell.output.evalue}`;
     }
@@ -1839,7 +1867,7 @@ function App() {
     activeCellId,
     cells: cells.map((cell) => ({
       id: cell.id,
-      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich' | 'regression',
+      type: (cell.type ?? 'code') as 'code' | 'markdown' | 'math' | 'stoich' | 'regression' | 'data',
       source: cell.source,
       mathRenderMode: cell.mathRenderMode,
       mathTrigMode: cell.mathTrigMode,
@@ -1884,6 +1912,7 @@ function App() {
       stoichOutput: cell.stoichOutput ? JSON.parse(JSON.stringify(cell.stoichOutput)) : undefined,
       regressionState: cell.regressionState ? JSON.parse(JSON.stringify(cell.regressionState)) : undefined,
       regressionOutput: cell.regressionOutput ? JSON.parse(JSON.stringify(cell.regressionOutput)) : undefined,
+      dataState: cell.dataState ? JSON.parse(JSON.stringify(cell.dataState)) : undefined,
       output: cell.output ? JSON.parse(JSON.stringify(cell.output)) : undefined
     })),
     trigMode: trigModeRef.current,
@@ -2246,6 +2275,10 @@ function App() {
 
   const updateRegressionState = (cellId: string, state: RegressionState) => {
     setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, regressionState: state } : c)));
+  };
+
+  const updateDataState = (cellId: string, state: DataState) => {
+    setCells((prev) => prev.map((c) => (c.id === cellId ? { ...c, dataState: state } : c)));
   };
 
   const updateAssistantChat = (chatId: string, updater: (chat: AssistantChatSession) => AssistantChatSession) => {
@@ -3655,6 +3688,8 @@ function App() {
         ? draggedCell.stoichState?.reaction ?? draggedCell.source
         : draggedCell.type === 'regression'
           ? draggedCell.regressionOutput?.equation_text ?? `${draggedCell.regressionState?.model ?? 'auto'} fit`
+        : draggedCell.type === 'data'
+          ? `${draggedCell.dataState?.name ?? 'data'} points`
         : draggedCell.source;
     return raw.replace(/\s+/g, ' ').trim();
   })();
@@ -4045,6 +4080,7 @@ function App() {
                         onChangeStoich={(state) => updateStoichState(cell.id, state)}
                         onRunRegression={(state) => runRegressionCell(cell.id, state)}
                         onChangeRegression={(state) => updateRegressionState(cell.id, state)}
+                        onChangeData={(state) => updateDataState(cell.id, state)}
                         onMoveUp={() => setCells((prev) => moveCellUp(prev, cell.id))}
                         onMoveDown={() => setCells((prev) => moveCellDown(prev, cell.id))}
                         onDelete={() => setCells((prev) => deleteCell(prev, cell.id))}

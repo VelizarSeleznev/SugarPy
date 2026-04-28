@@ -420,7 +420,7 @@ def _bootstrap_code() -> str:
             "from sympy import symbols",
             'x, y, z, t = symbols("x y z t")',
             "from IPython.display import display as __sugarpy_display",
-            "from sugarpy.startup import plot",
+            "from sugarpy.startup import plot, points",
             "def __sugarpy_emit_output(value):",
             "    payload = {'text/plain': repr(value)}",
             "    if isinstance(value, sp.Basic):",
@@ -456,6 +456,58 @@ def _build_regression_code(points: list[dict[str, Any]], model: str, x_label: st
             f"_ = display_regression({json.dumps(points)}, {json.dumps(model)}, x_label={json.dumps(x_label)}, y_label={json.dumps(y_label)})",
         ]
     )
+
+
+def _safe_python_identifier(value: str) -> str:
+    cleaned = re.sub(r"\W+", "_", value.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    if not cleaned:
+        cleaned = "data"
+    if cleaned[0].isdigit():
+        cleaned = f"data_{cleaned}"
+    return cleaned
+
+
+def _build_data_code(state: dict[str, Any]) -> str:
+    raw_name = str(state.get("name") or "data")
+    name = _safe_python_identifier(raw_name)
+    labels = state.get("labels") if isinstance(state.get("labels"), dict) else {}
+    x_label = str(labels.get("x") or "x")
+    y_label = str(labels.get("y") or "y")
+    raw_rows = state.get("points") if isinstance(state.get("points"), list) else []
+    rows = [
+        row
+        for row in raw_rows
+        if isinstance(row, dict) and str(row.get("x") or "").strip() and str(row.get("y") or "").strip()
+    ]
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            "from sugarpy.startup import points as __sugarpy_points",
+            (
+                f"{name} = __sugarpy_points("
+                f"{json.dumps(rows)}, "
+                f"name={json.dumps(raw_name)}, "
+                f"x_label={json.dumps(x_label)}, "
+                f"y_label={json.dumps(y_label)}"
+                ")"
+            ),
+        ]
+    )
+
+
+def _data_prelude_for_cells(cells: list[dict[str, Any]], target_cell_id: str) -> list[str]:
+    chunks: list[str] = []
+    for cell in cells:
+        if str(cell.get("id")) == target_cell_id:
+            continue
+        if str(cell.get("type") or "") != "data":
+            continue
+        state = cell.get("dataState") if isinstance(cell.get("dataState"), dict) else {}
+        if state:
+            chunks.append(_build_data_code(state))
+    return chunks
 
 
 def _wrap_code_for_notebook_display(source: str) -> str:
@@ -508,6 +560,9 @@ def _cell_source_for_execution(cell: dict[str, Any], trig_mode: str, render_mode
         x_label = str(labels.get("x") or "x")
         y_label = str(labels.get("y") or "y")
         return _build_regression_code(points, model, x_label, y_label)
+    if cell_type == "data":
+        state = cell.get("dataState") if isinstance(cell.get("dataState"), dict) else {}
+        return _build_data_code(state)
     return _wrap_code_for_notebook_display(str(cell.get("source") or ""))
 
 
@@ -611,7 +666,10 @@ async def execute_notebook_request(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     replay_cells: list[dict[str, Any]] = []
-    execution_chunks = [_cell_source_for_execution(target_cell, trig_mode, render_mode)]
+    execution_chunks = [
+        *_data_prelude_for_cells(notebook_cells, target_cell_id),
+        _cell_source_for_execution(target_cell, trig_mode, render_mode),
+    ]
     try:
         result, runtime_payload = await manager.execute_code(
             notebook_id,

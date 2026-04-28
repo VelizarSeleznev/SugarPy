@@ -5,8 +5,10 @@ import { MarkdownEditor } from './MarkdownEditor';
 import { MathEditor } from './MathEditor';
 import { StoichiometryCell } from './StoichiometryCell';
 import { RegressionCell } from './RegressionCell';
+import { DataCell } from './DataCell';
 import { StoichState } from '../utils/stoichTypes';
 import { RegressionState } from '../utils/regressionTypes';
+import { DataState } from '../utils/dataTypes';
 import { CellWrapper, CellMenuAction } from './CellWrapper';
 import { OutputArea } from './OutputArea';
 import type { EditorCompletionItem } from '../utils/editorSymbols';
@@ -27,6 +29,7 @@ type Props = {
   onChangeStoich: (state: StoichState) => void;
   onRunRegression: (state: RegressionState) => void;
   onChangeRegression: (state: RegressionState) => void;
+  onChangeData: (state: DataState) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
   onDelete: () => void;
@@ -46,7 +49,7 @@ type Props = {
 
 const statusFromCell = (cell: CellModel) => {
   if (cell.isRunning) return '*';
-  if (cell.type === 'markdown' || cell.type === 'stoich' || cell.type === 'regression') return '';
+  if (cell.type === 'markdown' || cell.type === 'stoich' || cell.type === 'regression' || cell.type === 'data') return '';
   if (cell.execCount === null || cell.execCount === undefined) return '';
   return String(cell.execCount);
 };
@@ -95,6 +98,7 @@ export function NotebookCell({
   onChangeStoich,
   onRunRegression,
   onChangeRegression,
+  onChangeData,
   onMoveUp,
   onMoveDown,
   onDelete,
@@ -117,7 +121,7 @@ export function NotebookCell({
   const outputHidden = !!cell.ui?.outputCollapsed;
   const outputAvailable = hasOutput(cell);
   const runHandler =
-    cellType === 'markdown' || cellType === 'stoich' || cellType === 'regression'
+    cellType === 'markdown' || cellType === 'stoich' || cellType === 'regression' || cellType === 'data'
       ? undefined
       : () => {
           if (cellType === 'math') onRunMath(cell.source);
@@ -281,6 +285,13 @@ export function NotebookCell({
             onCompute={onRunRegression}
             kernelReady={kernelReady}
             showOutput={!outputHidden}
+          />
+        ) : null}
+
+        {cellType === 'data' ? (
+          <DataCell
+            state={cell.dataState ?? { name: 'data', points: [], labels: { x: 'x', y: 'y' }, ui: { editorExpanded: true } }}
+            onChange={onChangeData}
           />
         ) : null}
       </CellWrapper>

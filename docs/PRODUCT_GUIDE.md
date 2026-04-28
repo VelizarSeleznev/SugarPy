@@ -131,6 +131,8 @@ Use it together with:
 ### Where plotting works
 - Code cells can emit Plotly-backed graphs through the startup `plot(...)` helper.
 - Math cells can call `plot(...)` directly.
+- Data cells define reusable named x/y point series that can be used in later Code and Math
+  `plot(...)` calls.
 
 ### Plot options
 - Preferred in Math cells: `x = a..b`, optionally `y = c..d`.
@@ -139,6 +141,9 @@ Use it together with:
 - `equal_axes=True`: preserve 1:1 scale for geometry.
 - `showlegend=True|False`: override legend behavior.
 - `title='...'`: optional title.
+- `xscale='log'` / `yscale='log'`: render a logarithmic Plotly axis for positive values.
+- Named point series can be plotted with functions, for example
+  `plot(capacitor, 24*e^(-x/3), x = 0..8, y = 1..30, yscale='log')`.
 
 ### Plot behavior
 - The requested range is treated as the authoritative initial view.
