@@ -51,10 +51,10 @@ export type RegressionOutput = {
   alternatives?: Array<{
     model_name: string;
     model_label: string;
-    rmse: number;
-    r2: number;
-    aicc: number;
-    bic: number;
+    rmse: number | null;
+    r2: number | null;
+    aicc: number | null;
+    bic: number | null;
     formula: string;
   }>;
 };

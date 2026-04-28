@@ -692,6 +692,12 @@ def _confidence(best_fit: FitResult | None, alternatives: list[FitResult]) -> st
     return "low" if delta < 2.0 else "high"
 
 
+def _json_metric(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return float(value)
+
+
 def render_regression(points: Any, model: str = MODEL_AUTO, x_label: str = "x", y_label: str = "y") -> dict[str, Any]:
     requested_model = model if model in MODEL_ORDER else MODEL_AUTO
     prepared, invalid_rows = _prepare_data(points)
@@ -759,10 +765,10 @@ def render_regression(points: Any, model: str = MODEL_AUTO, x_label: str = "x", 
         {
             "model_name": fit.model_name,
             "model_label": fit.model_label,
-            "rmse": fit.rmse,
-            "r2": fit.r2,
-            "aicc": fit.aicc,
-            "bic": fit.bic,
+            "rmse": _json_metric(fit.rmse),
+            "r2": _json_metric(fit.r2),
+            "aicc": _json_metric(fit.aicc),
+            "bic": _json_metric(fit.bic),
             "formula": fit.formula,
         }
         for fit in ranked_fits[:3]
@@ -780,10 +786,10 @@ def render_regression(points: Any, model: str = MODEL_AUTO, x_label: str = "x", 
         "confidence": _confidence(best_fit, ranked_fits),
         "error": None,
         "equation_text": best_fit.formula,
-        "r2": best_fit.r2,
-        "rmse": best_fit.rmse,
-        "aicc": best_fit.aicc,
-        "bic": best_fit.bic,
+        "r2": _json_metric(best_fit.r2),
+        "rmse": _json_metric(best_fit.rmse),
+        "aicc": _json_metric(best_fit.aicc),
+        "bic": _json_metric(best_fit.bic),
         "points": [{"x": float(x_value), "y": float(y_value)} for x_value, y_value in zip(prepared.x, prepared.y)],
         "invalid_rows": invalid_rows,
         "plotly_figure": _build_plotly_figure(prepared, fit_x, fit_y, best_fit.model_label, x_label, y_label),

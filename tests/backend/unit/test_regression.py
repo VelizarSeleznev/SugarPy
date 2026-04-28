@@ -84,3 +84,12 @@ def test_manual_logarithmic_fit_works_with_shifted_domain():
     result = render_regression(_rows(xs, ys), "logarithmic")
     assert result["ok"] is True
     assert result["model"] == "logarithmic"
+
+
+def test_two_point_fit_omits_undefined_aicc_from_payload():
+    result = render_regression(_rows([1.0, 2.0], [2.0, 4.0]), "linear")
+
+    assert result["ok"] is True
+    assert result["rmse"] < 1e-12
+    assert result["aicc"] is None
+    assert result["alternatives"][0]["aicc"] is None

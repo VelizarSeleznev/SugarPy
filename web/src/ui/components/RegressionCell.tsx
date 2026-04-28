@@ -57,9 +57,16 @@ const parseClipboard = (raw: string) =>
     })
     .filter((row) => row.x || row.y);
 
+const toFiniteNumber = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+const formatFixed = (value: unknown, digits: number) => {
+  const numericValue = toFiniteNumber(value);
+  return numericValue === null ? null : numericValue.toFixed(digits);
+};
+
 const formatR2 = (value?: number | null) => {
-  if (value === null || value === undefined || Number.isNaN(value)) return 'R²: -';
-  return `R²: ${value.toFixed(4)}`;
+  const formattedValue = formatFixed(value, 4);
+  return `R²: ${formattedValue ?? '-'}`;
 };
 
 const ChevronIcon = ({ expanded }: { expanded: boolean }) => (
@@ -296,8 +303,8 @@ export function RegressionCell({
         <span>{activeModelLabel}</span>
         <span>{output?.equation_text ?? 'No fitted equation yet'}</span>
         <span>{formatR2(output?.r2)}</span>
-        {output?.rmse !== null && output?.rmse !== undefined ? <span>RMSE: {output.rmse.toFixed(4)}</span> : null}
-        {output?.aicc !== null && output?.aicc !== undefined ? <span>AICc: {output.aicc.toFixed(2)}</span> : null}
+        {formatFixed(output?.rmse, 4) ? <span>RMSE: {formatFixed(output?.rmse, 4)}</span> : null}
+        {formatFixed(output?.aicc, 2) ? <span>AICc: {formatFixed(output?.aicc, 2)}</span> : null}
         {output?.confidence === 'low' ? <span>Low confidence</span> : null}
       </div>
 
@@ -418,7 +425,9 @@ export function RegressionCell({
               <div key={alternative.model_name} className="regression-alternative-item">
                 <strong>{alternative.model_label}</strong>
                 <span>{alternative.formula}</span>
-                <span>RMSE {alternative.rmse.toFixed(4)} · AICc {alternative.aicc.toFixed(2)}</span>
+                <span>
+                  RMSE {formatFixed(alternative.rmse, 4) ?? '-'} · AICc {formatFixed(alternative.aicc, 2) ?? '-'}
+                </span>
               </div>
             ))}
           </div>
