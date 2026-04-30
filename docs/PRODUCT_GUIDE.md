@@ -141,6 +141,8 @@ Use it together with:
 - `equal_axes=True`: preserve 1:1 scale for geometry.
 - `showlegend=True|False`: override legend behavior.
 - `title='...'`: optional title.
+- `overscan=...`: explicit functions are sampled beyond the initial viewport so panning has a
+  buffer before a finite Plotly trace end is visible.
 - `xscale='log'` / `yscale='log'`: render a logarithmic Plotly axis for positive values.
 - Named point series can be plotted with functions, for example
   `plot(capacitor, 24*e^(-x/3), x = 0..8, y = 1..30, yscale='log')`.

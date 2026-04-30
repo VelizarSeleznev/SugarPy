@@ -560,6 +560,27 @@ def test_plot_accepts_point_series_and_log_axis():
     assert figure["layout"]["showlegend"] is True
 
 
+def test_plot_log_x_samples_extra_positive_decades():
+    with patch("sugarpy.startup.display"):
+        figure = plot(1.8 * x ** 2, 1.2 / x ** 0.8, xmin=1, xmax=100, xscale="log", yscale="log")
+
+    for trace in figure["data"]:
+        positive_x = [value for value in trace["x"] if value > 0]
+        assert min(positive_x) <= 0.001
+        assert max(positive_x) >= 100000
+        assert len(positive_x) > 1000
+
+
+def test_plot_linear_x_samples_wide_pan_buffer():
+    with patch("sugarpy.startup.display"):
+        figure = plot(x, xmin=0, xmax=10)
+
+    trace = figure["data"][0]
+    assert min(trace["x"]) <= -40
+    assert max(trace["x"]) >= 50
+    assert figure["layout"]["xaxis"]["range"] == [0.0, 10.0]
+
+
 def test_math_plot_range_sugar_renders_two_implicit_circles():
     class DummyShell:
         def __init__(self):

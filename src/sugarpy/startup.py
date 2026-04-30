@@ -297,7 +297,7 @@ def plot(*args, **kwargs):
     ymax = kwargs.pop("ymax", None)
     samples = int(kwargs.pop("samples", kwargs.pop("num", 500)))
     title = str(kwargs.pop("title", "")).strip()
-    overscan = float(kwargs.pop("overscan", 1.0))
+    overscan = float(kwargs.pop("overscan", 4.0))
     has_explicit_equal_axes = "equal_axes" in kwargs
     equal_axes = bool(kwargs.pop("equal_axes", False))
     show_legend = kwargs.pop("showlegend", None)
@@ -310,18 +310,6 @@ def plot(*args, **kwargs):
     if equal_axes and (xscale == "log" or yscale == "log"):
         raise ValueError("equal_axes=True cannot be combined with log axes.")
 
-    span = abs(end - start)
-    if span == 0:
-        span = 1.0
-    samples = max(50, samples)
-    base_step = span / max(samples - 1, 1)
-    render_start = start - span * overscan
-    render_end = end + span * overscan
-    render_span = abs(render_end - render_start)
-    render_samples = int(render_span / max(base_step, 1e-9)) + 1
-    render_samples = max(samples, min(20000, render_samples))
-
-    traces = []
     point_series: list[SugarPyPointSeries] = []
     implicit_items: list[tuple[object, Symbol, Symbol]] = []
     explicit_items: list[object] = []
@@ -335,7 +323,36 @@ def plot(*args, **kwargs):
         else:
             explicit_items.append(expr)
 
-    x_values = np.linspace(render_start, render_end, render_samples)
+    x_range = [float(start), float(end)]
+    if xscale == "log":
+        if start <= 0 or end <= 0 or end <= start:
+            raise ValueError("xscale='log' requires a positive x range, for example x = 1..100.")
+        log_start = np.log10(start)
+        log_end = np.log10(end)
+        log_span = abs(log_end - log_start) or 1.0
+        log_render_pad = min(log_span * max(overscan, 0.0), 3.0)
+        render_log_range = [float(log_start - log_render_pad), float(log_end + log_render_pad)]
+        layout_x_range = _with_log_padding(start, end)
+    else:
+        layout_x_range = x_range
+
+    span = abs(end - start)
+    if span == 0:
+        span = 1.0
+    samples = max(50, samples)
+    if xscale == "log":
+        render_samples = max(samples, min(20000, int(samples * (1 + 2 * max(overscan, 0.0)))))
+        x_values = np.logspace(render_log_range[0], render_log_range[1], render_samples)
+    else:
+        base_step = span / max(samples - 1, 1)
+        render_start = start - span * overscan
+        render_end = end + span * overscan
+        render_span = abs(render_end - render_start)
+        render_samples = int(render_span / max(base_step, 1e-9)) + 1
+        render_samples = max(samples, min(20000, render_samples))
+        x_values = np.linspace(render_start, render_end, render_samples)
+
+    traces = []
     visible_y_min: float | None = None
     visible_y_max: float | None = None
     visible_mask = (x_values >= start) & (x_values <= end)
@@ -399,17 +416,6 @@ def plot(*args, **kwargs):
             }
         )
 
-    x_range = [float(start), float(end)]
-    if xscale == "log":
-        series_x_values = [value for series in point_series for value in series.x]
-        positive_x_values = _positive_finite_values(
-            np.asarray([*x_values.tolist(), *series_x_values], dtype=float)
-        )
-        x_lower = x_range[0] if x_range[0] > 0 else float(np.min(positive_x_values)) if positive_x_values.size else 1e-12
-        x_upper = x_range[1] if x_range[1] > x_lower else x_lower * 10.0
-        layout_x_range = _with_log_padding(x_lower, x_upper)
-    else:
-        layout_x_range = x_range
     if implicit_items:
         if xscale == "log" or yscale == "log":
             raise ValueError("Implicit plots do not support log axes yet.")

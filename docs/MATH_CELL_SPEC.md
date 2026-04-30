@@ -171,6 +171,9 @@ Current plotting options:
 - `equal_axes=True` locks one unit on x to one unit on y, which is useful for circles and geometry.
 - `showlegend=True|False` overrides the default legend behavior.
 - `title='...'` adds an optional title. If omitted, SugarPy keeps the plot header visually quiet.
+- `overscan=...` controls how far explicit function traces are sampled beyond the initial
+  viewport. SugarPy samples a generous default buffer so panning does not immediately expose
+  the finite ends of Plotly traces.
 - `xscale='linear'|'log'` and `yscale='linear'|'log'` control Plotly axis scaling. Log axes
   require positive values on that axis.
 - Named point series from Data cells can be plotted together with expressions, for example
